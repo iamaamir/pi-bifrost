@@ -16,7 +16,6 @@
 // Usage:
 //   node scripts/campaign-run.mjs --name properties --repeat 3 --seed-base 1729 \
 //     [--timeout-ms 1200000] [--out DIR] [--validate-only] -- <command> [args...]
-import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";

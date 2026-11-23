@@ -36,6 +36,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Lint (errors fail, warnings advisory)
+        run: npm run lint
       - name: Architecture boundaries
         run: npm run check:arch
       - name: Dead code and dependency hygiene

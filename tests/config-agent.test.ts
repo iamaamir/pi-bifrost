@@ -2394,7 +2394,7 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
       const { details } = await checkedCandidate(harness, { patch: { rules } });
 
       assert.deepEqual(details.nextSource?.rules, rules);
-      assert.equal((details.nextSource?.rules as unknown[]).length, 3, "the old rule is not carried into the replacement");
+      assert.equal((details.nextSource?.rules as unknown[] | undefined)?.length, 3, "the old rule is not carried into the replacement");
     } finally {
       harness.cleanup();
     }

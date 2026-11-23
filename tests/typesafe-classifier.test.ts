@@ -45,7 +45,7 @@ describe("TypeSafe classifier", () => {
     const result = await classifier({ prompt: "hello", tiers: ["quick", "general", "frontier"], criteria });
     assert.equal(result?.tier, "general");
     assert.equal(request?.url, TYPESAFE_SYSTEMONE_URL);
-    assert.equal((request?.init.headers as Record<string, string>).authorization, "Bearer secret-key");
+    assert.equal((request?.init.headers as Record<string, string> | undefined)?.authorization, "Bearer secret-key");
     assert.equal(JSON.parse(String(request?.init.body)).model, TYPESAFE_MODEL);
   });
 

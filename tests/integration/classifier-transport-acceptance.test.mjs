@@ -93,7 +93,7 @@ function promptAnswer(text, confidence = 0.9, choice = "general") {
   };
 }
 
-function scriptedChild(lines) {
+function scriptedChild() {
   const child = new EventEmitter();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();

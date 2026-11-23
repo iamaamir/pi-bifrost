@@ -8,7 +8,7 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { gateDirectory, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, sourceFingerprint, summarizeCases } from "../scripts/acceptance/core.mjs";
-import { buildGateEvidenceCases, pushRevisionCase, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
+import { buildGateEvidenceCases, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
 import { fixtureGitEnv, withFixtureEnv } from "./fixtures/git-env.mjs";
 
 const temporary = [];
@@ -458,7 +458,7 @@ describe("acceptance runner boundary", () => {
 
   it("terminates and awaits an active detached gate process group on SIGTERM", () => {
     const acceptanceUrl = new URL("../scripts/acceptance.mjs", import.meta.url).href;
-    const script = `const {registerTerminationHandlers,runChild}=await import(process.env.BIFROST_TEST_ACCEPTANCE_URL);const remove=registerTerminationHandlers();setTimeout(()=>process.kill(process.pid,'SIGTERM'),100);const result=await runChild(process.execPath,['-e','setInterval(()=>{},1000)'],{cwd:process.cwd(),env:{PATH:process.env.PATH}});const signal=remove();const next=await runChild(process.execPath,['-e',\"process.stdout.write('unexpected launch')\"],{cwd:process.cwd(),env:{PATH:process.env.PATH}});process.stdout.write(JSON.stringify({status:result.status,signal,nextStatus:next.status,nextStdout:next.stdout}));`;
+    const script = `const {registerTerminationHandlers,runChild}=await import(process.env.BIFROST_TEST_ACCEPTANCE_URL);const remove=registerTerminationHandlers();setTimeout(()=>process.kill(process.pid,'SIGTERM'),100);const result=await runChild(process.execPath,['-e','setInterval(()=>{},1000)'],{cwd:process.cwd(),env:{PATH:process.env.PATH}});const signal=remove();const next=await runChild(process.execPath,['-e',"process.stdout.write('unexpected launch')"],{cwd:process.cwd(),env:{PATH:process.env.PATH}});process.stdout.write(JSON.stringify({status:result.status,signal,nextStatus:next.status,nextStdout:next.stdout}));`;
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
       timeout: 10_000,
@@ -610,8 +610,6 @@ describe("acceptance runner boundary", () => {
   // Phase caps are ceilings, so they carry ~2.5x headroom over the slowest
   // observed run instead of tracking the fast-runner case; the deadline stays
   // well above a slow but healthy proof and below the outer test timeout.
-  const CALLER_PHASE_BUDGET_MS = 300_000;
-  const CALLER_PROOF_DEADLINE_MS = 660_000;
   it("actual acceptance CLI binds push after to HEAD across a multi-commit event", { timeout: 30_000 }, (t) => {
     const root = mkdtempSync(join(tmpdir(), "bifrost-push-cli-"));
     temporary.push(root);
@@ -632,7 +630,6 @@ describe("acceptance runner boundary", () => {
     writeFileSync(acceptancePath, acceptanceSource);
     writeFileSync(join(root, "scripts", "verify-release.mjs"), "export async function runVerification() { return { gates: [] }; }\n");
     writeFileSync(join(root, "scripts", "acceptance", "journeys.mjs"), "export async function runJourneys() { return { cases: [] }; }\n");
-    const script = acceptancePath;
     const cli = join(root, "cli.mjs");
     writeFileSync(cli, [
       'import { fileURLToPath } from "node:url";',

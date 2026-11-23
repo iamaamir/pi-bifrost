@@ -46,6 +46,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:secrets` | Working-tree secret scan | gitleaks |
 | `npm run check:secrets:history` | Full-history secret scan (slow) | gitleaks |
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
+| `npm run lint` | Oxlint default/recommended rules; errors fail, warnings are advisory | `npm ci` |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
 | `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
@@ -73,6 +74,37 @@ with this repository's tool binaries; the fault-control tests use it to run a re
 gate against a fixture and assert its exit code. `check:complexity` is its own
 script; `--repo <path>` points it at another repository and `--target <rev>`
 names the revision to compare against.
+
+`npm run lint` uses pinned Oxlint with its default/recommended native rules:
+no type-aware mode and no third-party plugins. An error exits nonzero and fails
+the gate; a warning is printed and does not fail. Warnings stay visible rather
+than being suppressed in bulk. `npm run typecheck` remains `tsc --noEmit` and is
+independent of lint; a clean lint result says nothing about types.
+
+### Advisory lint findings
+
+These warning categories are deliberately kept. None is disabled per file or
+hidden behind a threshold.
+
+- `eslint(no-unsafe-finally)`: test teardown blocks capture the scenario error,
+  then `finally` either rethrows cleanup failures or aggregates both into an
+  `AggregateError`. The control flow the rule objects to is the intended
+  preservation of both failures. The two `process.kill` checks in the child
+  auto finally-propagation test rethrow unexpected non-`ESRCH` errors instead;
+  failing closed there is intentional and is kept visible.
+- `unicorn(no-useless-spread)`: the remaining spreads snapshot collections
+  (`index.ts` receipts and claims, `auto-virtual` waiters, the reliability v2
+  prune fixture) before loops that delete from them. The snapshot is deliberate.
+- `unicorn(no-new-array)`: the three sites allocate arrays of a computed length
+  and fill them by index; the rule cannot tell length from element.
+- `typescript(no-this-alias)`: a patched prototype method captures a dynamic
+  `this`; an arrow function would bind the wrong receiver.
+- `eslint(no-unassigned-vars)`: one cleanup-control test intentionally leaves a
+  receipt unassigned so it can assert that the reported receipt is missing.
+
+`eslint(no-control-regex)` is off repository-wide. Re-enabling it reports twenty
+deliberate uses: ANSI escape recognition in the result viewer and explicit
+control-character rejection ranges in model-id and config validation.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
@@ -292,7 +324,7 @@ marker to the budget reddened only the report bound, at 121 lines.
 
 | Workflow | Trigger | Checks |
 | --- | --- | --- |
-| [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
+| [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | Oxlint, package metadata (publint), architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
 | [`security-audit.yml`](../.github/workflows/security-audit.yml) | Manual dispatch | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor; SARIF uplink for Gitleaks and Semgrep |
 | [`verification.yml`](../.github/workflows/verification.yml) | Pull request, push, schedule | existing acceptance, UI, compatibility, and mutation gates |
 | [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml) | `pull_request_target` | trusted complexity judge from the protected base branch; PR delta and proposed merge-result evidence |
@@ -358,6 +390,7 @@ benchmark target.
 | GitHub CLI | Reuse | Agent and maintainer environment only |
 | actionlint | Integrate | Fast gate on every workflow change |
 | Zizmor | Integrate | Workflow security, now clean with two documented ignores |
+| Oxlint | Integrate | Fast advisory lint; errors fail, warnings stay visible |
 | Hyperfine | On demand | No stable CI timing threshold |
 | Node profiler | On demand | Artifacts are for local investigation |
 | ts-morph | Defer | No codemod is needed yet; adding it now would be an unused dependency |

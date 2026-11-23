@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,7 +11,6 @@ import { acquirePackLock } from "../fixtures/pack-lock.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");
 const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
-const require = createRequire(import.meta.url);
 const temporary = [];
 let server;
 let serverPort;
@@ -316,7 +313,8 @@ function createAffinityFixture(mode = "observe") {
 }
 
 function apiClientConfig(config) {
-  const { enabled, debug, economics, ...routerConfig } = config;
+  // Rest siblings omit host-only fields from the router config on purpose.
+  const { enabled: _enabled, debug: _debug, economics: _economics, ...routerConfig } = config;
   return routerConfig;
 }
 
@@ -430,7 +428,7 @@ function installPackedRouter() {
 }
 
 async function apiDecision(fixture, createRouter) {
-  const { enabled, debug, ...routerConfig } = fixture.config;
+  const { enabled: _enabled, debug: _debug, ...routerConfig } = fixture.config;
   const snapshot = {
     config: routerConfig,
     registry: { knownModels: fixture.models, availableModels: fixture.models },

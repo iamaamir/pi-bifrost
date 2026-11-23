@@ -319,7 +319,6 @@ describe("probe with many models and slow responses", () => {
 
     let activeWorkers = 0;
     let maxConcurrentWorkers = 0;
-    let completed = 0;
     const progressCalls: Array<{ done: number; total: number }> = [];
 
     try {
@@ -355,7 +354,6 @@ describe("probe with many models and slow responses", () => {
                   };
                 } finally {
                   activeWorkers--;
-                  completed++;
                 }
               },
             };
