@@ -733,19 +733,97 @@ function classifyInitCommitFailure(failure: InitCommitFailureContext): { message
   const config = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
 
   if (failure.receiptOnly) {
-    // Receipt-only init never writes a journal and never rewrites config. The ownership
-    // sidecar may still have been created before a later check failed, so inspect it
-    // before claiming the files were preserved.
+    // Receipt-only init never writes a reconciliation journal and never rewrites config.
+    // A pending journal or unreadable journal/config state still needs inspection/recovery;
+    // ownership bytes alone cannot prove config/journal state.
     const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
-    if (ownership === "matches") {
+    const recoveryAdvice = initRecoveryAdvice(failure.recoveryCommand);
+
+    if (journal === "present") {
+      if (config === "matches") {
+        return {
+          message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
+      if (config === "unknown") {
+        return {
+          message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
       return {
-        message: `Init could not confirm the ownership receipt was recorded. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`,
+        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`,
         diagnosis: { journal, config, ownership },
       };
     }
-    if (ownership === "unknown") {
+
+    if (journal === "unknown") {
+      if (config === "matches") {
+        return {
+          message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${recoveryAdvice}`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
+      if (config === "unknown") {
+        return {
+          message: `Init could not finish recording the ownership receipt, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${recoveryAdvice}`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
       return {
-        message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but the ownership record could not be checked and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry.`,
+        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${recoveryAdvice}`,
+        diagnosis: { journal, config, ownership },
+      };
+    }
+
+    if (ownership === "matches") {
+      if (config === "matches") {
+        return {
+          message: `Init could not confirm the ownership receipt was recorded. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
+      if (config === "unknown") {
+        return {
+          message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record matches the planned update. Inspect that file and Init's status before retrying; rerunning Init may report that no files were changed.`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
+      return {
+        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, but the ownership record matches the planned update and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry; rerunning Init may report that no files were changed.`,
+        diagnosis: { journal, config, ownership },
+      };
+    }
+
+    if (ownership === "unknown") {
+      if (config === "matches") {
+        return {
+          message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but the ownership record could not be checked and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry.`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
+      if (config === "unknown") {
+        return {
+          message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record could not be checked. Inspect that file and its ownership record before you retry.`,
+          diagnosis: { journal, config, ownership },
+        };
+      }
+      return {
+        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, no reconciliation journal is currently present, and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`,
+        diagnosis: { journal, config, ownership },
+      };
+    }
+
+    if (config === "unknown") {
+      return {
+        message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect that file and its ownership record before you retry.`,
+        diagnosis: { journal, config, ownership },
+      };
+    }
+    if (config === "matches") {
+      return {
+        message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect ${failure.target} and its ownership record before you retry.`,
         diagnosis: { journal, config, ownership },
       };
     }
