@@ -302,10 +302,15 @@ function latestExactRun(repo, workflowId, sha, event, { workflowPath = WORKFLOW_
   const runs = page.workflow_runs;
   if (!Array.isArray(runs) || runs.length === 0 || page.total_count !== runs.length) return null;
   const binding = { workflowId, runHeadSha, event, workflowPath, sha, baseSha };
-  if (runs.some((run) => !validWorkflowRun(run, binding))) return null;
-  const [latest] = [...runs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id || b.run_attempt - a.run_attempt);
+  // pull_request_target queries by base SHA, so they can include runs for other
+  // PRs sharing that base. Isolate this PR before selecting its latest run.
+  const candidates = event === "pull_request_target"
+    ? runs.filter((run) => bindsPullRequest(run, event, sha, baseSha))
+    : runs;
+  if (candidates.length === 0 || candidates.some((run) => !validWorkflowRun(run, binding))) return null;
+  const [latest] = [...candidates].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id || b.run_attempt - a.run_attempt);
   if (latest.status !== "completed" || latest.conclusion !== "success"
-    || runs.filter((run) => run.id === latest.id && run.run_attempt === latest.run_attempt).length !== 1) return null;
+    || candidates.filter((run) => run.id === latest.id && run.run_attempt === latest.run_attempt).length !== 1) return null;
   const run = ghJson(["api", `repos/${repo}/actions/runs/${latest.id}/attempts/${latest.run_attempt}`]);
   if (run.id !== latest.id || run.run_attempt !== latest.run_attempt || !validWorkflowRun(run, binding)
     || run.repository?.full_name !== repo || run.status !== "completed" || run.conclusion !== "success") return null;

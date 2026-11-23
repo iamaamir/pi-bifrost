@@ -256,6 +256,16 @@ test("valid dry-run passes without invoking merge", () => {
   assert.equal(result.mergeCalls.length, 0);
 });
 
+test("ignores another PR's protected run that shares the same base", () => {
+  const fixture = scaffold();
+  fixture.world.complexityRuns.push(makeComplexityRun(31, "9".repeat(40), BASE, { created_at: "2026-01-02T00:00:00Z" }));
+  writeFileSync(fixture.worldPath, JSON.stringify(fixture.world));
+  const result = runController(fixture);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.json.outcome, "dry-run");
+  assert.equal(result.mergeCalls.length, 0);
+});
+
 test("valid apply merges exactly once and verifies push gates", () => {
   const fixture = scaffold();
   const result = runController(fixture, ["--apply"]);
