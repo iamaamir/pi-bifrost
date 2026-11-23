@@ -290,6 +290,7 @@ export function validateEconomicPolicy(
   if (scopeRefs.length > MAX_SCOPE_ALIASES) diagnostics.push(diagnostic("policy.scope_limit"));
   if (!policy.scopes || typeof policy.scopes !== "object" || Array.isArray(policy.scopes)) diagnostics.push(diagnostic("policy.invalid_scopes"));
   for (const [scopeRef, scope] of Object.entries(scopes)) {
+    if (scopeRef !== scopeRef.trim()) diagnostics.push(diagnostic("scope.invalid", "error", { scopeRef }));
     if (!boundedId(scopeRef, MAX_SCOPE_ALIASES) || !validScope(scope)) diagnostics.push(diagnostic("scope.invalid", "error", { scopeRef }));
     if (scope?.kind === "account" && !hostCapabilities.accountDispatch) {
       diagnostics.push(diagnostic("policy.unsupported_account_scope", "error", { scopeRef }));
