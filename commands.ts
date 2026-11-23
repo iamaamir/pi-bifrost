@@ -648,22 +648,39 @@ function initRecoveryAdvice(recoveryCommand: string): string {
 }
 
 function describeAbsentJournalFailure(failure: InitCommitFailureContext, config: InstalledFileState): { message: string; ownership: InstalledFileState | "not_inspected" } {
+  const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
+
   if (config !== "matches") {
     if (config === "unknown") {
       return {
-        ownership: "not_inspected",
+        ownership,
         // Unreadable proves nothing either way; promise neither outcome.
-        message: `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present; inspect that file before you retry.`,
+        message: ownership === "matches"
+          ? `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record matches the planned update. Inspect that file and Init's status before retrying; rerunning Init may report that no files were changed.`
+          : ownership === "unknown"
+            ? `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present and the ownership record could not be checked. Inspect that file and its ownership record before you retry.`
+            : `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present; inspect that file before you retry.`,
       };
     }
-    // No journal means no target rename started; differing/missing config keeps the preserved wording safe.
-    return { ownership: "not_inspected", message: INIT_PRESERVED_MESSAGE };
+    if (ownership === "matches") {
+      return {
+        ownership,
+        message: `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, but the ownership record matches the planned update and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry; rerunning Init may report that no files were changed.`,
+      };
+    }
+    if (ownership === "unknown") {
+      return {
+        ownership,
+        message: `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, no reconciliation journal is currently present, and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`,
+      };
+    }
+    // No journal and no planned ownership bytes on disk: no reconciliation rename started.
+    return { ownership, message: INIT_PRESERVED_MESSAGE };
   }
 
   // Config matches the planned bytes and no journal exists. That can mean a completed save whose
   // post-commit lock check failed, or an ownership-only update that never wrote a journal. Inspect
   // ownership before telling the user to retry Init.
-  const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
   if (ownership === "matches") {
     return {
       ownership,
@@ -711,17 +728,36 @@ function classifyInitCommitFailure(failure: InitCommitFailureContext): { message
   if (failure.locked) {
     return { message: INIT_LOCK_FAILURE_MESSAGE, diagnosis: { journal: "absent", config: "unknown", ownership: "not_inspected" } };
   }
+
+  const journal = inspectJournalState(failure.journalPath);
+  const config = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
+
   if (failure.receiptOnly) {
-    return { message: INIT_PRESERVED_MESSAGE, diagnosis: { journal: "absent", config: "unknown", ownership: "not_inspected" } };
+    // Receipt-only init never writes a journal and never rewrites config. The ownership
+    // sidecar may still have been created before a later check failed, so inspect it
+    // before claiming the files were preserved.
+    const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
+    if (ownership === "matches") {
+      return {
+        message: `Init could not confirm the ownership receipt was recorded. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`,
+        diagnosis: { journal, config, ownership },
+      };
+    }
+    if (ownership === "unknown") {
+      return {
+        message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but the ownership record could not be checked and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry.`,
+        diagnosis: { journal, config, ownership },
+      };
+    }
+    return { message: INIT_PRESERVED_MESSAGE, diagnosis: { journal, config, ownership } };
   }
 
   // `applyReconciliationTransaction` writes the journal before it renames either
   // target. A journal therefore means a rename may already have happened, while
-  // its absence proves none did. Matching config bytes prove only the current
-  // content, because an ownership-only plan never changes the config.
-  const journal = inspectJournalState(failure.journalPath);
-  const config = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
-
+  // an absent journal means no config/ownership rename started from that journal.
+  // Config bytes alone do not prove preservation: the journal is removed before the
+  // final lock check, and external edits can also change bytes after a committed
+  // ownership-only update.
   if (journal === "absent") {
     const { message, ownership } = describeAbsentJournalFailure(failure, config);
     return { message, diagnosis: { journal, config, ownership } };
@@ -741,6 +777,12 @@ function classifyInitCommitFailure(failure: InitCommitFailureContext): { message
  */
 export function describeInitCommitFailure(failure: InitCommitFailureContext): string {
   return classifyInitCommitFailure(failure).message;
+}
+
+export function initRecoveryCommand(source: ReconciliationConfigSource): string {
+  return source === "project"
+    ? "/bifrost config reconcile --recover"
+    : `/bifrost config reconcile --source ${source} --recover`;
 }
 
 function logInitCommitFailure(ctx: ExtensionContext, error: unknown, failure: InitCommitFailureContext): void {
@@ -1746,9 +1788,7 @@ async function handleInit(
       nextOwnershipBytes: transaction.nextOwnershipBytes,
       journalPath: transaction.journalPath,
       target: initSourceLabel(source),
-      recoveryCommand: source.source === "user"
-        ? "/bifrost config reconcile --source user --recover"
-        : "/bifrost config reconcile --recover",
+      recoveryCommand: initRecoveryCommand(source.source),
     });
     return;
   }

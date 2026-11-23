@@ -774,4 +774,29 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       rmSync(env.work, { recursive: true, force: true });
     }
   });
+
+  it("reports the source-specific recovery command for user init commit failures", async () => {
+    requests = [];
+    const env = fixture(port, ["healthy"]);
+    const userConfigPath = join(env.home, ".pi", "agent", "bifrost.json");
+    const journalPath = join(env.home, ".pi", "agent", "bifrost-reconcile.journal");
+    try {
+      const result = await runInit({
+        ...env,
+        args: "-g --write",
+        env: { BIFROST_TEST_FAIL_OWNERSHIP_RENAME: "1" },
+      });
+      const output = result.stdout + result.stderr;
+      assert.equal(result.timedOut, false);
+      assert.equal(result.violations, "");
+      assert.match(output, /could not finish the reviewed membership update/u);
+      assert.match(output, /\/bifrost config reconcile --source user --recover/u);
+      assert.doesNotMatch(output, /Run \/bifrost config reconcile --recover before you retry/u);
+      assert.equal(existsSync(journalPath), true, "expected pending user reconciliation journal");
+      assert.equal(existsSync(userConfigPath), true, "expected user config to remain on disk");
+    } finally {
+      rmSync(env.home, { recursive: true, force: true });
+      rmSync(env.work, { recursive: true, force: true });
+    }
+  });
 });
