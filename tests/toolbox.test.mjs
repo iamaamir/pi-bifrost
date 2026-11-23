@@ -108,6 +108,31 @@ test("parses rule file globs from block and inline lists", () => {
   assert.deepEqual(parseRuleGlobs("files: []\n"), { files: [], ignores: [] });
 });
 
+test("fails closed on rule scope shapes the reader cannot trust or honour", () => {
+  const files = ["a.ts", "src/b.ts", "tests/a.test.mjs"];
+  const forms = [
+    ["anchor", "files: *ext\n", "unrecognized files:/ignores: shape"],
+    ["flow-comment", 'files: ["tests/**"] # comment\n', "unrecognized files:/ignores: shape"],
+    ["scalar", 'files: "*.ts"\n', "unrecognized files:/ignores: shape"],
+    ["nested", 'files:\n  - "*.ts"\nrule:\n  files:\n    - "*.js"\n', "nested files:/ignores: key"],
+    ["item-comment", 'files:\n  - "*.ts" # comment\n', "trailing comment on scope item"],
+    ["brace", 'files: ["{src,tests}/**"]\n', "brace or character-class glob"],
+    ["character-class", 'files: ["[ab].ts"]\n', "brace or character-class glob"],
+  ];
+  for (const [id, source, reason] of forms) {
+    const parsed = parseRuleGlobs(source);
+    assert.ok(parsed.unverified, `${id} must be marked unverifiable`);
+    const findings = ruleScopeFindings([{ id, ...parsed }], files);
+    assert.deepEqual(findings.map((finding) => finding.rule), ["ast-grep-scope-unverified"], id);
+    assert.equal(findings[0].file, `rules/${id}.yml`);
+    assert.ok(findings[0].message.includes(reason), `${id}: ${findings[0].message}`);
+  }
+
+  const readable = parseRuleGlobs('files: ["*.ts"]\n');
+  assert.equal(readable.unverified, undefined);
+  assert.deepEqual(ruleScopeFindings([{ id: "readable", ...readable }], files), []);
+});
+
 test("reads NUL-separated tracked file names without git quoting", () => {
   assert.deepEqual(parseTrackedFiles("caf\u00e9.ts\0docs/a b.md\0"), ["caf\u00e9.ts", "docs/a b.md"]);
   assert.deepEqual(parseTrackedFiles(""), []);
