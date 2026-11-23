@@ -564,8 +564,8 @@ function makeCtx(
       setWidget: (key: string, value: string[] | undefined) => {
         calls.push({ kind: "widget", value: `${key}:${value?.length ?? 0}`, lines: value });
       },
-      setWorkingMessage: (_message?: string) => {},
-      setWorkingVisible: (_visible: boolean) => {},
+      setWorkingMessage: (_?: string) => {},
+      setWorkingVisible: (_: boolean) => {},
       setEditorText: (value: string) => {
         calls.push({ kind: "editor", value });
       },

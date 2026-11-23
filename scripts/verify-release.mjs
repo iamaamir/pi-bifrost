@@ -218,8 +218,7 @@ export async function runVerification({
   // Concurrent lanes record gates in completion order; the manifest stays in
   // REQUIRED_GATES declaration order so evidence ordering stays deterministic.
   const orderedGates = [...results].sort((left, right) => left.index - right.index)
-    // The index orders the list but is not part of the manifest gate record.
-    .map(({ index: _index, ...gate }) => gate);
+    .map(({ index, ...gate }) => gate);
   const manifest = {
     version: 1,
     headSha,

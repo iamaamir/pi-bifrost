@@ -511,7 +511,7 @@ function applyOwnershipChanges(
   changes: ReconciliationProposal["ownershipChanges"],
 ): ReconciliationOwnershipSnapshot | undefined {
   if (changes.length === 0) return snapshot;
-  const sources: Record<string, unknown> = { ...snapshot?.sources };
+  const sources: Record<string, unknown> = { ...(snapshot?.sources ?? {}) };
   const rawSource = sources[sourceId];
   const source = isPlainRecord(rawSource) ? { ...rawSource } : { generated: {}, tombstones: {} };
   const generated = isPlainRecord(source.generated) ? { ...source.generated } : {};

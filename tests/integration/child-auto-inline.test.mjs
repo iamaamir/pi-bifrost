@@ -1,16 +1,16 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
 import {
-  DESCENDANT_CLI, PIPE_RACE_CLI,
+  CLOSE_WAIT_MS, DESCENDANT_CLEANUP_MS, DESCENDANT_GRACE_MS, DESCENDANT_CLI, PIPE_RACE_CLI,
   NORMAL_CLOSE_CLI, RUNNER_WORKER,
-  spawnOwned, closeTracking, stopChild, waitForFakeReady,
-  forceCleanupFailure, setOwnedGroupSignalDenial,
+  spawnOwned, closeTracking, stopChild, waitForObservedClose, waitForFakeReady,
+  cleanupFailure, detachOwnedHandles, forceCleanupFailure, setOwnedGroupSignalDenial,
   writeFixture, runPi, alternatePort, assertAlternatePortStaysLegalAndDistinct,
   setFakePort, startFakeServer, readStats, runGuardProbe, withBound, ROOT, OUTBOUND_GUARD,
 } from "../fixtures/child-auto-inline-harness.mjs";
@@ -38,7 +38,7 @@ function removeScratchAfterVerifiedGroupDeath(paths, ownedGroup) {
 // retention failure when there is no pending error to preserve.
 function retainOrRemoveScratch({ paths, ownedGroup, runSettled, pendingError }) {
   if (!runSettled) {
-    for (const path of new Set(paths)) rmSync(path, { recursive: true, force: true });
+    for (const path of [...new Set(paths)]) rmSync(path, { recursive: true, force: true });
     return;
   }
   if (!Number.isInteger(ownedGroup) || ownedGroup <= 0) {
@@ -49,7 +49,7 @@ function retainOrRemoveScratch({ paths, ownedGroup, runSettled, pendingError }) 
     if (pendingError) return;
     throw new Error(`refusing to delete scratch while owned process group ${ownedGroup} still alive: ${[...new Set(paths)].join(",")}`);
   }
-  for (const path of new Set(paths)) rmSync(path, { recursive: true, force: true });
+  for (const path of [...new Set(paths)]) rmSync(path, { recursive: true, force: true });
 }
 
 // Best-effort descendant reaping for finally blocks: signal only the exact pid
@@ -691,6 +691,7 @@ describe("explicit child host keeps Auto inline overrides", { timeout: 300_000, 
     const home = mkdtempSync(join(tmpdir(), "bifrost-whole-run-home-"));
     const pidFile = join(home, "descendant.pid");
     let worker;
+    let ownedGroup;
     let descendant;
     let pendingError = null;
     try {
@@ -698,6 +699,7 @@ describe("explicit child host keeps Auto inline overrides", { timeout: 300_000, 
       // step denied. The descendant survives and keeps the inherited pipe, so a
       // worker that merely rejects its promise would still never exit.
       worker = spawnOwned(execPath, [RUNNER_WORKER, home], { stdio: ["ignore", "pipe", "pipe"] });
+      ownedGroup = worker.pid;
       const report = await new Promise((resolve, reject) => {
         let text = "";
         worker.stdout.setEncoding("utf8");

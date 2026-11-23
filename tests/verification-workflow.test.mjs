@@ -15,6 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
 const campaignWorkflow = readFileSync(new URL("../.github/workflows/campaign.yml", import.meta.url), "utf8");

@@ -406,7 +406,7 @@ function bindingQuery({ freshPr = { headRefOid: E40_HEAD, baseRefName: "main", b
   return (args) => {
     const joined = args.join(" ");
     if (args[0] === "pr") return freshPr;
-    if (joined.endsWith("/pulls/1")) return { merge_commit_sha: mergeSha };
+    if (/\/pulls\/1$/.test(joined)) return { merge_commit_sha: mergeSha };
     if (joined.includes("/commits/")) {
       reads++;
       const tree = commitTrees ? commitTrees[Math.min(reads - 1, commitTrees.length - 1)] : E40_TREE;
@@ -468,7 +468,7 @@ test("CLI re-fetches head, base, and proposed identity before returning eligible
   assert.equal(result.json.eligible, true);
   const prViews = result.calls.filter((call) => call[0] === "pr" && call[1] === "view" && call.some((arg) => typeof arg === "string" && arg.startsWith("headRefOid,baseRefName,baseRefOid")));
   assert.equal(prViews.length, 2, "eligibility must re-fetch the PR before returning");
-  const proposedReads = result.calls.filter((call) => call[0] === "api" && call.at(-1).endsWith("/pulls/1")).length;
+  const proposedReads = result.calls.filter((call) => call[0] === "api" && /\/pulls\/1$/.test(call.at(-1))).length;
   assert.equal(proposedReads, 2, "eligibility must re-read proposed-merge identity before returning");
 });
 

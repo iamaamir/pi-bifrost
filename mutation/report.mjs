@@ -374,8 +374,7 @@ export function selectMeasurement(perReport, { identityFor = measurementIdentity
   const chosen = [];
   for (const slot of slots.values()) {
     const newest = Math.max(
-      ...slot.readable.map((report) => report.attempt ?? 0),
-      ...slot.unreadable.map((broken) => broken.attempt),
+      ...[...slot.readable.map((report) => report.attempt ?? 0), ...slot.unreadable.map((broken) => broken.attempt)],
     );
     const brokenTop = slot.unreadable.filter((broken) => broken.attempt === newest);
     if (brokenTop.length > 0) {
@@ -942,6 +941,7 @@ function main() {
   const rejected = ineligible
     .filter((entry) => expectedTargets.includes(entry.module))
     .map((entry) => ({ module: entry.module, name: entry.name, reason: entry.reason }));
+  const rejectedModules = [...new Set(rejected.map((entry) => entry.module))].sort();
   const unexpectedTargets = [
     ...new Set([...readAll.reports, ...ineligible].map((entry) => entry.module).filter((module) => !expectedTargets.includes(module))),
   ].sort();

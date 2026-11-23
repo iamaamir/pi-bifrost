@@ -51,6 +51,14 @@ export function bumpVersion(current, bumpType) {
   }
 }
 
+function getLatestTag() {
+  try {
+    return run(`git tag --sort=-v:refname | head -1`);
+  } catch {
+    return null;
+  }
+}
+
 // ── CLI entry point — only runs when invoked directly ─────
 if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   main().catch((err) => {

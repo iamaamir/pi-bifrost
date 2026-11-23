@@ -942,7 +942,7 @@ function mergeCriteria(
   override: Record<string, TierCriterion> | undefined,
 ): Record<string, TierCriterion> | undefined {
   if (base === undefined && override === undefined) return undefined;
-  const result: Record<string, TierCriterion> = { ...base };
+  const result: Record<string, TierCriterion> = { ...(base ?? {}) };
   const rawOverride = override as Record<string, TierCriterion | null> | undefined;
   for (const [tier, value] of Object.entries(rawOverride ?? {})) {
     if (value === null) {
