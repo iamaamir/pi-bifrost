@@ -38,6 +38,11 @@ jobs:
       - run: npm ci
       - name: Lint (errors fail, warnings advisory)
         run: npm run lint
+      - name: Validate packed package metadata
+        # check:package builds dist/router because publint packs with --dry-run,
+        # which skips prepack. This job runs no other packer, so it cannot race
+        # that build or the verification workflow's pack lock.
+        run: npm run check:package
       - name: Architecture boundaries
         run: npm run check:arch
       - name: Dead code and dependency hygiene

@@ -46,6 +46,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:secrets` | Working-tree secret scan | gitleaks |
 | `npm run check:secrets:history` | Full-history secret scan (slow) | gitleaks |
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
+| `npm run check:package` | Builds `dist/router`, then publint validates the packed package's `exports`, `types`, files, and module format | `npm ci` |
 | `npm run lint` | Oxlint default/recommended rules; errors fail, warnings are advisory | `npm ci` |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
 | `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
@@ -80,6 +81,12 @@ no type-aware mode and no third-party plugins. An error exits nonzero and fails
 the gate; a warning is printed and does not fail. Warnings stay visible rather
 than being suppressed in bulk. `npm run typecheck` remains `tsc --noEmit` and is
 independent of lint; a clean lint result says nothing about types.
+
+`npm pack` only proves that a tarball can be built. `publint` inspects the
+packed result and reports bad `exports` and `types` targets, missing files, and
+module-format mismatches that packing alone accepts. Publint packs with
+`npm pack --dry-run`, which skips `prepack`, so the check builds the router
+first.
 
 ### Advisory lint findings
 
@@ -391,6 +398,7 @@ benchmark target.
 | actionlint | Integrate | Fast gate on every workflow change |
 | Zizmor | Integrate | Workflow security, now clean with two documented ignores |
 | Oxlint | Integrate | Fast advisory lint; errors fail, warnings stay visible |
+| publint | Integrate | Checks packed exports and types that `npm pack` does not |
 | Hyperfine | On demand | No stable CI timing threshold |
 | Node profiler | On demand | Artifacts are for local investigation |
 | ts-morph | Defer | No codemod is needed yet; adding it now would be an unused dependency |
