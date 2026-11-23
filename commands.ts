@@ -724,6 +724,61 @@ function describePresentJournalFailure(failure: InitCommitFailureContext, config
   return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`;
 }
 
+function describeReceiptOnlyPresentJournalFailure(failure: InitCommitFailureContext, config: InstalledFileState): string {
+  if (config === "matches") {
+    return `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+  }
+  if (config === "unknown") {
+    return `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`;
+  }
+  return `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`;
+}
+
+function describeReceiptOnlyUnknownJournalFailure(failure: InitCommitFailureContext, config: InstalledFileState): string {
+  const recoveryAdvice = initRecoveryAdvice(failure.recoveryCommand);
+  if (config === "matches") {
+    return `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${recoveryAdvice}`;
+  }
+  if (config === "unknown") {
+    return `Init could not finish recording the ownership receipt, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${recoveryAdvice}`;
+  }
+  return `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${recoveryAdvice}`;
+}
+
+function describeReceiptOnlyAbsentJournalFailure(
+  failure: InitCommitFailureContext,
+  config: InstalledFileState,
+  ownership: InstalledFileState,
+): string {
+  if (ownership === "matches") {
+    if (config === "matches") {
+      return `Init could not confirm the ownership receipt was recorded. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`;
+    }
+    if (config === "unknown") {
+      return `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record matches the planned update. Inspect that file and Init's status before retrying; rerunning Init may report that no files were changed.`;
+    }
+    return `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, but the ownership record matches the planned update and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry; rerunning Init may report that no files were changed.`;
+  }
+
+  if (ownership === "unknown") {
+    if (config === "matches") {
+      return `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but the ownership record could not be checked and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry.`;
+    }
+    if (config === "unknown") {
+      return `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record could not be checked. Inspect that file and its ownership record before you retry.`;
+    }
+    return `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, no reconciliation journal is currently present, and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`;
+  }
+
+  if (config === "unknown") {
+    return `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect that file and its ownership record before you retry.`;
+  }
+  if (config === "matches") {
+    return `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect ${failure.target} and its ownership record before you retry.`;
+  }
+  return INIT_PRESERVED_MESSAGE;
+}
+
 function classifyInitCommitFailure(failure: InitCommitFailureContext): { message: string; diagnosis: InitCommitFailureDiagnosis } {
   if (failure.locked) {
     return { message: INIT_LOCK_FAILURE_MESSAGE, diagnosis: { journal: "absent", config: "unknown", ownership: "not_inspected" } };
@@ -737,97 +792,22 @@ function classifyInitCommitFailure(failure: InitCommitFailureContext): { message
     // A pending journal or unreadable journal/config state still needs inspection/recovery;
     // ownership bytes alone cannot prove config/journal state.
     const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
-    const recoveryAdvice = initRecoveryAdvice(failure.recoveryCommand);
-
     if (journal === "present") {
-      if (config === "matches") {
-        return {
-          message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
-      if (config === "unknown") {
-        return {
-          message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
       return {
-        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`,
+        message: describeReceiptOnlyPresentJournalFailure(failure, config),
         diagnosis: { journal, config, ownership },
       };
     }
-
     if (journal === "unknown") {
-      if (config === "matches") {
-        return {
-          message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${recoveryAdvice}`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
-      if (config === "unknown") {
-        return {
-          message: `Init could not finish recording the ownership receipt, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${recoveryAdvice}`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
       return {
-        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${recoveryAdvice}`,
+        message: describeReceiptOnlyUnknownJournalFailure(failure, config),
         diagnosis: { journal, config, ownership },
       };
     }
-
-    if (ownership === "matches") {
-      if (config === "matches") {
-        return {
-          message: `Init could not confirm the ownership receipt was recorded. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
-      if (config === "unknown") {
-        return {
-          message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record matches the planned update. Inspect that file and Init's status before retrying; rerunning Init may report that no files were changed.`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
-      return {
-        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, but the ownership record matches the planned update and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry; rerunning Init may report that no files were changed.`,
-        diagnosis: { journal, config, ownership },
-      };
-    }
-
-    if (ownership === "unknown") {
-      if (config === "matches") {
-        return {
-          message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but the ownership record could not be checked and no reconciliation journal is currently present. Inspect ${failure.target} and its ownership record before you retry.`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
-      if (config === "unknown") {
-        return {
-          message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present, but the ownership record could not be checked. Inspect that file and its ownership record before you retry.`,
-          diagnosis: { journal, config, ownership },
-        };
-      }
-      return {
-        message: `Init could not finish recording the ownership receipt. ${failure.target} does not hold the planned configuration, no reconciliation journal is currently present, and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`,
-        diagnosis: { journal, config, ownership },
-      };
-    }
-
-    if (config === "unknown") {
-      return {
-        message: `Init could not finish recording the ownership receipt and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect that file and its ownership record before you retry.`,
-        diagnosis: { journal, config, ownership },
-      };
-    }
-    if (config === "matches") {
-      return {
-        message: `Init could not finish recording the ownership receipt. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect ${failure.target} and its ownership record before you retry.`,
-        diagnosis: { journal, config, ownership },
-      };
-    }
-    return { message: INIT_PRESERVED_MESSAGE, diagnosis: { journal, config, ownership } };
+    return {
+      message: describeReceiptOnlyAbsentJournalFailure(failure, config, ownership),
+      diagnosis: { journal, config, ownership },
+    };
   }
 
   // `applyReconciliationTransaction` writes the journal before it renames either
