@@ -83,16 +83,22 @@ function ownership(generated) {
   return JSON.stringify({ version: 1, sources: { [sourceId]: { generated: { quick: generated }, tombstones: {} } } });
 }
 
-function runInit({ home, work, args, extensionPath = EXTENSION, prompt = `/bifrost init ${args}` }) {
+const COMMIT_FAULT_PRELOAD = join(ROOT, "tests", "fixtures", "fail-ownership-rename.cjs");
+
+function runInit({ home, work, args, extensionPath = EXTENSION, prompt = `/bifrost init ${args}`, env: extraEnv = {} }) {
   const base = Object.fromEntries(["PATH", "TMPDIR", "LANG", "TERM"]
     .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
+  const preload = extraEnv.BIFROST_TEST_FAIL_OWNERSHIP_RENAME === "1"
+    ? `--require=${OUTBOUND_GUARD} --require=${COMMIT_FAULT_PRELOAD}`
+    : `--require=${OUTBOUND_GUARD}`;
   return new Promise((resolve, reject) => {
     const child = spawn(PI, ["-e", extensionPath, "--approve", "--no-tools", "--no-session", "-p", prompt], {
       cwd: work,
       env: { ...base, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1",
-        NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.address().port}`,
+        NODE_OPTIONS: preload, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.address().port}`,
         BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "network-violations.log"),
-        ...(process.env.BIFROST_ACCEPTANCE_EVENTS ? { BIFROST_ACCEPTANCE_EVENTS: process.env.BIFROST_ACCEPTANCE_EVENTS } : {}) },
+        ...(process.env.BIFROST_ACCEPTANCE_EVENTS ? { BIFROST_ACCEPTANCE_EVENTS: process.env.BIFROST_ACCEPTANCE_EVENTS } : {}),
+        ...extraEnv },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -730,4 +736,42 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       });
     }
   }
+
+  it("reports a pending journal when init commit fails after the config rename", async () => {
+    // Deterministic fault: preload patches fs.renameSync so the ownership
+    // sidecar install throws EIO after applyReconciliationTransaction has
+    // renamed the staged config into place and written a config_installed journal.
+    requests = [];
+    const env = fixture(port, ["healthy"]);
+    const configPath = join(env.work, ".pi", "bifrost.json");
+    const journalPath = join(env.work, ".pi", "bifrost-reconcile.journal");
+    const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+    try {
+      const result = await runInit({
+        ...env,
+        args: "--write",
+        env: { BIFROST_TEST_FAIL_OWNERSHIP_RENAME: "1" },
+      });
+      const output = result.stdout + result.stderr;
+      assert.equal(result.timedOut, false);
+      assert.equal(result.violations, "");
+      assert.match(output, /could not finish the reviewed membership update/u);
+      assert.match(output, /already holds the planned configuration/u);
+      assert.match(output, /a reconciliation journal is pending/u);
+      assert.match(output, /\/bifrost config reconcile --recover/u);
+      assert.doesNotMatch(output, /existing files were preserved/u);
+      assert.doesNotMatch(output, /may already be partly installed/u);
+
+      assert.equal(existsSync(journalPath), true, "expected pending reconciliation journal");
+      assert.equal(existsSync(configPath), true, "expected config to remain on disk");
+      assert.equal(existsSync(ownershipPath), false, "expected ownership rename to have been faulted");
+      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      assert.deepEqual(saved.models?.quick, ["fake/healthy"]);
+
+      writeFileSync(join(env.home, "commit-failure-output.txt"), output);
+    } finally {
+      rmSync(env.home, { recursive: true, force: true });
+      rmSync(env.work, { recursive: true, force: true });
+    }
+  });
 });
