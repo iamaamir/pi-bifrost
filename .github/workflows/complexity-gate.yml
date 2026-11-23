@@ -39,11 +39,36 @@ jobs:
       - name: Fetch the proposed head and merge result as data
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_REF_RETRY_ATTEMPTS: "36"
+          MERGE_REF_RETRY_DELAY_SECONDS: "10"
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head" \
-            "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/${PR_NUMBER}/merge"
+          attempt=1
+          while :; do
+            # GitHub can publish the head before the merge ref. Retry only that
+            # specific missing-ref failure; other fetch failures fail fast.
+            if fetch_output="$(git fetch --no-tags origin \
+              "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head" \
+              "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/${PR_NUMBER}/merge" 2>&1)"; then
+              break
+            fi
+            echo "$fetch_output" >&2
+            case "$fetch_output" in
+              *"couldn't find remote ref refs/pull/${PR_NUMBER}/merge"*|*"could not find remote ref refs/pull/${PR_NUMBER}/merge"*) ;;
+              *)
+                echo "The protected fetch failed for a reason other than a missing merge ref; not retrying." >&2
+                exit 1
+                ;;
+            esac
+            if (( attempt >= MERGE_REF_RETRY_ATTEMPTS )); then
+              echo "GitHub did not publish refs/pull/${PR_NUMBER}/merge within ${MERGE_REF_RETRY_ATTEMPTS} attempts" >&2
+              echo "A conflicted pull request may never get a merge ref; resolve the conflict and push again." >&2
+              exit 1
+            fi
+            echo "refs/pull/${PR_NUMBER}/merge is unavailable (attempt ${attempt}/${MERGE_REF_RETRY_ATTEMPTS}); retrying in ${MERGE_REF_RETRY_DELAY_SECONDS}s" >&2
+            attempt=$((attempt + 1))
+            sleep "$MERGE_REF_RETRY_DELAY_SECONDS"
+          done
 
       - name: Resolve the revisions for this run
         env:

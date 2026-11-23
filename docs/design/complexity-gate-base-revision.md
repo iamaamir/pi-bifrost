@@ -114,7 +114,10 @@ The gate must not be judged by code in the candidate. The authoritative path is
 - GitHub runs the workflow and the analyzer from the protected target branch,
   not from the pull request.
 - The workflow resolves the base ref once at run time, fetches the PR head and
-  proposed merge refs, and records the resolved revisions. It rejects a stale
+  proposed merge refs, and records the resolved revisions. The fetch retries up
+  to 36 times with 10-second delays while GitHub publishes the merge ref; an
+  unrelated fetch failure fails immediately. A PR that never gets a merge ref,
+  such as a conflicted PR, fails with an explicit message. It rejects a stale
   merge ref that does not contain both the current base and event head. No
   source, policy, or test file contains a hard-coded commit SHA.
 - The PR is present only as Git objects. The judge never installs, imports, or
@@ -224,7 +227,10 @@ Deterministic tests at the real CLI boundary (temporary git repositories):
 14. a source-derived target and a serialized legacy baseline produce the same
     ratchet findings for an ordinary change;
 15. the protected workflow measures both the PR delta and the proposed merge
-    result and uploads both evidence files.
+    result and uploads both evidence files;
+16. the protected fetch step retries a not-yet-published merge ref, fails
+    explicitly when the ref never appears, and fails immediately for an
+    unrelated fetch error.
 
 Command-level demonstration uses `--json`, and CI keeps the target-relative
 comparison. Historical trends are recovered on demand and recorded as CI

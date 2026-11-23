@@ -147,9 +147,11 @@ migration. A candidate label is not by itself an approval.
 The authoritative judge is
 [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml). GitHub runs
 that `pull_request_target` workflow and its analyzer from the protected target
-branch. It fetches the PR head and merge refs, measures both the PR delta and the
-proposed merge result as data, and uploads the evidence. It never installs or
-executes candidate code. A candidate label is not by itself an approval.
+branch. It fetches the PR head and merge refs with a bounded retry while GitHub
+publishes the merge ref; a fetch failure unrelated to the missing ref fails
+immediately. It measures both the PR delta and the proposed merge result as data,
+and uploads the evidence. It never installs or executes candidate code. A
+candidate label is not by itself an approval.
 
 Zizmor flags `pull_request_target` as a dangerous trigger. The workflow uses a
 line-scoped `# zizmor: ignore[dangerous-triggers]` annotation with the reason
