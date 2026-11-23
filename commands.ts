@@ -897,7 +897,7 @@ function setRegistryProviderEvidence(
   evidence: { readonly status: "complete" | "partial" | "stale"; readonly refreshedAt: number },
 ): void {
   state.registryInventoryEvidence = Object.freeze({
-    ...(state.registryInventoryEvidence ?? {}),
+    ...state.registryInventoryEvidence,
     [provider]: Object.freeze({ status: evidence.status, refreshedAt: evidence.refreshedAt }),
   });
 }
@@ -1196,7 +1196,7 @@ async function handleInit(
           for (const provider of knownProviders) {
             const evidence = projectProviderRefreshEvidence(result, provider, knownProviders, refreshedAt);
             state.registryInventoryEvidence = Object.freeze({
-              ...(state.registryInventoryEvidence ?? {}),
+              ...state.registryInventoryEvidence,
               [provider]: Object.freeze(evidence),
             });
           }

@@ -46,6 +46,8 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:secrets` | Working-tree secret scan | gitleaks |
 | `npm run check:secrets:history` | Full-history secret scan (slow) | gitleaks |
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
+| `npm run check:package` | Builds `dist/router`, then publint reports problems in the packed package | `npm ci` |
+| `npm run lint` | Oxlint reports code findings; errors stop the command | `npm ci` |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
 | `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
@@ -73,6 +75,42 @@ with this repository's tool binaries; the fault-control tests use it to run a re
 gate against a fixture and assert its exit code. `check:complexity` is its own
 script; `--repo <path>` points it at another repository and `--target <rev>`
 names the revision to compare against.
+
+`npm run lint` runs Oxlint 1.94.0 with the default rules. It reads source files,
+tests, and scripts. It does not read types. Warnings do not stop CI. Broken
+syntax and a bad configuration stop CI. No rule is set to error.
+
+GitHub shows ten annotations for one step. The step summary lists all warnings
+and errors by rule. An annotation is not a review comment. You cannot reply to it.
+
+`npm run typecheck` runs `tsc --noEmit`. It reports type errors only.
+`verification.yml` runs it. Lint and typecheck do not depend on each other.
+
+`npm run check:package` builds `dist/router` first. Then publint packs the
+package and reads each `exports` and `types` target. Publint reports missing
+files and wrong module formats. `npm pack` alone does not read those targets.
+Publint packs with `--dry-run`, so it skips `prepack`. The build must run first.
+
+### Warnings we keep
+
+- `eslint(no-unsafe-finally)`: Test teardown keeps the first error. The
+  `finally` block rethrows the cleanup error or combines both errors in an
+  `AggregateError`. The rule objects to that control flow.
+- `unicorn(no-useless-spread)`: The spread copies a collection before a loop
+  deletes from it.
+- `unicorn(no-new-array)`: Three sites make an array of a known length. A loop
+  fills it by index.
+- `typescript(no-this-alias)`: A patched method saves a dynamic `this`. An arrow
+  function would save the wrong receiver.
+- `eslint(no-unassigned-vars)`: One test leaves a receipt unset on purpose. It
+  then makes sure that the report has no receipt.
+
+We turn off `eslint(no-control-regex)` for the whole repository. Twenty uses
+match ANSI escape codes or reject control characters in model IDs and
+configuration values.
+
+PR 331 applies the mechanical fixes from `oxlint --fix`. Until it lands, you
+will see more warning categories. None of them stop CI.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
@@ -292,12 +330,24 @@ marker to the budget reddened only the report bound, at 121 lines.
 
 | Workflow | Trigger | Checks |
 | --- | --- | --- |
-| [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
+| [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | Oxlint, package metadata (publint), architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
 | [`security-audit.yml`](../.github/workflows/security-audit.yml) | Manual dispatch | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor; SARIF uplink for Gitleaks and Semgrep |
 | [`verification.yml`](../.github/workflows/verification.yml) | Pull request, push, schedule | existing acceptance, UI, compatibility, and mutation gates |
 | [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml) | `pull_request_target` | trusted complexity judge from the protected base branch; PR delta and proposed merge-result evidence |
 | [`report-publisher-checks.yml`](../.github/workflows/report-publisher-checks.yml) | Pull request, push to `main` | `node --test tests/ci-report-publish.test.mjs` for the trusted report publisher |
 | [`acceptance-report.yml`](../.github/workflows/acceptance-report.yml) | `workflow_run` of Verification | adds one marker-owned report comment to the pull request. It uses only default-branch code and never operates pull-request code |
+| [`docs-links-scheduled.yml`](../.github/workflows/docs-links-scheduled.yml) | Weekly cron, manual dispatch | advisory external URL check (lychee), reported in the job summary; never runs on pull requests or gates a merge |
+
+External documentation URLs are checked on a schedule, not on pull requests.
+The deterministic docs tests already resolve relative links and heading anchors,
+and `scripts/check-issue-refs.mjs` keeps issue-cited repository paths honest.
+An external check depends on third-party uptime and rate limits, so making it a
+required pull-request check would gate merges on outages this repository does not
+control. The scheduled job uses [`.lychee.toml`](../.lychee.toml) for timeouts,
+retries, and reviewed exclusions; broken links appear in the run summary and
+never fail the job. A configuration or runtime failure does fail it: the job
+checks lychee's exit code and requires a nonempty report, so the check cannot
+silently stop working.
 
 Pull-request security checks are diff-scoped where the tool supports it, so
 old findings do not block unrelated work. The dispatch-only workflow scans
@@ -358,8 +408,11 @@ benchmark target.
 | GitHub CLI | Reuse | Agent and maintainer environment only |
 | actionlint | Integrate | Fast gate on every workflow change |
 | Zizmor | Integrate | Workflow security, now clean with two documented ignores |
+| Oxlint | Integrate | Fast advisory lint; errors fail, warnings stay visible |
+| publint | Integrate | Checks packed exports and types that `npm pack` does not |
 | Hyperfine | On demand | No stable CI timing threshold |
 | Node profiler | On demand | Artifacts are for local investigation |
+| CLI argument parsing | Reuse `node:util` | New scripts bind values with `parseArgs`; existing parsers keep their loops where duplicate-flag detection and exact error text are asserted, because the adapter costs more than the binding it saves |
 | ts-morph | Defer | No codemod is needed yet; adding it now would be an unused dependency |
 | Renovate | Configured | Repository config only; the hosted app still needs installation |
 | Codemode | Unavailable | This host does not provide it; do not depend on it |

@@ -191,7 +191,7 @@ function main(argv) {
     return 2;
   }
   report(results);
-  const { missing, unpublished, failures } = classify(results, { requireRemote });
+  const { unpublished, failures } = classify(results, { requireRemote });
 
   if (unpublished.length > 0 && !requireRemote) {
     const paths = unpublished.map((result) => result.path).join(", ");

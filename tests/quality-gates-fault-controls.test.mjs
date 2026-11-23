@@ -102,6 +102,24 @@ function duplicationFixture(threshold) {
   return dir;
 }
 
+test("check:ast exits 1 when a rule's scope shape cannot be honoured", () => {
+  const dir = astFixture();
+  try {
+    const rulePath = join(dir, "rules", "no-debugger-in-extension.yml");
+    const original = readFileSync(rulePath, "utf8");
+    const unreadable = original.replace('files:\n  - "*.ts"', 'files:\n  - "{src,tests}/**"');
+    assert.notEqual(unreadable, original, "the scope-shape mutation must apply");
+    writeFileSync(rulePath, unreadable);
+
+    const result = runToolbox(dir, "ast");
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(result.report.findings.map((finding) => finding.rule), ["ast-grep-scope-unverified"]);
+    assert.equal(result.report.findings[0].file, "rules/no-debugger-in-extension.yml");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("check:duplication exits 1 above the configured threshold and 0 below it", () => {
   const strict = duplicationFixture(0);
   try {

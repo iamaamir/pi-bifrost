@@ -61,7 +61,8 @@ test("client posts fixed endpoint, retries only transient failures, and never ex
     sleepImpl: async () => {},
     fetchImpl: async (url, init) => {
       assert.equal(url, TYPESAFE_SYSTEMONE_URL);
-      authorization = (init?.headers as Record<string, string>).authorization;
+      assert.ok(init?.headers);
+      authorization = (init.headers as Record<string, string>).authorization;
       const status = statuses[calls++];
       return status === 200 ? response("quick") : new Response("", { status });
     },

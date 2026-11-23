@@ -163,14 +163,42 @@ export function parseAstGrep(stdout) {
   }));
 }
 
+function scopeGlobProblem(globs) {
+  for (const glob of [...(globs.files ?? []), ...globs.ignores]) {
+    if (/[{}\[\]]/u.test(glob)) return "brace or character-class glob";
+  }
+  return null;
+}
+
+function scopeItemProblem(item) {
+  if (/^\w+:\s/u.test(item)) return "mapping item in scope list";
+  return item.startsWith("#") || /\s+#/u.test(item) ? "trailing comment on scope item" : null;
+}
+
+function scopeKeyProblem(raw, isKey) {
+  if (!isKey) return null;
+  return raw === raw.trimStart() ? null : "nested files:/ignores: key";
+}
+
 // Minimal reader for the `files:`/`ignores:` lists in rules/*.yml. The rule
 // files use plain block or inline string lists, so a YAML dependency is not
 // worth it here.
 export function parseRuleGlobs(text) {
   const globs = { files: null, ignores: [] };
   let key = null;
+  let unverified;
+  const note = (reason) => { unverified ??= reason; };
   for (const raw of String(text).split(/\r?\n/)) {
     const line = raw.trim();
+    const isKey = /^(files|ignores):/u.test(line);
+    note(scopeKeyProblem(raw, isKey));
+    // YAML also allows a space before the colon and quoted keys. An inert rule
+    // would otherwise look unrestricted to this reader while ast-grep sees [].
+    if (/^(?:files|ignores)\s+:|^["'](?:files|ignores)["']\s*:/u.test(line)) {
+      note("unrecognized files:/ignores: key representation");
+      key = null;
+      continue;
+    }
     const inline = /^(files|ignores):\s*\[(.*)\]\s*$/.exec(line);
     if (inline) {
       globs[inline[1]] = inline[2]
@@ -186,13 +214,23 @@ export function parseRuleGlobs(text) {
       globs[key] ??= [];
       continue;
     }
+    if (isKey) {
+      // ast-grep accepts anchors, scalars and trailing comments here; treating
+      // them as an absent key would silently widen the rule to every file.
+      note("unrecognized files:/ignores: shape");
+      key = null;
+      continue;
+    }
     if (key && line.startsWith("- ")) {
-      globs[key].push(line.slice(2).trim().replace(/^["']|["']$/g, ""));
+      const item = line.slice(2).trim();
+      note(scopeItemProblem(item));
+      globs[key].push(item.replace(/^["']|["']$/g, ""));
       continue;
     }
     if (line && !line.startsWith("#")) key = null;
   }
-  return globs;
+  note(scopeGlobProblem(globs));
+  return unverified ? { ...globs, unverified } : globs;
 }
 
 // ast-grep's `files`/`ignores` use globset defaults, where `*` matches across
@@ -231,7 +269,17 @@ export function ruleScopeFindings(rules, files) {
       },
     ];
   }
-  return rules.flatMap(({ id, files: include, ignores }) => {
+  return rules.flatMap(({ id, files: include, ignores, unverified }) => {
+    // A shape the reader cannot trust must not fall back to unrestricted `**`:
+    // ast-grep would still apply the rule while this guard stayed green.
+    if (unverified) {
+      return [{
+        rule: "ast-grep-scope-unverified",
+        file: `rules/${id}.yml`,
+        line: null,
+        message: `rule ${id} scope is unverified: ${unverified}`,
+      }];
+    }
     // ast-grep reads an absent `files` key as unrestricted but an explicit
     // empty list as matching nothing, so the two cannot share a fallback.
     const patterns = include === null ? ["**"] : include;

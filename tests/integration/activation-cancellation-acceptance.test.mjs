@@ -9,7 +9,6 @@ import { describe, it } from "node:test";
 import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { TYPE_SAFE_API_KEY_ENV } from "../../classifier-backends.ts";
-import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER } from "../../virtual-model.ts";
 
 function strictConfig(overrides = {}) {
   return {

@@ -1,0 +1,48 @@
+name: Docs links (scheduled)
+
+on:
+  schedule:
+    # Weekly, off the top-of-hour load window. Advisory only; never a merge gate.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  external-links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check external links in documentation
+        id: links
+        # `fail: false` keeps link failures advisory. The guard below rejects
+        # the exit codes lychee uses for config and runtime failures.
+        uses: lycheeverse/lychee-action@885c65f3dc543b57c898c8099f4e08c8afd178a2 # v2.6.1
+        with:
+          fail: false
+          format: markdown
+          jobSummary: true
+          output: lychee/out.md
+          args: >-
+            --config .lychee.toml
+            --no-progress
+            './*.md'
+            './docs/**/*.md'
+      - name: Reject an incomplete link check
+        if: ${{ !cancelled() }}
+        env:
+          LYCHEE_EXIT_CODE: ${{ steps.links.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          # lychee 0.20.1: 0 clean, 2 broken links (advisory here),
+          # 1 unexpected failure, 3 bad config. Only 0 and 2 are complete.
+          case "$LYCHEE_EXIT_CODE" in
+            0|2) ;;
+            *) echo "lychee did not complete: exit $LYCHEE_EXIT_CODE" >&2; exit 1 ;;
+          esac
+          test -s lychee/out.md || { echo "lychee produced no report" >&2; exit 1; }

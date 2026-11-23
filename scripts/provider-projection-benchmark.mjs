@@ -119,7 +119,7 @@ const scenarios = [];
 try {
   for (const mode of ["memory-io", "durable-file"])
     for (const modelCount of [10, 100, 1_000])
-      for (const providerCount of [...new Set([1, Math.min(5, modelCount), Math.min(20, modelCount), Math.min(100, modelCount)])])
+      for (const providerCount of new Set([1, Math.min(5, modelCount), Math.min(20, modelCount), Math.min(100, modelCount)]))
         for (const historySize of [10, 1_000]) {
           const value = fixture(modelCount, providerCount, historySize, mode);
           const state = { version: 1, models: Object.create(null) };
