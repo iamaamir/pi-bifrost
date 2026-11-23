@@ -118,6 +118,9 @@ test("fails closed on rule scope shapes the reader cannot trust or honour", () =
     ["item-comment", 'files:\n  - "*.ts" # comment\n', "trailing comment on scope item"],
     ["brace", 'files: ["{src,tests}/**"]\n', "brace or character-class glob"],
     ["character-class", 'files: ["[ab].ts"]\n', "brace or character-class glob"],
+    ["ignore-mapping", 'ignores:\n  - glob: "**"\n', "mapping item in scope list"],
+    ["space-before-colon", "files : []\n", "unrecognized files:/ignores: key representation"],
+    ["quoted-key", '"files": []\n', "unrecognized files:/ignores: key representation"],
   ];
   for (const [id, source, reason] of forms) {
     const parsed = parseRuleGlobs(source);

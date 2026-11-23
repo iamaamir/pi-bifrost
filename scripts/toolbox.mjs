@@ -171,6 +171,7 @@ function scopeGlobProblem(globs) {
 }
 
 function scopeItemProblem(item) {
+  if (/^\w+:\s/u.test(item)) return "mapping item in scope list";
   return item.startsWith("#") || /\s+#/u.test(item) ? "trailing comment on scope item" : null;
 }
 
@@ -191,6 +192,13 @@ export function parseRuleGlobs(text) {
     const line = raw.trim();
     const isKey = /^(files|ignores):/u.test(line);
     note(scopeKeyProblem(raw, isKey));
+    // YAML also allows a space before the colon and quoted keys. An inert rule
+    // would otherwise look unrestricted to this reader while ast-grep sees [].
+    if (/^(?:files|ignores)\s+:|^["'](?:files|ignores)["']\s*:/u.test(line)) {
+      note("unrecognized files:/ignores: key representation");
+      key = null;
+      continue;
+    }
     const inline = /^(files|ignores):\s*\[(.*)\]\s*$/.exec(line);
     if (inline) {
       globs[inline[1]] = inline[2]
