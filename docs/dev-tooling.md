@@ -76,15 +76,12 @@ gate against a fixture and assert its exit code. `check:complexity` is its own
 script; `--repo <path>` points it at another repository and `--target <rev>`
 names the revision to compare against.
 
-`npm run lint` runs Oxlint 1.94.0 with the default rules. Oxlint reads source
-files, tests, and scripts. It does not read types. Warnings do not stop the
-command. Errors stop the command. Broken syntax and a bad configuration cause
-errors. No rule is set to error in this repository.
+`npm run lint` runs Oxlint 1.94.0 with the default rules. It reads source files,
+tests, and scripts. It does not read types. Warnings do not stop CI. Broken
+syntax and a bad configuration stop CI. No rule is set to error.
 
-GitHub shows ten annotations for a lint step. The step summary lists all
-warnings and the count for each rule. Both views come from one lint run. An
-annotation in the Checks tab is not a pull request review comment. You cannot
-reply to it or resolve it.
+GitHub shows ten annotations for one step. The step summary lists all warnings
+by rule. An annotation is not a review comment. You cannot reply to it.
 
 `npm run typecheck` runs `tsc --noEmit`. It reports type errors only.
 `verification.yml` runs it. Lint and typecheck do not depend on each other.
@@ -92,33 +89,28 @@ reply to it or resolve it.
 `npm run check:package` builds `dist/router` first. Then publint packs the
 package and reads each `exports` and `types` target. Publint reports missing
 files and wrong module formats. `npm pack` alone does not read those targets.
-Publint packs with `npm pack --dry-run`, so it skips `prepack`. The build must
-run first.
+Publint packs with `--dry-run`, so it skips `prepack`. The build must run first.
 
 ### Warnings we keep
 
-Oxlint reports these warnings on purpose. Each entry gives the reason.
-
-- `eslint(no-unsafe-finally)`: Test teardown saves the first error. A `finally`
-  block then rethrows the cleanup error or combines both errors in an
-  `AggregateError`. The rule objects to that control flow. The code needs it to
-  keep both errors.
+- `eslint(no-unsafe-finally)`: Test teardown keeps the first error. The
+  `finally` block rethrows the cleanup error or combines both errors in an
+  `AggregateError`. The rule objects to that control flow.
 - `unicorn(no-useless-spread)`: The spread copies a collection before a loop
-  deletes from it. `index.ts` receipts and claims, `auto-virtual` waiters, and
-  the reliability v2 prune fixture use this pattern.
+  deletes from it.
 - `unicorn(no-new-array)`: Three sites make an array of a known length. A loop
-  fills the array by index. Oxlint cannot tell length from element.
-- `typescript(no-this-alias)`: A patched prototype method saves a dynamic
-  `this`. An arrow function would save the wrong receiver.
-- `eslint(no-unassigned-vars)`: One cleanup-control test leaves a receipt unset
-  on purpose. The test then makes sure that the report has no receipt.
+  fills it by index.
+- `typescript(no-this-alias)`: A patched method saves a dynamic `this`. An arrow
+  function would save the wrong receiver.
+- `eslint(no-unassigned-vars)`: One test leaves a receipt unset on purpose. It
+  then makes sure that the report has no receipt.
 
-We turn off `eslint(no-control-regex)` for the whole repository. Twenty uses are
-deliberate. They match ANSI escape codes or reject control characters in model
-IDs and configuration values.
+We turn off `eslint(no-control-regex)` for the whole repository. Twenty uses
+match ANSI escape codes or reject control characters in model IDs and
+configuration values.
 
-A separate change applies the mechanical fixes from `oxlint --fix`. Until it
-lands, you will see more warning categories. None of them stop CI.
+PR 331 applies the mechanical fixes from `oxlint --fix`. Until it lands, you
+will see more warning categories. None of them stop CI.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
