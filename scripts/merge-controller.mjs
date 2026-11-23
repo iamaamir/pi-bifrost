@@ -22,6 +22,9 @@ import {
 
 const WORKFLOW_PATH = ".github/workflows/verification.yml";
 const REQUIRED_JOB = "release-gates";
+const COMPLEXITY_WORKFLOW_PATH = ".github/workflows/complexity-gate.yml";
+const COMPLEXITY_JOB = "complexity-trusted";
+const REQUIRED_CHECKS = [REQUIRED_JOB, COMPLEXITY_JOB];
 const BASE_BRANCH = "main";
 const SHA40 = /^[0-9a-f]{40}$/;
 const SHA256_64 = /^[0-9a-f]{64}$/;
@@ -193,7 +196,7 @@ function requiresCurrentBase(rule) {
   return rule?.type === "required_status_checks"
     && rule.parameters?.strict_required_status_checks_policy === true
     && Array.isArray(rule.parameters.required_status_checks)
-    && rule.parameters.required_status_checks.some((check) => check.context === REQUIRED_JOB);
+    && REQUIRED_CHECKS.every((context) => rule.parameters.required_status_checks.some((check) => check.context === context));
 }
 
 function requireServerBaseGuard(repo, baseBranch) {
@@ -207,21 +210,27 @@ function requireServerBaseGuard(repo, baseBranch) {
       if (policy?.id !== rule.ruleset_id || policy.target !== "branch" || policy.enforcement !== "active"
         || !Array.isArray(policy.bypass_actors) || policy.bypass_actors.length !== 0 || !Array.isArray(policy.rules)
         || !policy.rules.some(requiresCurrentBase) || !policy.rules.some((item) => item.type === "pull_request")) continue;
-      return { rulesetId: rule.ruleset_id, strict: true, requiredCheck: REQUIRED_JOB, bypassActors: 0 };
+      return { rulesetId: rule.ruleset_id, strict: true, requiredChecks: REQUIRED_CHECKS, bypassActors: 0 };
     }
   } catch (error) {
     if (error instanceof ControllerError) throw error;
     fail("server-protection", "effective strict server protection could not be verified");
   }
-  fail("server-protection", "an active non-bypassable strict release-gates and pull-request ruleset is required");
+  fail("server-protection", "an active non-bypassable strict release-gates, complexity-trusted, and pull-request ruleset is required");
 }
 
 function collectEvidence(repo, number) {
   const pr = ghJson(["pr", "view", String(number), "--repo", repo, "--json", "headRefOid,baseRefName,baseRefOid,isDraft,body,author"]);
   const workflow = ghJson(["api", `repos/${repo}/actions/workflows/verification.yml`]);
+  const complexityWorkflow = ghJson(["api", `repos/${repo}/actions/workflows/complexity-gate.yml`]);
   const baseWorkflow = ghJson(["api", `repos/${repo}/contents/${WORKFLOW_PATH}?ref=${pr.baseRefOid}`]);
   const headWorkflow = ghJson(["api", `repos/${repo}/contents/${WORKFLOW_PATH}?ref=${pr.headRefOid}`]);
   const currentRun = latestExactRun(repo, workflow.id, pr.headRefOid, "pull_request");
+  const complexityRun = latestExactRun(repo, complexityWorkflow.id, pr.headRefOid, "pull_request_target", {
+    workflowPath: COMPLEXITY_WORKFLOW_PATH,
+    jobName: COMPLEXITY_JOB,
+    baseSha: pr.baseRefOid,
+  });
   const workflowRuns = currentRun ? [{ ...currentRun, workflow_path: currentRun.path }] : [];
   const reviews = getReviews(repo, number);
   const reviewThreads = getReviewThreads(repo, number);
@@ -229,7 +238,7 @@ function collectEvidence(repo, number) {
   const dependencies = refs.map((ref) => dependencyEvidence(repo, ref, pr.baseRefName, pr.baseRefOid));
   const workflowFileMatchesBase = workflowHashesMatch(baseWorkflow, headWorkflow);
   const eligibility = evaluateEligibility({ pr, workflowFileMatchesBase, workflowRuns, reviews, reviewThreads, dependencies });
-  return { pr, workflow, currentRun, workflowRuns, reviews, reviewThreads, dependencies, workflowFileMatchesBase, eligibility };
+  return { pr, workflow, complexityWorkflow, currentRun, complexityRun, workflowRuns, reviews, reviewThreads, dependencies, workflowFileMatchesBase, eligibility };
 }
 
 export function fetchHeadTree(repo, headSha) {
@@ -267,31 +276,70 @@ export function fetchProposedMerge(repo, number) {
   return { sha: pr.merge_commit_sha, parents, tree };
 }
 
+// pull_request_target runs are anchored to the base SHA; the PR head is bound by
+// the run's pull_requests entry, not by run.head_sha.
+function runHeadFor(event, sha, baseSha) {
+  return event === "pull_request_target" ? baseSha : sha;
+}
+
+function bindsPullRequest(run, event, sha, baseSha) {
+  return event !== "pull_request_target" || (Array.isArray(run?.pull_requests)
+    && run.pull_requests.some((pr) => pr?.head?.sha === sha && pr?.base?.sha === baseSha));
+}
+
+function validWorkflowRun(run, { workflowId, runHeadSha, event, workflowPath, sha, baseSha }) {
+  return Number.isSafeInteger(run?.id) && Number.isSafeInteger(run.run_attempt)
+    && run.run_attempt >= 1 && run.head_sha === runHeadSha && run.event === event
+    && run.workflow_id === workflowId && run.path === workflowPath
+    && Number.isFinite(Date.parse(run.created_at)) && bindsPullRequest(run, event, sha, baseSha);
+}
+
 // Select before inspecting success. An older success can never mask a failed rerun.
-function latestExactRun(repo, workflowId, sha, event) {
-  const page = ghJson(["api", `repos/${repo}/actions/workflows/${workflowId}/runs?head_sha=${sha}&event=${event}&per_page=100`]);
+function latestExactRun(repo, workflowId, sha, event, { workflowPath = WORKFLOW_PATH, jobName = REQUIRED_JOB, baseSha = null } = {}) {
+  const runHeadSha = runHeadFor(event, sha, baseSha);
+  if (!SHA40.test(runHeadSha ?? "")) return null;
+  const page = ghJson(["api", `repos/${repo}/actions/workflows/${workflowId}/runs?head_sha=${runHeadSha}&event=${event}&per_page=100`]);
   const runs = page.workflow_runs;
   if (!Array.isArray(runs) || runs.length === 0 || page.total_count !== runs.length) return null;
-  if (runs.some((run) => !Number.isSafeInteger(run?.id) || !Number.isSafeInteger(run.run_attempt)
-    || run.run_attempt < 1 || run.head_sha !== sha || run.event !== event || run.workflow_id !== workflowId
-    || run.path !== WORKFLOW_PATH || !Number.isFinite(Date.parse(run.created_at)))) return null;
-  const [latest] = [...runs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id || b.run_attempt - a.run_attempt);
+  const binding = { workflowId, runHeadSha, event, workflowPath, sha, baseSha };
+  // pull_request_target queries by base SHA, so they can include runs for other
+  // PRs sharing that base. Isolate this PR before selecting its latest run.
+  const candidates = event === "pull_request_target"
+    ? runs.filter((run) => bindsPullRequest(run, event, sha, baseSha))
+    : runs;
+  if (candidates.length === 0 || candidates.some((run) => !validWorkflowRun(run, binding))) return null;
+  const [latest] = [...candidates].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id || b.run_attempt - a.run_attempt);
   if (latest.status !== "completed" || latest.conclusion !== "success"
-    || runs.filter((run) => run.id === latest.id && run.run_attempt === latest.run_attempt).length !== 1) return null;
+    || candidates.filter((run) => run.id === latest.id && run.run_attempt === latest.run_attempt).length !== 1) return null;
   const run = ghJson(["api", `repos/${repo}/actions/runs/${latest.id}/attempts/${latest.run_attempt}`]);
-  if (run.id !== latest.id || run.run_attempt !== latest.run_attempt || run.head_sha !== sha || run.event !== event
-    || run.workflow_id !== workflowId || run.path !== WORKFLOW_PATH || run.repository?.full_name !== repo
-    || run.status !== "completed" || run.conclusion !== "success") return null;
+  if (run.id !== latest.id || run.run_attempt !== latest.run_attempt || !validWorkflowRun(run, binding)
+    || run.repository?.full_name !== repo || run.status !== "completed" || run.conclusion !== "success") return null;
   const pageJobs = ghJson(["api", `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`]);
   const jobs = pageJobs.jobs;
   if (!Array.isArray(jobs) || pageJobs.total_count !== jobs.length) return null;
-  const gates = jobs.filter((job) => job?.name === REQUIRED_JOB);
+  const gates = jobs.filter((job) => job?.name === jobName);
   if (gates.length !== 1 || gates[0].conclusion !== "success") return null;
   return { ...run, jobs };
 }
 
 export function pushGatePassed(repo, workflowId, sha) {
   return latestExactRun(repo, workflowId, sha, "push") !== null;
+}
+
+function protectedComplexityBlocker(evidence) {
+  return evidence.complexityRun ? [] : ["successful protected complexity-trusted run for current base and head missing"];
+}
+
+function sameProtectedComplexityRun(left, right) {
+  return Boolean(left && right && left.id === right.id && left.run_attempt === right.run_attempt);
+}
+
+function authorizationChanged(finalPrecheck, evidence, finalGithubBlockers) {
+  return finalGithubBlockers.length !== 0
+    || finalPrecheck.workflow.id !== evidence.workflow.id
+    || finalPrecheck.currentRun?.id !== evidence.currentRun?.id
+    || finalPrecheck.currentRun?.run_attempt !== evidence.currentRun?.run_attempt
+    || !sameProtectedComplexityRun(finalPrecheck.complexityRun, evidence.complexityRun);
 }
 
 // Read bounded JSON members without extracting or executing anything from the ZIP.
@@ -533,7 +581,10 @@ function main() {
   const identityErrors = bindReceiptToExpectedIdentities(receipt, { expectedReviewer: args.expectedReviewer, expectedImplementer: args.expectedImplementer });
   const evidenceErrors = bindReceiptToEvidence(receipt, { headSha, baseSha, sourceTreeSha, deltaSha256, changedFiles });
   const receiptErrors = [...shape.errors, ...identityErrors, ...evidenceErrors];
-  const githubBlockers = (evidence.eligibility.blockers ?? []).filter((blocker) => blocker !== "no independent approval on current head");
+  const githubBlockers = [
+    ...(evidence.eligibility.blockers ?? []).filter((blocker) => blocker !== "no independent approval on current head"),
+    ...protectedComplexityBlocker(evidence),
+  ];
   const blockers = [...githubBlockers, ...receiptErrors];
   const serverGuard = blockers.length ? null : requireServerBaseGuard(repo, baseBranch);
   const tested = blockers.length ? null : testedSources(repo, evidence.currentRun, headSha, proposed);
@@ -547,6 +598,7 @@ function main() {
     sourceTree: sourceTreeSha,
     proposedMerge: { sha: proposed.sha, parents: proposed.parents, tree: proposed.tree },
     trustedReview: { reviewerAgent: receipt?.reviewerAgent, implementerAgent: receipt?.implementerAgent, valid: receiptErrors.length === 0 },
+    protectedComplexity: evidence.complexityRun ? { id: evidence.complexityRun.id, attempt: evidence.complexityRun.run_attempt } : null,
     blockers,
     testedSources: tested,
     serverGuard,
@@ -580,6 +632,7 @@ function main() {
     || JSON.stringify([...(reFiles ?? [])].sort()) !== JSON.stringify([...changedFiles].sort())
     || reProposed.sha !== proposed.sha || reProposed.tree !== proposed.tree
     || JSON.stringify(reProposed.parents) !== JSON.stringify(proposed.parents)
+    || !sameProtectedComplexityRun(recheck.complexityRun, evidence.complexityRun)
     || reTrusted.canonical !== trusted.canonical || reTrusted.digest !== trusted.digest
     || bindReceiptToExpectedIdentities(reReceipt, args).length !== 0
     || recheck.pr.baseRefName !== baseBranch || reFiles === null
@@ -598,10 +651,7 @@ function main() {
   const finalPreBase = finalPrecheck.pr.baseRefOid;
   const finalProposed = fetchProposedMerge(repo, args.pr);
   const finalGithubBlockers = (finalPrecheck.eligibility.blockers ?? []).filter((blocker) => blocker !== "no independent approval on current head");
-  const finalAuthorizationChanged = finalGithubBlockers.length !== 0
-    || finalPrecheck.workflow.id !== evidence.workflow.id
-    || finalPrecheck.currentRun?.id !== evidence.currentRun?.id
-    || finalPrecheck.currentRun?.run_attempt !== evidence.currentRun?.run_attempt;
+  const finalAuthorizationChanged = authorizationChanged(finalPrecheck, evidence, finalGithubBlockers);
   const finalProposedMismatch = finalProposed.sha !== proposed.sha || finalProposed.tree !== proposed.tree
     || JSON.stringify(finalProposed.parents) !== JSON.stringify(proposed.parents)
     || finalProposed.parents.length !== 2 || finalProposed.parents[0] !== baseSha || finalProposed.parents[1] !== headSha;

@@ -95,18 +95,27 @@ test("release-gates requires every PR stage and allows only non-applicable skips
   const block = jobs["release-gates"];
   assert.ok(block, "release-gates job must exist");
   assert.equal(jobCondition(block), "${{ !cancelled() }}");
-  assert.match(block, /^ {4}needs: \[head-acceptance, acceptance-merge, crap-trend, finalize-report\]$/mu);
+  assert.match(block, /^ {4}needs: \[head-acceptance, acceptance-merge, crap-trend, complexity, finalize-report\]$/mu);
   assert.doesNotMatch(workflow, /evidence-preflight|evidence-rebind|change-evidence\.json|release-evidence\.json/u);
   releaseGateBudget(workflow);
+
+  const complexity = jobs["complexity"];
+  assert.ok(complexity, "complexity job must exist");
+  assert.match(complexity, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u);
+  assert.match(complexity, /git merge-base/u, "the PR target is the branch point, not a moved base tip");
+  assert.match(complexity, /npm run --silent check:complexity:base -- "\$target" --candidate "\$HEAD_SHA" --json/u);
+  assert.match(complexity, /complexity-evidence\/delta\.json/u);
 
   const runBlock = block.match(/      - name: Require release stages for this event to succeed\n[\s\S]*?        run: \|\n((?:          .*\n)+)/u)?.[1];
   assert.ok(runBlock, "release-gates must keep its event-aware stage check");
   const script = runBlock.split("\n").filter(Boolean).map((line) => line.slice(10)).join("\n") + "\n";
-  const run = (eventName, merge, report) => spawnSync("bash", ["-e"], { input: script, encoding: "utf8", env: {
+  const run = (eventName, merge, report, complexity = "success") => spawnSync("bash", ["-e"], { input: script, encoding: "utf8", env: {
     ...process.env, GITHUB_EVENT_NAME: eventName, HEAD_RESULT: "success", CRAP_RESULT: "success",
-    MERGE_RESULT: merge, REPORT_RESULT: report,
+    COMPLEXITY_RESULT: complexity, MERGE_RESULT: merge, REPORT_RESULT: report,
   } });
   assert.equal(run("pull_request", "success", "success").status, 0);
+  assert.notEqual(run("pull_request", "success", "success", "failure").status, 0,
+    "a failed complexity check must fail the required release-gates context");
   assert.notEqual(run("pull_request", "skipped", "success").status, 0, "a skipped proposed-merge check must fail PR release-gates");
   assert.equal(run("push", "skipped", "skipped").status, 0, "merge/report skips are non-applicable on pushes");
   assert.notEqual(run("push", "failure", "skipped").status, 0, "a failed non-applicable stage must still fail");
@@ -201,7 +210,7 @@ test("finalize-report joins the parallel evidence into the candidate report", ()
 });
 
 test("campaign jobs never run on ordinary PR, push, or default manual dispatch", () => {
-  assert.deepEqual(Object.keys(jobs), ["head-acceptance", "acceptance-merge", "crap-trend", "finalize-report", "release-gates", "campaign", "pi-compatibility"]);
+  assert.deepEqual(Object.keys(jobs), ["head-acceptance", "acceptance-merge", "crap-trend", "complexity", "finalize-report", "release-gates", "campaign", "pi-compatibility"]);
   const cases = [
     ["pull_request", {}],
     ["push", {}],

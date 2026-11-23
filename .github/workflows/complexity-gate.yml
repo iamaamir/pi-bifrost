@@ -1,0 +1,146 @@
+name: Complexity gate
+
+# This workflow is the trusted judge boundary. It is intentionally a
+# pull_request_target workflow: GitHub runs this file from the protected base
+# branch, not from the pull request. The candidate is fetched only as Git
+# objects and measured as data; no candidate script, dependency install, or
+# workflow is executed. The resolved revisions and policy digests are recorded
+# in the artifact so a verdict can be replayed after the refs move.
+on:
+  # zizmor: ignore[dangerous-triggers] Line-scoped exception, not a safety
+  # claim: zizmor flags every pull_request_target trigger. This is the only
+  # automatic in-repo way to run the protected base judge without executing
+  # candidate code. The controls are the base-ref checkout, PR refs as data,
+  # base-only dependency install, and read-only token below. Remove this
+  # with an external trusted check or a redesign; do not widen the suppression.
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: complexity-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  complexity-trusted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the protected judge
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the proposed head and merge result as data
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head" \
+            "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/${PR_NUMBER}/merge"
+
+      - name: Resolve the revisions for this run
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse HEAD)"
+          event_head_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
+          merge_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/merge")"
+          if [ "$event_head_sha" != "$HEAD_SHA" ]; then
+            echo "The fetched pull request head does not match the event head" >&2
+            echo "event: $HEAD_SHA" >&2
+            echo "fetched: $event_head_sha" >&2
+            exit 1
+          fi
+          # The merge ref can lag the event when base or head moves. Never
+          # measure a merge result that does not contain both current revisions.
+          if ! git merge-base --is-ancestor "$base_sha" "$merge_sha" \
+            || ! git merge-base --is-ancestor "$event_head_sha" "$merge_sha"; then
+            echo "The proposed merge result is stale for the current base and head" >&2
+            exit 1
+          fi
+          # Ancestry alone permits a commit with extra or reordered parents.
+          # GitHub's PR merge ref has exactly the base tip and PR head as parents.
+          merge_parents="$(git show -s --format=%P "$merge_sha")"
+          if [ "$merge_parents" != "$base_sha $event_head_sha" ]; then
+            echo "The proposed merge result does not have the intended parents" >&2
+            echo "expected: $base_sha $event_head_sha" >&2
+            echo "actual: $merge_parents" >&2
+            exit 1
+          fi
+          merge_base="$(git merge-base "$base_sha" "$event_head_sha")"
+          test -n "$merge_base"
+          {
+            echo "BASE_SHA=$base_sha"
+            echo "HEAD_SHA=$event_head_sha"
+            echo "MERGE_SHA=$merge_sha"
+            echo "MERGE_BASE=$merge_base"
+          } >> "$GITHUB_ENV"
+          {
+            echo "### Complexity judge inputs"
+            echo "- judge/base: \`$base_sha\`"
+            echo "- head: \`$event_head_sha\`"
+            echo "- merge result: \`$merge_sha\`"
+            echo "- merge-base: \`$merge_base\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The judge dependencies come only from the protected checkout. The PR
+      # tree is not installed, run, or resolved as a module source.
+      # A required status context is matched by name, not by workflow. Reject a
+      # candidate that publishes the same literal context from another workflow;
+      # the external app/required-workflow control remains the complete fix.
+      - name: Reject candidate workflows that publish the protected context
+        env:
+          HEAD_SHA: ${{ env.HEAD_SHA }}
+        run: |
+          set -euo pipefail
+          if git grep -n -F 'complexity-trusted' "$HEAD_SHA" -- '.github/workflows/*.yml' '.github/workflows/*.yaml' ':!.github/workflows/complexity-gate.yml'; then
+            echo "A candidate workflow publishes the protected complexity-trusted context" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      # No policy override is accepted here. A candidate label or environment
+      # cannot authorize an analyzer, threshold, or workflow change; an owner
+      # policy migration must use the protected repository procedure.
+      - name: Measure the PR delta and the proposed merge result
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/complexity-evidence"
+          status=0
+          node scripts/check-complexity.mjs --target "$MERGE_BASE" --candidate "$HEAD_SHA" \
+            --json > "$RUNNER_TEMP/complexity-evidence/delta.json" || status=$?
+          node scripts/check-complexity.mjs --target "$BASE_SHA" --candidate "$MERGE_SHA" \
+            --json > "$RUNNER_TEMP/complexity-evidence/merge.json" || status=$?
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const evidence = process.env.RUNNER_TEMP + "/complexity-evidence";
+          for (const name of ["delta", "merge"]) {
+            const data = JSON.parse(readFileSync(`${evidence}/${name}.json`, "utf8"));
+            console.log(`${name}: ${data.status}${data.error ? ` (${data.error})` : ""}`);
+            for (const finding of data.findings ?? []) console.log(`  ${finding.rule} ${finding.file}: ${finding.message}`);
+          }
+          NODE
+          exit "$status"
+
+      - name: Upload complexity evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: complexity-evidence-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/complexity-evidence
+          if-no-files-found: warn
+          retention-days: 30

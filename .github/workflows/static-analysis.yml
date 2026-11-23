@@ -2,6 +2,9 @@ name: Static analysis
 
 on:
   pull_request:
+    # A policy acknowledgment changes the override, so applying or removing the
+    # label must re-evaluate the gate instead of leaving the old verdict.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   workflow_dispatch:
@@ -22,6 +25,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The push leg compares against the previous tip. A shallow checkout
+          # would make that revision unavailable and fail the gate closed.
+          fetch-depth: 0
           persist-credentials: false
       - name: Install Node
         # v7.1.0
@@ -38,28 +44,47 @@ jobs:
         run: npm run check:ast
       - name: Copy-paste detection
         run: npm run check:duplication
-      # Two different questions. Budgets fail when a function grows past the
-      # committed ceiling. The baseline step fails when the committed record no
-      # longer describes this tree at all, which the budget check cannot see.
-      - name: Complexity budgets
-        run: npm run check:complexity
-      - name: Complexity baseline is not stale
-        run: npm run check:complexity:baseline
-      # The committed baseline lives in the candidate, so it cannot show a
-      # ceiling this pull request raised. Fetch the base revision explicitly:
-      # a fork's history need not contain the base commit, so `origin` alone is
-      # not enough. Then compare the same tree against that revision's record.
-      - name: Fetch the base revision baseline
+      # The target is measured from source, so no generated metrics file is
+      # committed. Fetch the full base history explicitly: a fork's history need
+      # not contain the base commit, and merge-base needs the ancestry.
+      - name: Fetch the base revision
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REPO: ${{ github.event.pull_request.base.repo.clone_url }}
-        run: git fetch --no-tags --depth=1 "$BASE_REPO" "$BASE_SHA"
-      - name: Complexity budgets against the base revision
+        run: git fetch --no-tags "$BASE_REPO" "$BASE_SHA"
+      # Compare the PR's own changes against the point where it diverged. Using
+      # the live base tip would report a base-only policy move as a PR policy
+      # change and force an override for work this branch did not touch.
+      - name: Resolve the comparison target
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: npm run check:complexity:base -- "$BASE_SHA"
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          target="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          test -n "$target"
+          echo "TARGET_SHA=$target" >> "$GITHUB_ENV"
+      # The target revision is the trust anchor for analyzer, threshold, and CI
+      # policy changes. A policy-changing pull request must carry the
+      # quality-policy-change label so the override is visible in review.
+      - name: Complexity against the comparison target
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE: ${{ contains(github.event.pull_request.labels.*.name, 'quality-policy-change') && '1' || '' }}
+        run: npm run check:complexity:base -- "$TARGET_SHA" --candidate "$HEAD_SHA"
+      # A push to main is the merge of a pull request that already passed the
+      # label-gated review above; this leg re-checks the metric against the
+      # previous tip so a broken merge is still visible. Its unconditional
+      # override is post-merge bookkeeping, not candidate authorization.
+      - name: Complexity against the previous revision
+        if: github.event_name != 'pull_request'
+        env:
+          BIFROST_COMPLEXITY_BASE: ${{ github.event.before || 'HEAD^' }}
+          BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE: "1"
+        run: npm run check:complexity -- --candidate "$GITHUB_SHA"
 
   integration-contracts:
     runs-on: ubuntu-latest

@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Applying or removing the policy label changes the override, so the
+    # required release-gates context must be re-evaluated.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       campaign:
@@ -204,6 +207,67 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The complexity ratchet is part of the required release-gates context, not a
+  # separate best-effort static-analysis job. Compare the PR's own changes
+  # against the point where it diverged; the live base tip can contain a policy
+  # move this branch never touched.
+  complexity:
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Fetch the base revision
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.clone_url }}
+        run: git fetch --no-tags "$BASE_REPO" "$BASE_SHA"
+      - name: Complexity against the comparison target
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE: ${{ contains(github.event.pull_request.labels.*.name, 'quality-policy-change') && '1' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/complexity-evidence"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            target="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+            test -n "$target"
+            npm run --silent check:complexity:base -- "$target" --candidate "$HEAD_SHA" --json \
+              | tee "$RUNNER_TEMP/complexity-evidence/delta.json"
+          else
+            # Post-merge bookkeeping only: the policy decision was reviewed at
+            # the pull request boundary; this is not candidate authorization.
+            target="${BEFORE_SHA:-HEAD^}"
+            BIFROST_COMPLEXITY_BASE="$target" BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1 \
+              npm run --silent check:complexity -- --candidate "$HEAD_SHA" --json \
+              | tee "$RUNNER_TEMP/complexity-evidence/push.json"
+          fi
+
+      # This evidence is produced by the candidate checkout and is therefore a
+      # bootstrap/local record, not the trusted judge. The protected
+      # complexity-gate workflow records the authoritative artifact after merge.
+      - name: Upload complexity evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: complexity-evidence-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/complexity-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
   # Final candidate report: joins the head acceptance data, the merge
   # evidence, and the CRAP trend history, then renders and publishes the PR
   # report. A failed acceptance job still renders a failure report.
@@ -314,13 +378,13 @@ jobs:
           if-no-files-found: error
 
   # The required release-gates check covers every required stage: head
-  # acceptance, the proposed-merge acceptance, the CRAP trend refresh, and
-  # the final report. The release ruleset requires this exact check context, so
-  # this job waits for all of them and fails closed when any stage fails
-  # (skipped stages only occur on non-PR events, where the stage does not
-  # apply). merge-controller binds exactly one release-gates job per run.
+  # acceptance, the proposed-merge acceptance, the CRAP trend refresh, the
+  # complexity ratchet, and the final report. The release ruleset requires this
+  # exact check context, so this job waits for all of them and fails closed when
+  # any stage fails (skipped stages only occur on non-PR events, where the stage
+  # does not apply). merge-controller binds exactly one release-gates job per run.
   release-gates:
-    needs: [head-acceptance, acceptance-merge, crap-trend, finalize-report]
+    needs: [head-acceptance, acceptance-merge, crap-trend, complexity, finalize-report]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -333,6 +397,7 @@ jobs:
           HEAD_RESULT: ${{ needs.head-acceptance.result }}
           MERGE_RESULT: ${{ needs.acceptance-merge.result }}
           CRAP_RESULT: ${{ needs.crap-trend.result }}
+          COMPLEXITY_RESULT: ${{ needs.complexity.result }}
           REPORT_RESULT: ${{ needs.finalize-report.result }}
         run: |
           fail=0
@@ -344,6 +409,7 @@ jobs:
           }
           require_success head-acceptance "$HEAD_RESULT"
           require_success crap-trend "$CRAP_RESULT"
+          require_success complexity "$COMPLEXITY_RESULT"
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             require_success acceptance-merge "$MERGE_RESULT"
             require_success finalize-report "$REPORT_RESULT"

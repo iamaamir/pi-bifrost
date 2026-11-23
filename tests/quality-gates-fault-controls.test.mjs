@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -123,24 +123,49 @@ test("check:duplication exits 1 above the configured threshold and 0 below it", 
   }
 });
 
-test("check:complexity exits 1 on a ratchet regression against a lowered baseline", () => {
-  const committed = JSON.parse(readFileSync(join(root, "quality", "complexity-baseline.json"), "utf8"));
-  const [file, record] = Object.entries(committed.files).find(([, data]) => data.maxCyc > 1);
-  const lowered = structuredClone(committed);
-  lowered.files[file].maxCyc = record.maxCyc - 1;
-  const loweredPath = join(tmpdir(), `bifrost-ratchet-${process.pid}-${Date.now()}.json`);
+function complexityFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-gate-complexity-"));
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+  // Content-only policy files: the gate hashes them but never executes them.
+  writeFileSync(join(dir, "scripts", "check-complexity.mjs"), "// fixture policy\n");
+  writeFileSync(join(dir, ".github", "workflows", "complexity-gate.yml"), "name: complexity-gate-fixture\n");
+  writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
+  writeFileSync(join(dir, ".github", "workflows", "verification.yml"), "name: verification-fixture\n");
+  writeFileSync(join(dir, ".github", "CODEOWNERS"), "/scripts/check-complexity.mjs @owner\n");
+  writeFileSync(join(dir, "tsconfig.json"), "{}\n");
+  writeFileSync(join(dir, "package.json"), JSON.stringify({
+    scripts: {
+      "check:complexity": "node scripts/check-complexity.mjs",
+      "check:complexity:base": "node scripts/check-complexity.mjs --target",
+    },
+    devDependencies: { typescript: "6.0.3" },
+  }));
+  writeFileSync(join(dir, "a.ts"), "export function choose(flag: boolean) {\n  if (flag) { return 1; }\n  return 2;\n}\n");
+  gitFixture(dir);
+  const base = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, env: fixtureGitEnv(), encoding: "utf8" }).stdout.trim();
+  writeFileSync(join(dir, "a.ts"), "export function choose(flag: boolean, other: boolean) {\n  if (flag && other) { return 1; }\n  if (other) { return 3; }\n  return 2;\n}\n");
+  const commit = spawnSync("git", ["-c", "user.name=gate-test", "-c", "user.email=gate@example.com", "-c", "commit.gpgSign=false", "commit", "-qam", "regression", "--no-gpg-sign"], {
+    cwd: dir, env: fixtureGitEnv(), encoding: "utf8",
+  });
+  assert.equal(commit.status, 0, commit.stderr);
+  return { dir, base };
+}
+
+test("check:complexity exits 1 on a ratchet regression against the base revision", () => {
+  const { dir, base } = complexityFixture();
   try {
-    writeFileSync(loweredPath, JSON.stringify(lowered));
-    const result = spawnSync(process.execPath, [complexity, "--baseline", loweredPath, "--json"], {
+    const result = spawnSync(process.execPath, [complexity, "--repo", dir, "--target", base, "--candidate", "HEAD", "--json"], {
       cwd: root,
+      env: fixtureGitEnv(),
       encoding: "utf8",
     });
     assert.equal(result.status, 1, result.stderr);
     const report = JSON.parse(result.stdout);
     assert.equal(report.status, "failed");
-    assert.equal(report.findings.some((finding) => finding.rule === "file-maxCyc-regression" && finding.file === file), true,
-      `expected a ratchet finding for ${file}, got ${JSON.stringify(report.findings)}`);
+    assert.equal(report.findings.some((finding) => finding.rule === "file-maxCyc-regression" && finding.file === "a.ts"), true,
+      `expected a ratchet finding for a.ts, got ${JSON.stringify(report.findings)}`);
   } finally {
-    rmSync(loweredPath, { force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 });

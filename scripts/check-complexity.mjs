@@ -3,27 +3,33 @@
  * Deterministic complexity budget/ratchet for Bifrost.
  *
  * Computes cyclomatic and cognitive (Sonar-inspired approximation) complexity
- * per function-like node using the TypeScript compiler API, then compares
- * against a committed baseline. Fails on regressions so hotspots do not grow
- * while #286 debt is paid down.
+ * per function-like node using the TypeScript compiler API, then compares the
+ * candidate tree against the same measurement of a target git revision. Nothing
+ * is read from a generated metrics file: both sides are measured from source, so
+ * routine changes never update a shared snapshot.
  *
  * Usage:
- *   node scripts/check-complexity.mjs [--json] [--baseline <path>]
- *   node scripts/check-complexity.mjs --update-baseline [--baseline <path>]
- *   node scripts/check-complexity.mjs --check-baseline [--baseline <path>]
- *   node scripts/check-complexity.mjs --baseline-ref <rev> [--json]
+ *   node scripts/check-complexity.mjs [--target <rev>] [--candidate <rev>] [--json]
+ *   node scripts/check-complexity.mjs --measure <rev> [--json]
  *
- * `--baseline-ref` compares this tree against the baseline recorded at a git
- * revision. A pull request can regenerate the committed baseline in the same
- * change, so the committed file cannot prove the branch did not raise a ceiling;
- * the base revision can.
+ * The target defaults to BIFROST_COMPLEXITY_BASE, GITHUB_BASE_SHA, then the
+ * merge-base with origin/main or main. There is no implicit HEAD^ fallback:
+ * pass --target HEAD^ explicitly for a local last-commit comparison. The
+ * candidate defaults to the working tree. `--measure` prints one revision's
+ * measurements for historical trends.
  *
- * Exit codes: 0 clean/updated, 1 regression or stale baseline, 2 error or
- * missing baseline.
+ * A change to the analyzer, thresholds, file-selection policy, measurement
+ * dependency, or CI wiring changes the policy digest at one revision and fails
+ * closed unless `--allow-policy-change` records a reviewed decision.
+ *
+ * Exit codes: 0 clean, 1 regression, 2 error, incomplete input, unavailable
+ * revision, or an unacknowledged policy change.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,10 +37,16 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(path.join(ROOT, "package.json"));
 const ts = require("typescript");
 
-const DEFAULT_BASELINE = path.join(ROOT, "quality", "complexity-baseline.json");
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".git", "coverage", "reports", ".worktrees", ".commandcode"]);
-const RECORD_FIELDS = ["lines", "funcs", "maxCyc", "maxCog", "sumCyc", "sumCog"];
-const SCOPE_FIELDS = ["files", "functions", "maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
+const POLICY_FILES = [
+  "scripts/check-complexity.mjs",
+  ".github/workflows/complexity-gate.yml",
+  ".github/workflows/static-analysis.yml",
+  ".github/workflows/verification.yml",
+  ".github/CODEOWNERS",
+  "tsconfig.json",
+];
+const POLICY_SCRIPTS = ["check:complexity", "check:complexity:base"];
 
 function walk(dir, root = dir, skipped = []) {
   let entries;
@@ -50,6 +62,9 @@ function walk(dir, root = dir, skipped = []) {
   let results = [];
   for (const entry of entries) {
     if (EXCLUDED_DIRS.has(entry.name)) continue;
+    // A PR can add a symlink under a measured path; following it would read
+    // outside the revision tree. Symlinks are not source for this metric.
+    if (entry.isSymbolicLink()) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) results = results.concat(walk(full, root, skipped));
     else results.push(full);
@@ -258,9 +273,8 @@ function cognitive(node) {
 }
 
 // A file can disappear between the walk and the read on a live machine: a test
-// fixture, an editor save, a rebase. Skipping it keeps the gate from crashing on
-// a tree that moved. Callers that write a baseline refuse an incomplete snapshot
-// instead of recording one that omits a real file.
+// fixture, an editor save, a rebase. The caller must refuse the incomplete
+// snapshot; a partial measurement cannot support a verdict.
 function readIfPresent(file, rel, skipped) {
   try {
     return fs.readFileSync(file, "utf8");
@@ -271,13 +285,29 @@ function readIfPresent(file, rel, skipped) {
   }
 }
 
+// Compare paths by code-unit order, not locale order, so the digest is stable
+// across environments. Line endings are normalized because a Windows checkout
+// can materialize CRLF for the same committed content.
+function byPath(a, b) {
+  if (a.rel === b.rel) return 0;
+  return a.rel < b.rel ? -1 : 1;
+}
+
+function normalizeText(text) {
+  return text.replace(/\r\n/g, "\n");
+}
+
 function analyze({ root = ROOT, skipped = [] } = {}) {
-  const files = inScopeFiles(root, skipped).sort((a, b) => a.rel.localeCompare(b.rel));
+  const files = inScopeFiles(root, skipped).sort(byPath);
   const fileData = {};
   const scopeFuncs = { source: [], tests: [] };
+  // The digest binds a report to the exact bytes that produced it, so a verdict
+  // can be reproduced from a revision rather than trusted from a saved number.
+  const digest = createHash("sha256");
   for (const { file, rel, scope } of files) {
     const text = readIfPresent(file, rel, skipped);
     if (text === null) continue;
+    digest.update(`${rel}\0${normalizeText(text)}\0`);
     const scriptKind = /\.(mjs|cjs)$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind);
     const funcs = [];
@@ -333,78 +363,207 @@ function analyze({ root = ROOT, skipped = [] } = {}) {
   return {
     version: 1,
     note:
-      "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase; per-file maxima must not increase for baselined files; new files must not exceed scope baseline maxima.",
+      "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase against the target revision; per-file maxima must not increase; new files must not exceed the target scope maxima.",
+    inputDigest: digest.digest("hex"),
     scopes: { source: scopeSummary("source"), tests: scopeSummary("tests") },
     files: sortedFiles,
   };
 }
 
-// Provenance only, never compared. A baseline cannot name the commit that will
-// contain it, so this records the HEAD its numbers were measured from.
-function resolveSourceCommit(env = process.env, cwd = ROOT) {
-  const fromCi = env.GITHUB_SHA?.trim();
-  if (fromCi) return fromCi;
-  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+// Git plumbing. Both sides of every comparison are measured from source; there
+// is deliberately no path for a saved metrics file to influence a verdict.
+
+function gitRun(repo, args) {
+  return spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+}
+
+function resolveRevision(repo, ref) {
+  if (!ref) return null;
+  const result = gitRun(repo, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-function staleFinding(file, reason) {
-  return { rule: "complexity-baseline-stale", file, line: null, message: `${reason}; run with --update-baseline` };
+function mergeBase(repo, ref, candidate = "HEAD") {
+  if (resolveRevision(repo, ref) === null || resolveRevision(repo, candidate) === null) return null;
+  const result = gitRun(repo, ["merge-base", candidate, ref]);
+  return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-function recordDifferences(rel, base, now) {
-  const changed = RECORD_FIELDS
-    .filter((key) => (base[key] ?? 0) !== (now[key] ?? 0))
-    .map((key) => `${key} ${base[key] ?? 0} -> ${now[key] ?? 0}`);
-  return changed.length === 0 ? [] : [{
-    rule: "complexity-baseline-stale",
-    file: rel,
-    line: null,
-    message: changed.join(", "),
-  }];
-}
-
-function scopeDifferences(baseline, current) {
-  return ["source", "tests"].flatMap((scope) => SCOPE_FIELDS
-    .filter((key) => (baseline.scopes?.[scope]?.[key] ?? 0) !== (current.scopes?.[scope]?.[key] ?? 0))
-    .map((key) => `${scope}.${key} ${baseline.scopes?.[scope]?.[key] ?? 0} -> ${current.scopes?.[scope]?.[key] ?? 0}`));
-}
-
-// Staleness is not a ratchet regression: the gate can pass while the committed
-// ceilings describe a different tree. Compare the whole record, so line and
-// function drift fails too, not only maxima.
-function stalenessFindings(baseline, current) {
-  const baselineFiles = baseline.files ?? {};
-  const currentFiles = current.files ?? {};
-  const findings = [];
-  for (const rel of [...new Set([...Object.keys(baselineFiles), ...Object.keys(currentFiles)])].sort()) {
-    if (!baselineFiles[rel]) findings.push(staleFinding(rel, "not recorded in the baseline"));
-    else if (!currentFiles[rel]) findings.push(staleFinding(rel, "recorded in the baseline but no longer exists"));
-    else findings.push(...recordDifferences(rel, baselineFiles[rel], currentFiles[rel]));
+// The target is a revision, never a committed measurement. An explicit or
+// environment-named revision is authoritative: if it does not resolve the gate
+// fails instead of quietly comparing against a different tree.
+function resolveTarget({ repo = ROOT, explicit = null, env = process.env, candidate = "HEAD" } = {}) {
+  const fromEnv = env.BIFROST_COMPLEXITY_BASE?.trim() || env.GITHUB_BASE_SHA?.trim() || null;
+  const requested = explicit ?? fromEnv;
+  if (requested !== null) {
+    const sha = resolveRevision(repo, requested);
+    if (!sha) return { error: `could not resolve target revision ${requested}` };
+    const source = explicit !== null ? "--target" : (env.BIFROST_COMPLEXITY_BASE?.trim() ? "BIFROST_COMPLEXITY_BASE" : "GITHUB_BASE_SHA");
+    return { sha, source };
   }
-  if (findings.length === 0) {
-    const changed = scopeDifferences(baseline, current);
-    if (changed.length > 0) findings.push({ rule: "complexity-baseline-stale", file: "(scope)", line: null, message: changed.join(", ") });
+  for (const ref of ["origin/main", "main"]) {
+    const sha = mergeBase(repo, ref, candidate);
+    if (sha) return { sha, source: `merge-base ${candidate} ${ref}` };
   }
-  return findings;
+  return {
+    error: "no target revision: pass --target <rev>, set BIFROST_COMPLEXITY_BASE, or provide origin/main or main; use --target HEAD^ explicitly for a last-commit comparison",
+  };
 }
 
-function runStalenessCheck({ baseline, current, json }) {
-  const findings = stalenessFindings(baseline, current);
-  if (findings.length > 0) {
-    if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings }, null, 2));
-    else {
-      console.error(`FAIL complexity baseline: ${findings.length} stale record(s); run --update-baseline`);
-      for (const f of findings.slice(0, 40)) console.error(`  ${f.rule}  ${f.file}  ${f.message}`);
-      if (findings.length > 40) console.error(`  ... ${findings.length - 40} more`);
+function revisionText(repo, revision, rel) {
+  if (revision === null) {
+    try {
+      return fs.readFileSync(path.join(repo, rel), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
     }
-    return 1;
   }
-  const provenance = baseline.sourceCommit ? `, generated from ${baseline.sourceCommit.slice(0, 12)}` : "";
-  const msg = `Complexity baseline matches the tree (${Object.keys(current.files).length} files${provenance})`;
-  if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message: msg }, null, 2));
-  else console.log(msg);
-  return 0;
+  const result = gitRun(repo, ["show", `${revision}:${rel}`]);
+  return result.status === 0 ? result.stdout : null;
+}
+
+function sha256(text) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+// The policy digest covers every committed input that can change what the metric
+// means or which tree is judged. It is read from each revision's own bytes, so a
+// candidate cannot borrow the target's policy claim. Policy text is normalized
+// the same way as measured source so a CRLF checkout is not a policy change.
+function policyText(repo, revision, rel) {
+  try {
+    return { text: revisionText(repo, revision, rel) };
+  } catch (error) {
+    return { error: `could not read policy file ${rel} at ${revision ?? "the working tree"}: ${error.message}` };
+  }
+}
+
+function policyAt(repo, revision) {
+  const files = {};
+  const missing = [];
+  for (const rel of POLICY_FILES) {
+    const read = policyText(repo, revision, rel);
+    if (read.error) return read;
+    const text = read.text;
+    // A missing file is a policy change when the other revision has it. The
+    // caller rejects the case where both revisions are missing it, so a typo in
+    // POLICY_FILES cannot silently shrink the trust boundary.
+    if (text === null) {
+      files[rel] = null;
+      missing.push(rel);
+    } else {
+      files[rel] = sha256(normalizeText(text));
+    }
+  }
+  const manifestRead = policyText(repo, revision, "package.json");
+  if (manifestRead.error) return manifestRead;
+  const manifestText = manifestRead.text;
+  if (manifestText === null) return { error: `package.json is unavailable at ${revision ?? "the working tree"}` };
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestText);
+  } catch (error) {
+    return { error: `could not parse package.json at ${revision ?? "the working tree"}: ${error.message}` };
+  }
+  const scripts = Object.fromEntries(POLICY_SCRIPTS.map((name) => [name, manifest.scripts?.[name] ?? null]));
+  const typescriptRange = manifest.devDependencies?.typescript ?? null;
+  // The installed analyzer version can change through a lockfile-only update, so
+  // record the resolved version rather than hashing the whole lockfile.
+  const lockRead = policyText(repo, revision, "package-lock.json");
+  if (lockRead.error) return lockRead;
+  const lockText = lockRead.text;
+  let typescriptLocked = null;
+  if (lockText !== null) {
+    try {
+      const lock = JSON.parse(lockText);
+      typescriptLocked = lock.packages?.["node_modules/typescript"]?.version ?? lock.dependencies?.typescript?.version ?? null;
+    } catch (error) {
+      return { error: `could not parse package-lock.json at ${revision ?? "the working tree"}: ${error.message}` };
+    }
+  }
+  const digest = sha256(JSON.stringify({ files, scripts, typescriptRange, typescriptLocked, typescriptVersion: ts.version }));
+  return { digest, files, missing, scripts, typescriptRange, typescriptLocked, typescriptVersion: ts.version };
+}
+
+function policyDifferences(target, candidate) {
+  const changed = [];
+  for (const [file, hash] of Object.entries(target.files ?? {})) {
+    if (candidate.files?.[file] !== hash) changed.push(file);
+  }
+  for (const name of POLICY_SCRIPTS) {
+    if (target.scripts?.[name] !== candidate.scripts?.[name]) changed.push(`package.json scripts.${name}`);
+  }
+  if (target.typescriptRange !== candidate.typescriptRange) changed.push("package.json devDependencies.typescript");
+  if (target.typescriptLocked !== candidate.typescriptLocked) changed.push("package-lock.json typescript");
+  return changed;
+}
+
+// A detached worktree makes the target's source tree measurable without writing
+// into the repository under test. A unique temporary path keeps concurrent runs
+// independent.
+function withRevisionTree(repo, sha, fn) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "bifrost-complexity-"));
+  const tree = path.join(base, "tree");
+  const added = gitRun(repo, ["worktree", "add", "--detach", "--force", tree, sha]);
+  if (added.status !== 0) {
+    fs.rmSync(base, { recursive: true, force: true });
+    throw new Error(`could not check out ${sha}: ${String(added.stderr ?? "").trim() || "git worktree add failed"}`);
+  }
+  try {
+    return fn(tree);
+  } finally {
+    gitRun(repo, ["worktree", "remove", "--force", tree]);
+    fs.rmSync(base, { recursive: true, force: true });
+    // Best effort: a killed earlier run can leave stale administrative entries.
+    gitRun(repo, ["worktree", "prune"]);
+  }
+}
+
+function measureRoot(root) {
+  const skipped = [];
+  const report = analyze({ root, skipped });
+  return { report, skipped };
+}
+
+function measureRevision(repo, sha) {
+  return withRevisionTree(repo, sha, (tree) => measureRoot(tree));
+}
+
+// A working-tree candidate is not an immutable tree. Hash HEAD, the porcelain
+// status, and every source file the analyzer can measure before and after the
+// measurement; a change means the report would describe a moving target. Hashing
+// the analyzer's file set, rather than Git's changed set, also covers ignored
+// source that is present in the working tree but absent from git status. CI
+// passes an explicit --candidate commit and does not rely on this guard.
+function candidateFingerprint(repo) {
+  const head = gitRun(repo, ["rev-parse", "HEAD"]);
+  const status = gitRun(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+  if (head.status !== 0 || status.status !== 0) return { error: "could not inspect the candidate worktree" };
+  const skipped = [];
+  const files = inScopeFiles(repo, skipped).sort((a, b) => a.rel.localeCompare(b.rel));
+  const digest = createHash("sha256");
+  digest.update(head.stdout.trim()).update("\0").update(status.stdout).update("\0").update(skipped.join("\0"));
+  for (const { rel, file: full } of files) {
+    digest.update(rel).update("\0");
+    try {
+      // Hash the link target, not the referent. The analyzer skips symlinked
+      // sources, so following one here would read outside the candidate tree.
+      const stat = fs.lstatSync(full);
+      digest.update(stat.isSymbolicLink() ? fs.readlinkSync(full) : fs.readFileSync(full));
+    } catch (error) {
+      // A path can disappear between the walk and the read. Record the absence
+      // in the fingerprint and let the analyzer report the incomplete tree; a
+      // vanished source must not become an unreadable-file verdict instead.
+      if (error?.code === "ENOENT") {
+        digest.update("missing\0");
+        skipped.push(rel);
+        continue;
+      }
+      return { error: `could not read candidate file ${rel}: ${error.message}` };
+    }
+  }
+  return { digest: digest.digest("hex"), dirty: status.stdout.trim() !== "" || skipped.length > 0 };
 }
 
 const SCOPE_RATCHET_FIELDS = ["maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
@@ -427,8 +586,9 @@ function scopeFindings(baseline, current) {
   });
 }
 
-// A baselined file is judged against its own record; a new file is judged against
-// its scope ceiling until the first baseline that records it.
+// A baselined file is judged against its own record; a new path is judged against
+// its scope ceiling until the first baseline that records it. Rename detection is
+// deliberately not an identity signal: path identity follows ADR 0027.
 function fileFindings(rel, data, baseline) {
   const base = baseline.files?.[rel];
   const ceiling = base ?? (baseline.scopes?.[data.scope] || {});
@@ -451,148 +611,268 @@ function compare(baseline, current) {
   return findings;
 }
 
-function warnVanished(skipped) {
-  if (skipped.length === 0) return;
-  const shown = skipped.slice(0, 5).join(", ");
-  // Entries can be files or a `dir/` marker, so they are paths, not files.
-  console.error(`warning: skipped ${skipped.length} path(s) that vanished during analysis: ${shown}${skipped.length > 5 ? ", ..." : ""}`);
+function summary(report) {
+  const source = report.scopes?.source ?? {};
+  return `source maxCyc=${source.maxCyc ?? 0}, maxCog=${source.maxCog ?? 0}, cycGt50=${source.cycGt50 ?? 0}, cogGt50=${source.cogGt50 ?? 0}`;
 }
 
-// The JSON envelope is a contract tests and CI parse, so it is written once.
-function emitFailure(json, message) {
-  if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: message }, null, 2));
-  else console.error(message);
-  return 2;
+function targetEnvelope({ sha, source, report, policy }) {
+  return {
+    revision: sha,
+    source,
+    inputDigest: report?.inputDigest ?? null,
+    policyDigest: policy?.digest ?? null,
+    scopes: report?.scopes ?? null,
+  };
 }
 
-function emitPass(json, message) {
-  if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message }, null, 2));
-  else console.log(message);
-  return 0;
+function candidateEnvelope({ mode, revision, dirty }, report, policy) {
+  return {
+    mode,
+    revision: revision ?? null,
+    dirty: dirty ?? null,
+    inputDigest: report?.inputDigest ?? null,
+    policyDigest: policy?.digest ?? null,
+    scopes: report?.scopes ?? null,
+  };
 }
 
-function summary(current) {
-  const { maxCyc, maxCog, cycGt50, cogGt50 } = current.scopes.source;
-  return `source maxCyc=${maxCyc}, maxCog=${maxCog}, cycGt50=${cycGt50}, cogGt50=${cogGt50}`;
+function printEnvelope(envelope, json) {
+  if (json) console.log(JSON.stringify(envelope, null, 2));
+  return envelope.exitCode;
 }
 
-function updateBaseline({ current, baselinePath, json, skipped }) {
-  if (skipped.length > 0) {
-    return emitFailure(json, `refusing to write a baseline from an incomplete analysis: ${skipped.length} file(s) vanished; re-run when the tree is stable`);
+function failure({ json, message, target, candidate, policy }) {
+  const envelope = {
+    check: "complexity",
+    status: "failed",
+    exitCode: 2,
+    ...(target ? { target } : {}),
+    ...(candidate ? { candidate } : {}),
+    ...(policy ? { policy } : {}),
+    findings: [],
+    error: message,
+  };
+  if (!json) console.error(message);
+  return printEnvelope(envelope, json);
+}
+
+function policyFailure({ json, target, candidate, policy }) {
+  const message = "complexity policy differs between the target and the candidate; review the analyzer/scope/threshold/CI change, then re-run with --allow-policy-change locally. Protected CI does not accept that override or a candidate label.";
+  const envelope = {
+    check: "complexity",
+    status: "failed",
+    exitCode: 2,
+    target,
+    candidate,
+    policy,
+    findings: [{ rule: "complexity-policy-changed", file: "(policy)", line: null, message }],
+    error: message,
+  };
+  if (!json) {
+    console.error(`FAIL complexity policy: ${policy.differences.join(", ") || "policy digest differs"}`);
+    console.error(`  target ${target.revision} policy ${policy.targetDigest.slice(0, 16)}`);
+    console.error(`  candidate ${candidate.revision ?? "working tree"} policy ${policy.candidateDigest.slice(0, 16)}`);
+    console.error("  review the analyzer/scope/threshold/CI change, then re-run with --allow-policy-change locally; protected CI has no candidate-controlled override");
   }
-  fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
-  current.generatedAt = new Date().toISOString();
-  current.sourceCommit = resolveSourceCommit();
-  fs.writeFileSync(baselinePath, JSON.stringify(current, null, 2) + "\n");
-  return emitPass(json, `Updated complexity baseline: ${path.relative(ROOT, baselinePath)} (${summary(current)})`);
+  return printEnvelope(envelope, json);
 }
 
-function repoRelative(baselinePath, root = ROOT) {
-  const rel = path.relative(root, baselinePath).split(path.sep).join("/");
-  return rel.startsWith("..") ? null : rel;
+function incompleteError(label, result) {
+  const shown = result.skipped.slice(0, 5).join(", ");
+  return `${label} analysis incomplete: ${result.skipped.length} path(s) vanished or could not be read (${shown}${result.skipped.length > 5 ? ", ..." : ""})`;
 }
 
-// A baseline absent at the base revision cannot be compared. That is reported
-// as a finding, not a pass: a comparison that cannot be made proves nothing.
-function baselineAtRef({ ref, baselinePath = DEFAULT_BASELINE, root = ROOT }) {
-  const rel = repoRelative(baselinePath, root);
-  if (!rel) return { error: "--baseline must name a path inside the repository for --baseline-ref" };
-  const show = spawnSync("git", ["show", `${ref}:${rel}`], { cwd: root, encoding: "utf8" });
-  if (show.status !== 0) {
-    const stderr = String(show.stderr ?? "").trim();
-    if (/does not exist|but not in|not in '|not in "/iu.test(stderr)) return { missing: true };
-    return { error: `could not read ${rel} at ${ref}: ${stderr || "git show failed"}` };
-  }
-  try {
-    return { baseline: JSON.parse(show.stdout) };
-  } catch (error) {
-    return { error: `could not parse ${rel} at ${ref}: ${error.message}` };
-  }
-}
-
-function readBaseline(baselinePath, json) {
-  if (!fs.existsSync(baselinePath)) {
-    return { exitCode: emitFailure(json, `complexity baseline not found: ${path.relative(ROOT, baselinePath)} (run with --update-baseline)`) };
-  }
-  try {
-    return { baseline: JSON.parse(fs.readFileSync(baselinePath, "utf8")) };
-  } catch (error) {
-    return { exitCode: emitFailure(json, `could not read complexity baseline: ${error.message}`) };
-  }
-}
-
-function reportBudgets({ findings, current, json, against }) {
-  const target = against ? ` against ${against}` : "";
+function report({ json, findings, target, candidate, policy }) {
   if (findings.length === 0) {
-    const message = `Complexity budgets OK${target} (${summary(current)})`;
-    if (json) {
-      console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], ...(against ? { baselineRef: against } : {}), message }, null, 2));
-      return 0;
+    const message = `Complexity budgets OK against ${target.revision.slice(0, 12)} (${summary(candidate)})`;
+    const envelope = { check: "complexity", status: "passed", exitCode: 0, target, candidate, policy, findings: [], message };
+    if (!json) console.log(message);
+    return printEnvelope(envelope, json);
+  }
+  const envelope = { check: "complexity", status: "failed", exitCode: 1, target, candidate, policy, findings };
+  if (!json) {
+    console.error(`FAIL complexity against ${target.revision.slice(0, 12)}: ${findings.length} regression(s)`);
+    for (const finding of findings.slice(0, 40)) {
+      const location = finding.line ? `${finding.file}:${finding.line}` : finding.file;
+      console.error(`  ${finding.rule}  ${location}  ${finding.message}`);
     }
-    return emitPass(json, message);
+    if (findings.length > 40) console.error(`  ... ${findings.length - 40} more`);
   }
-  if (json) {
-    console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings, ...(against ? { baselineRef: against } : {}) }, null, 2));
-    return 1;
-  }
-  console.error(`FAIL complexity${target}: ${findings.length} regression(s)`);
-  for (const finding of findings.slice(0, 40)) {
-    const location = finding.line ? `${finding.file}:${finding.line}` : finding.file;
-    console.error(`  ${finding.rule}  ${location}  ${finding.message}`);
-  }
-  if (findings.length > 40) console.error(`  ... ${findings.length - 40} more`);
-  return 1;
+  return printEnvelope(envelope, json);
 }
 
-function main(argv = process.argv.slice(2)) {
-  const json = argv.includes("--json");
-  const update = argv.includes("--update-baseline");
-  const stale = argv.includes("--check-baseline");
-  const bIdx = argv.indexOf("--baseline");
-  const baselinePath = bIdx !== -1 && argv[bIdx + 1] ? path.resolve(argv[bIdx + 1]) : DEFAULT_BASELINE;
-  const rIdx = argv.indexOf("--baseline-ref");
-  const baselineRef = rIdx !== -1 ? argv[rIdx + 1] : null;
-  if (rIdx !== -1 && (!baselineRef || baselineRef.startsWith("--"))) {
-    return emitFailure(json, "--baseline-ref requires a revision");
-  }
-  if (baselineRef && (update || stale)) {
-    return emitFailure(json, "--baseline-ref cannot be combined with --update-baseline or --check-baseline");
-  }
+function option(argv, flag) {
+  const index = argv.indexOf(flag);
+  if (index === -1) return { present: false, value: null };
+  const value = argv[index + 1];
+  return { present: true, value: value && !value.startsWith("--") ? value : null };
+}
 
-  const skipped = [];
-  let current;
+function isEnabled(value) {
+  return ["1", "true", "yes"].includes(String(value ?? "").toLowerCase());
+}
+
+function parseInvocation(argv, env) {
+  const options = {};
+  for (const name of ["repo", "target", "candidate", "measure"]) {
+    const parsed = option(argv, `--${name}`);
+    if (parsed.present && parsed.value === null) return { error: `--${name} requires a value` };
+    options[name] = parsed;
+  }
+  if (options.measure.present && (options.target.present || options.candidate.present)) {
+    return { error: "--measure cannot be combined with --target or --candidate" };
+  }
+  return {
+    json: argv.includes("--json"),
+    allowPolicy: argv.includes("--allow-policy-change") || isEnabled(env.BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE),
+    env,
+    ...options,
+  };
+}
+
+function measureCommand({ json, repo, revision }) {
+  const sha = resolveRevision(repo, revision);
+  if (!sha) return failure({ json, message: `could not resolve revision ${revision}` });
+  let result;
   try {
-    current = analyze({ skipped });
+    result = measureRevision(repo, sha);
   } catch (error) {
-    return emitFailure(json, `complexity analysis failed: ${error.message}`);
+    return failure({ json, message: `complexity analysis failed for ${sha}: ${error.message}` });
   }
-  warnVanished(skipped);
+  if (result.skipped.length > 0) return failure({ json, message: incompleteError(`revision ${sha}`, result) });
+  // A trend point is comparable only when the policy that produced it matches.
+  // The executing policy is the loaded analyzer from this checkout, not the
+  // measured repository's analyzer file; the measured revision's own policy is
+  // recorded separately for provenance.
+  const executingPolicy = policyAt(ROOT, null);
+  if (executingPolicy.error) return failure({ json, message: executingPolicy.error });
+  const revisionPolicy = policyAt(repo, sha);
+  if (revisionPolicy.error) return failure({ json, message: revisionPolicy.error });
+  const envelope = {
+    check: "complexity",
+    status: "measured",
+    exitCode: 0,
+    revision: sha,
+    inputDigest: result.report.inputDigest,
+    policyDigest: executingPolicy.digest,
+    revisionPolicyDigest: revisionPolicy.digest,
+    tool: { typescriptVersion: ts.version },
+    scopes: result.report.scopes,
+    files: result.report.files,
+  };
+  if (!json) console.log(`Measured ${sha} (${summary(result.report)})`);
+  return printEnvelope(envelope, json);
+}
 
-  if (update) return updateBaseline({ current, baselinePath, json, skipped });
+function resolveCandidate({ repo, option: parsed }) {
+  if (!parsed.present) {
+    const revision = resolveRevision(repo, "HEAD");
+    return revision ? { mode: "worktree", revision } : { error: "could not resolve candidate HEAD" };
+  }
+  const sha = resolveRevision(repo, parsed.value);
+  return sha
+    ? { mode: "revision", revision: sha, dirty: false }
+    : { error: `could not resolve candidate revision ${parsed.value}` };
+}
 
-  if (baselineRef) {
-    const fromRef = baselineAtRef({ ref: baselineRef, baselinePath });
-    if (fromRef.error) return emitFailure(json, fromRef.error);
-    const findings = fromRef.missing
-      ? [{
-          rule: "complexity-base-baseline-missing",
-          file: repoRelative(baselinePath),
-          line: null,
-          message: `no baseline at ${baselineRef}; run this gate against a revision that records one`,
-        }]
-      : compare(fromRef.baseline, current);
-    return reportBudgets({ findings, current, json, against: baselineRef });
+function measureAndReport({ json, repo, resolved, candidate, targetPolicy, candidatePolicy, policy }) {
+  let targetResult;
+  let candidateResult;
+  let candidateBefore = null;
+  try {
+    targetResult = measureRevision(repo, resolved.sha);
+    if (targetResult.skipped.length > 0) return failure({ json, message: incompleteError(`target ${resolved.sha}`, targetResult) });
+    if (candidate.mode === "worktree") {
+      candidateBefore = candidateFingerprint(repo);
+      if (candidateBefore.error) return failure({ json, message: candidateBefore.error });
+      candidate.dirty = candidateBefore.dirty;
+      candidateResult = measureRoot(repo);
+    } else {
+      candidateResult = measureRevision(repo, candidate.revision);
+    }
+    if (candidateResult.skipped.length > 0) return failure({ json, message: incompleteError("candidate", candidateResult) });
+    if (candidate.mode === "worktree") {
+      // Take the final fingerprint only after every candidate read. A change
+      // after the earlier fingerprint must not produce a comparison against a
+      // tree the measurement did not describe.
+      const candidateAfter = candidateFingerprint(repo);
+      if (candidateAfter.error) return failure({ json, message: candidateAfter.error });
+      if (candidateAfter.digest !== candidateBefore.digest) {
+        return failure({ json, message: "candidate changed during analysis; rerun with --candidate <commit> against an immutable tree" });
+      }
+      const candidatePolicyAfter = policyAt(repo, null);
+      if (candidatePolicyAfter.error) return failure({ json, message: candidatePolicyAfter.error });
+      if (candidatePolicyAfter.digest !== candidatePolicy.digest) {
+        return failure({ json, message: "candidate policy changed during analysis; rerun with --candidate <commit> against an immutable tree" });
+      }
+    }
+    return report({
+      json,
+      findings: compare(targetResult.report, candidateResult.report),
+      target: targetEnvelope({ sha: resolved.sha, source: resolved.source, report: targetResult.report, policy: targetPolicy }),
+      candidate: candidateEnvelope(candidate, candidateResult.report, candidatePolicy),
+      policy,
+    });
+  } catch (error) {
+    return failure({ json, message: `complexity analysis failed: ${error.message}` });
+  }
+}
+
+function compareCommand({ invocation, repo }) {
+  const { json, allowPolicy, env } = invocation;
+  const candidate = resolveCandidate({ repo, option: invocation.candidate });
+  if (candidate.error) return failure({ json, message: candidate.error });
+  const resolved = resolveTarget({
+    repo,
+    explicit: invocation.target.present ? invocation.target.value : null,
+    env,
+    candidate: candidate.mode === "revision" ? candidate.revision : "HEAD",
+  });
+  if (resolved.error) return failure({ json, message: resolved.error });
+
+  const targetPolicy = policyAt(repo, resolved.sha);
+  if (targetPolicy.error) return failure({ json, message: targetPolicy.error });
+  const candidatePolicy = policyAt(repo, candidate.mode === "revision" ? candidate.revision : null);
+  if (candidatePolicy.error) return failure({ json, message: candidatePolicy.error });
+
+  const missingAtBoth = targetPolicy.missing.filter((file) => candidatePolicy.missing.includes(file));
+  if (missingAtBoth.length > 0) {
+    return failure({ json, message: `policy file(s) unavailable at both revisions: ${missingAtBoth.join(", ")}` });
   }
 
-  const loaded = readBaseline(baselinePath, json);
-  if (loaded.exitCode !== undefined) return loaded.exitCode;
-  if (stale) return runStalenessCheck({ baseline: loaded.baseline, current, json });
-  return reportBudgets({ findings: compare(loaded.baseline, current), current, json });
+  const changed = targetPolicy.digest !== candidatePolicy.digest;
+  const policy = {
+    changed,
+    differences: changed ? policyDifferences(targetPolicy, candidatePolicy) : [],
+    targetDigest: targetPolicy.digest,
+    candidateDigest: candidatePolicy.digest,
+  };
+  if (changed && !allowPolicy) {
+    return policyFailure({
+      json,
+      target: targetEnvelope({ sha: resolved.sha, source: resolved.source, policy: targetPolicy }),
+      candidate: candidateEnvelope(candidate, null, candidatePolicy),
+      policy,
+    });
+  }
+  return measureAndReport({ json, repo, resolved, candidate, targetPolicy, candidatePolicy, policy });
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  const invocation = parseInvocation(argv, env);
+  const json = argv.includes("--json");
+  if (invocation.error) return failure({ json, message: invocation.error });
+
+  const repo = invocation.repo.present ? path.resolve(invocation.repo.value) : ROOT;
+  if (!fs.existsSync(repo)) return failure({ json, message: `repository path not found: ${repo}` });
+  if (invocation.measure.present) return measureCommand({ json, repo, revision: invocation.measure.value });
+  return compareCommand({ invocation, repo });
 }
 
 export {
   analyze,
-  baselineAtRef,
+  candidateFingerprint,
   cognitive,
   compare,
   cyclomatic,
@@ -600,9 +880,12 @@ export {
   inScopeFiles,
   isFunctionLike,
   main,
-  resolveSourceCommit,
+  measureRevision,
+  policyAt,
+  resolveRevision,
+  resolveTarget,
   scopeOf,
-  stalenessFindings,
+  withRevisionTree,
   walk,
 };
 
