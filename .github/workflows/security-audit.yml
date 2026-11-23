@@ -45,7 +45,7 @@ jobs:
             --report-format sarif --report-path gitleaks.sarif --exit-code 0 .
       - name: Upload Gitleaks SARIF
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -78,7 +78,7 @@ jobs:
           --metrics=off --disable-version-check
       - name: Upload Semgrep SARIF
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
