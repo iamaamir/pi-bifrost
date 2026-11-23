@@ -37,7 +37,26 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Lint (errors fail, warnings advisory)
-        run: npm run lint
+        # Oxlint prints GitHub annotations for the first ten warnings. The
+        # step summary lists all warnings by rule. Both come from this run.
+        run: |
+          set -uo pipefail
+          lint_output="$(mktemp)"
+          npm run lint > "$lint_output" 2>&1
+          status=$?
+          cat "$lint_output"
+          {
+            echo "### Lint"
+            echo
+            total=$(grep -cE '^::warning | warning [a-z]+\(' "$lint_output" || true)
+            echo "Warnings: $total"
+            echo
+            echo "By rule:"
+            grep -oE '(title=|warning )[a-z]+\([^)]+\)' "$lint_output" \
+              | sed -E 's/^(title=|warning )//' | sort | uniq -c | sort -rn \
+              | awk '{print "- " $2 ": " $1}'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - name: Validate packed package metadata
         # check:package builds dist/router because publint packs with --dry-run,
         # which skips prepack. This job runs no other packer, so it cannot race

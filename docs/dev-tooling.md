@@ -46,8 +46,8 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:secrets` | Working-tree secret scan | gitleaks |
 | `npm run check:secrets:history` | Full-history secret scan (slow) | gitleaks |
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
-| `npm run check:package` | Builds `dist/router`, then publint validates the packed package's `exports`, `types`, files, and module format | `npm ci` |
-| `npm run lint` | Oxlint default/recommended rules; errors fail, warnings are advisory | `npm ci` |
+| `npm run check:package` | Builds `dist/router`, then publint reports problems in the packed package | `npm ci` |
+| `npm run lint` | Oxlint reports code findings; errors stop the command | `npm ci` |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
 | `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
@@ -76,42 +76,49 @@ gate against a fixture and assert its exit code. `check:complexity` is its own
 script; `--repo <path>` points it at another repository and `--target <rev>`
 names the revision to compare against.
 
-`npm run lint` uses pinned Oxlint with its default/recommended native rules:
-no type-aware mode and no third-party plugins. An error exits nonzero and fails
-the gate; a warning is printed and does not fail. Warnings stay visible rather
-than being suppressed in bulk. `npm run typecheck` remains `tsc --noEmit` and is
-independent of lint; a clean lint result says nothing about types.
+`npm run lint` runs Oxlint 1.94.0 with the default rules. Oxlint reads source
+files, tests, and scripts. It does not read types. Warnings do not stop the
+command. Errors stop the command. Broken syntax and a bad configuration cause
+errors. No rule is set to error in this repository.
 
-`npm pack` only proves that a tarball can be built. `publint` inspects the
-packed result and reports bad `exports` and `types` targets, missing files, and
-module-format mismatches that packing alone accepts. Publint packs with
-`npm pack --dry-run`, which skips `prepack`, so the check builds the router
-first.
+GitHub shows ten annotations for a lint step. The step summary lists all
+warnings and the count for each rule. Both views come from one lint run. An
+annotation in the Checks tab is not a pull request review comment. You cannot
+reply to it or resolve it.
 
-### Advisory lint findings
+`npm run typecheck` runs `tsc --noEmit`. It reports type errors only.
+`verification.yml` runs it. Lint and typecheck do not depend on each other.
 
-These warning categories are deliberately kept. None is disabled per file or
-hidden behind a threshold.
+`npm run check:package` builds `dist/router` first. Then publint packs the
+package and reads each `exports` and `types` target. Publint reports missing
+files and wrong module formats. `npm pack` alone does not read those targets.
+Publint packs with `npm pack --dry-run`, so it skips `prepack`. The build must
+run first.
 
-- `eslint(no-unsafe-finally)`: test teardown blocks capture the scenario error,
-  then `finally` either rethrows cleanup failures or aggregates both into an
-  `AggregateError`. The control flow the rule objects to is the intended
-  preservation of both failures. The two `process.kill` checks in the child
-  auto finally-propagation test rethrow unexpected non-`ESRCH` errors instead;
-  failing closed there is intentional and is kept visible.
-- `unicorn(no-useless-spread)`: the remaining spreads snapshot collections
-  (`index.ts` receipts and claims, `auto-virtual` waiters, the reliability v2
-  prune fixture) before loops that delete from them. The snapshot is deliberate.
-- `unicorn(no-new-array)`: the three sites allocate arrays of a computed length
-  and fill them by index; the rule cannot tell length from element.
-- `typescript(no-this-alias)`: a patched prototype method captures a dynamic
-  `this`; an arrow function would bind the wrong receiver.
-- `eslint(no-unassigned-vars)`: one cleanup-control test intentionally leaves a
-  receipt unassigned so it can assert that the reported receipt is missing.
+### Warnings we keep
 
-`eslint(no-control-regex)` is off repository-wide. Re-enabling it reports twenty
-deliberate uses: ANSI escape recognition in the result viewer and explicit
-control-character rejection ranges in model-id and config validation.
+Oxlint reports these warnings on purpose. Each entry gives the reason.
+
+- `eslint(no-unsafe-finally)`: Test teardown saves the first error. A `finally`
+  block then rethrows the cleanup error or combines both errors in an
+  `AggregateError`. The rule objects to that control flow. The code needs it to
+  keep both errors.
+- `unicorn(no-useless-spread)`: The spread copies a collection before a loop
+  deletes from it. `index.ts` receipts and claims, `auto-virtual` waiters, and
+  the reliability v2 prune fixture use this pattern.
+- `unicorn(no-new-array)`: Three sites make an array of a known length. A loop
+  fills the array by index. Oxlint cannot tell length from element.
+- `typescript(no-this-alias)`: A patched prototype method saves a dynamic
+  `this`. An arrow function would save the wrong receiver.
+- `eslint(no-unassigned-vars)`: One cleanup-control test leaves a receipt unset
+  on purpose. The test then makes sure that the report has no receipt.
+
+We turn off `eslint(no-control-regex)` for the whole repository. Twenty uses are
+deliberate. They match ANSI escape codes or reject control characters in model
+IDs and configuration values.
+
+A separate change applies the mechanical fixes from `oxlint --fix`. Until it
+lands, you will see more warning categories. None of them stop CI.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
