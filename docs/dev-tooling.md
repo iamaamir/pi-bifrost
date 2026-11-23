@@ -81,7 +81,7 @@ tests, and scripts. It does not read types. Warnings do not stop CI. Broken
 syntax and a bad configuration stop CI. No rule is set to error.
 
 GitHub shows ten annotations for one step. The step summary lists all warnings
-by rule. An annotation is not a review comment. You cannot reply to it.
+and errors by rule. An annotation is not a review comment. You cannot reply to it.
 
 `npm run typecheck` runs `tsc --noEmit`. It reports type errors only.
 `verification.yml` runs it. Lint and typecheck do not depend on each other.
