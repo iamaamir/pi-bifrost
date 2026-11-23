@@ -6,6 +6,11 @@ name: Complexity gate
 # objects and measured as data; no candidate script, dependency install, or
 # workflow is executed. The resolved revisions and policy digests are recorded
 # in the artifact so a verdict can be replayed after the refs move.
+#
+# Repository prerequisite: from December 2, 2026 GitHub blocks
+# pull_request_target by default in public repositories unless an Actions event
+# policy explicitly allows it. The owner must allow this workflow file only;
+# see docs/dev-tooling.md. Do not broaden the policy to other workflows.
 on:
   # zizmor: ignore[dangerous-triggers] Line-scoped exception, not a safety
   # claim: zizmor flags every pull_request_target trigger. This is the only
@@ -43,18 +48,26 @@ jobs:
           MERGE_REF_RETRY_DELAY_SECONDS: "10"
         run: |
           set -euo pipefail
+          # The head ref is expected to exist. Fetch it once and fail fast so a
+          # missing head is never confused with a merge ref that is still
+          # being published.
+          if ! git fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"; then
+            echo "The protected head fetch failed; not retrying." >&2
+            exit 1
+          fi
           attempt=1
           while :; do
-            # GitHub can publish the head before the merge ref. Retry only that
-            # specific missing-ref failure; other fetch failures fail fast.
+            # GitHub can publish the head before the merge ref. Retry only Git's
+            # exact missing-ref diagnostic; mixed or unrelated failures fail
+            # fast because no other output is accepted.
             if fetch_output="$(git fetch --no-tags origin \
-              "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head" \
               "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/${PR_NUMBER}/merge" 2>&1)"; then
               break
             fi
-            echo "$fetch_output" >&2
+            printf '%s\n' "$fetch_output" >&2
             case "$fetch_output" in
-              *"couldn't find remote ref refs/pull/${PR_NUMBER}/merge"*|*"could not find remote ref refs/pull/${PR_NUMBER}/merge"*) ;;
+              "fatal: couldn't find remote ref refs/pull/${PR_NUMBER}/merge"|"fatal: could not find remote ref refs/pull/${PR_NUMBER}/merge") ;;
               *)
                 echo "The protected fetch failed for a reason other than a missing merge ref; not retrying." >&2
                 exit 1

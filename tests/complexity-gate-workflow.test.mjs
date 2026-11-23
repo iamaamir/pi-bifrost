@@ -89,9 +89,11 @@ test("the protected fetch step waits for GitHub to publish the merge ref", () =>
     git(work, ["checkout", "-q", "-b", "feature"]);
     const head = commitFile(work, "head.ts", "export const head = true;\n", "head");
     git(work, ["checkout", "-q", baseBranch]);
-    git(work, ["merge", "--no-edit", "feature"]);
+    git(work, ["merge", "--no-ff", "--no-edit", "feature"]);
     const merge = git(work, ["rev-parse", "HEAD"]);
     assert.notEqual(base, head);
+    assert.notEqual(merge, head, "the fixture must be a two-parent merge commit, not a fast-forward");
+    assert.equal(git(work, ["show", "-s", "--format=%P", merge]), `${base} ${head}`);
     git(work, ["push", "-q", "origin", `${head}:refs/pull/7/head`]);
     git(work, ["push", "-q", "origin", `${merge}:refs/heads/merge-source`]);
 
@@ -102,6 +104,23 @@ test("the protected fetch step waits for GitHub to publish the merge ref", () =>
 if [ "$FAIL_FETCH" = "1" ]; then
   echo "fatal: Authentication failed for the remote repository" >&2
   exit 128
+fi
+if [ "$MISSING_HEAD" = "1" ]; then
+  case " $* " in
+    *"refs/pull/7/head"*)
+      echo "fatal: couldn't find remote ref refs/pull/7/head" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [ "$MIXED_FETCH" = "1" ]; then
+  case " $* " in
+    *"refs/pull/7/merge"*)
+      echo "fatal: couldn't find remote ref refs/pull/7/merge" >&2
+      echo "fatal: unable to access the remote repository" >&2
+      exit 1
+      ;;
+  esac
 fi
 if [ "$PUBLISH_MERGE" = "1" ] && [ ! -f "$MERGE_MARKER" ]; then
   case " $* " in
@@ -128,6 +147,8 @@ exec "$REAL_GIT" "$@"
         MERGE_REF_RETRY_DELAY_SECONDS: "0",
         PUBLISH_MERGE: "0",
         FAIL_FETCH: "0",
+        MISSING_HEAD: "0",
+        MIXED_FETCH: "0",
         MERGE_MARKER: join(dir, "merge-ref-published"),
         REAL_GIT: realGit,
         REMOTE: remote,
@@ -138,6 +159,14 @@ exec "$REAL_GIT" "$@"
       encoding: "utf8",
     });
 
+    git(remote, ["update-ref", "refs/pull/7/merge", merge]);
+    const immediate = runStep();
+    assert.equal(immediate.status, 0, immediate.stderr);
+    assert.doesNotMatch(immediate.stderr, /is unavailable \(attempt/u);
+    assert.equal(git(work, ["rev-parse", "refs/remotes/pull/7/merge"]), merge);
+
+    git(remote, ["update-ref", "-d", "refs/pull/7/merge"]);
+    git(work, ["update-ref", "-d", "refs/remotes/pull/7/merge"]);
     const waiting = runStep({ PUBLISH_MERGE: "1" });
     assert.equal(waiting.status, 0, waiting.stderr);
     assert.match(waiting.stderr, /refs\/pull\/7\/merge is unavailable \(attempt 1\/3\); retrying/u);
@@ -149,6 +178,18 @@ exec "$REAL_GIT" "$@"
     assert.notEqual(exhausted.status, 0);
     assert.match(exhausted.stderr, /did not publish refs\/pull\/7\/merge within 3 attempts/u);
     assert.match(exhausted.stderr, /conflicted pull request may never get a merge ref/u);
+
+    const mixed = runStep({ MIXED_FETCH: "1" });
+    assert.notEqual(mixed.status, 0);
+    assert.match(mixed.stderr, /couldn't find remote ref refs\/pull\/7\/merge/u);
+    assert.match(mixed.stderr, /unable to access the remote repository/u);
+    assert.match(mixed.stderr, /not retrying/u);
+    assert.doesNotMatch(mixed.stderr, /is unavailable \(attempt/u);
+
+    const missingHead = runStep({ MISSING_HEAD: "1" });
+    assert.notEqual(missingHead.status, 0);
+    assert.match(missingHead.stderr, /head fetch failed; not retrying/u);
+    assert.doesNotMatch(missingHead.stderr, /is unavailable \(attempt/u);
 
     const failed = runStep({ FAIL_FETCH: "1" });
     assert.notEqual(failed.status, 0);
@@ -181,8 +222,9 @@ test("the protected revision step rejects a stale merge ref", () => {
     git(dir, ["checkout", "-q", "-b", "feature", `${baseTip}~1`]);
     const head = commitFile(dir, "head.ts", "export const head = true;\n", "head");
     git(dir, ["checkout", "-q", baseBranch]);
-    git(dir, ["merge", "--no-edit", "feature"]);
+    git(dir, ["merge", "--no-ff", "--no-edit", "feature"]);
     const merge = git(dir, ["rev-parse", "HEAD"]);
+    assert.notEqual(merge, head, "the stale-ref fixture must be a two-parent merge commit");
 
     git(dir, ["update-ref", "refs/remotes/pull/7/head", head]);
     git(dir, ["update-ref", "refs/remotes/pull/7/merge", merge]);

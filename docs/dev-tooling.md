@@ -147,11 +147,11 @@ migration. A candidate label is not by itself an approval.
 The authoritative judge is
 [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml). GitHub runs
 that `pull_request_target` workflow and its analyzer from the protected target
-branch. It fetches the PR head and merge refs with a bounded retry while GitHub
-publishes the merge ref; a fetch failure unrelated to the missing ref fails
-immediately. It measures both the PR delta and the proposed merge result as data,
-and uploads the evidence. It never installs or executes candidate code. A
-candidate label is not by itself an approval.
+branch. It fetches the PR head once and fails immediately; it retries the merge
+ref only when Git emits its exact missing-merge-ref diagnostic, so mixed or
+unrelated failures also fail immediately. It measures both the PR delta and the
+proposed merge result as data, and uploads the evidence. It never installs or
+executes candidate code. A candidate label is not by itself an approval.
 
 Zizmor flags `pull_request_target` as a dangerous trigger. The workflow uses a
 line-scoped `# zizmor: ignore[dangerous-triggers]` annotation with the reason
@@ -159,6 +159,15 @@ inline. This is a documented exception, not a claim that the trigger is safe by
 itself. Zizmor's preferred `pull_request` alternative cannot be the protected
 judge because it runs candidate workflow code. Removing the exception requires
 an external trusted check or a different protected design; do not widen it.
+
+GitHub blocks `pull_request_target` by default in public repositories from
+December 2, 2026 unless an applicable Actions event policy allows it. The
+repository must have an owner-configured policy targeting only
+`.github/workflows/complexity-gate.yml` and permitting that event; do not allow
+it repository-wide. Configure it under Settings, Actions, Policies, then confirm
+on Policy insights that this workflow is not listed as blocked. This is an
+external repository-admin step and must be in place before the default
+enforcement date.
 
 The existing verification complexity job remains the bootstrap/local path until
 the protected workflow is present on the target branch. The ruleset must require
