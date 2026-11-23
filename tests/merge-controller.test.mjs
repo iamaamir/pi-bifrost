@@ -266,6 +266,20 @@ test("ignores another PR's protected run that shares the same base", () => {
   assert.equal(result.mergeCalls.length, 0);
 });
 
+test("a newer failed protected run blocks the older success", () => {
+  const fixture = scaffold();
+  fixture.world.complexityRuns.push(makeComplexityRun(32, HEAD, BASE, {
+    created_at: "2026-01-02T00:00:00Z",
+    conclusion: "failure",
+  }));
+  fixture.world.jobs[32] = [{ name: "complexity-trusted", conclusion: "failure" }];
+  writeFileSync(fixture.worldPath, JSON.stringify(fixture.world));
+  const result = runController(fixture, ["--apply"]);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /protected complexity-trusted/);
+  assert.equal(result.mergeCalls.length, 0);
+});
+
 test("valid apply merges exactly once and verifies push gates", () => {
   const fixture = scaffold();
   const result = runController(fixture, ["--apply"]);
