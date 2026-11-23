@@ -15,6 +15,9 @@ jobs:
   secret-history:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Check out the full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,10 +35,26 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Scan all commits
         run: npm run check:secrets:history
+      # The gate report is JSON for the toolbox. SARIF is a second render of the
+      # same scan, so Security-tab alerts never change whether the gate passes.
+      - name: Render Gitleaks findings as SARIF
+        if: ${{ !cancelled() }}
+        run: |
+          gitleaks git --redact --no-banner --config .gitleaks.toml \
+            --report-format sarif --report-path gitleaks.sarif --exit-code 0 .
+      - name: Upload Gitleaks SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
 
   sast-full:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Check out the candidate revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,6 +70,17 @@ jobs:
         run: semgrep --test --config semgrep/ tests/semgrep/targets/
       - name: Scan the full tree
         run: semgrep scan --config semgrep/ --error --metrics=off --disable-version-check
+      - name: Render Semgrep findings as SARIF
+        if: ${{ !cancelled() }}
+        run: >-
+          semgrep scan --config semgrep/ --sarif --output semgrep.sarif
+          --metrics=off --disable-version-check
+      - name: Upload Semgrep SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
 
   dependencies:
     permissions:

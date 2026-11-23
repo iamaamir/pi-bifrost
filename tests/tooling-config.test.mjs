@@ -61,6 +61,15 @@ test("pins every external action reference to a full commit SHA", () => {
   assert.deepEqual(findings, []);
 });
 
+test("full-tree SARIF uploads keep secret redaction and distinct categories", () => {
+  const source = workflows.find((workflow) => workflow.name === "security-audit.yml").source;
+  const gitleaks = /name: Render Gitleaks findings as SARIF[\s\S]*?(?=\n      - name:)/u.exec(source)?.[0] ?? "";
+  assert.match(gitleaks, /--redact/u, "a SARIF upload must not carry unredacted secret material");
+  const uploads = stepBlocks(source).filter((block) => block.some((line) => /uses:\s*github\/codeql-action\/upload-sarif@/u.test(line)));
+  assert.equal(uploads.length, 2);
+  assert.deepEqual(uploads.map((block) => /category:\s*(\S+)/u.exec(block.join("\n"))?.[1]), ["gitleaks", "semgrep"]);
+});
+
 test("the pin check reports an unpinned action reference", () => {
   assert.deepEqual(unpinnedActions("      - uses: actions/checkout@v4\n"), ["actions/checkout@v4"]);
   assert.deepEqual(unpinnedActions("      - uses: actions/checkout@v4 # comment\n"), ["actions/checkout@v4"]);

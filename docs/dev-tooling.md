@@ -282,7 +282,7 @@ marker to the budget reddened only the report bound, at 121 lines.
 | Workflow | Trigger | Checks |
 | --- | --- | --- |
 | [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
-| [`security-audit.yml`](../.github/workflows/security-audit.yml) | Manual dispatch | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor |
+| [`security-audit.yml`](../.github/workflows/security-audit.yml) | Manual dispatch | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor; SARIF uplink for Gitleaks and Semgrep |
 | [`verification.yml`](../.github/workflows/verification.yml) | Pull request, push, schedule | existing acceptance, UI, compatibility, and mutation gates |
 | [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml) | `pull_request_target` | trusted complexity judge from the protected base branch; PR delta and proposed merge-result evidence |
 | [`report-publisher-checks.yml`](../.github/workflows/report-publisher-checks.yml) | Pull request, push to `main` | `node --test tests/ci-report-publish.test.mjs` for the trusted report publisher |
@@ -291,6 +291,14 @@ marker to the budget reddened only the report bound, at 121 lines.
 Pull-request security checks are diff-scoped where the tool supports it, so
 old findings do not block unrelated work. The dispatch-only workflow scans
 everything and fails on any finding.
+
+Full-tree Gitleaks and Semgrep runs also upload SARIF to GitHub Code Scanning
+under the `gitleaks` and `semgrep` categories; OSV already uploads its own.
+SARIF is a second render of the same scan, so Code Scanning alerts never change
+a gate verdict. Uploads happen only in the dispatch-only workflow: pull requests
+keep the diff-scoped gate, and uploading a baseline-diff SARIF would truncate
+the alert history. Dispatch the security audit after merging to refresh alerts.
+The Gitleaks SARIF keeps `--redact`, so no secret value is uploaded.
 
 Actions are pinned to full commit SHAs with a version comment. Checkout steps
 set `persist-credentials: false`. Both rules are tested.
