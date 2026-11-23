@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
@@ -70,6 +70,137 @@ test("the trusted complexity gate runs from the protected base and measures the 
   assert.equal((workflow.match(/npm ci/gu) ?? []).length, 1, "dependencies must be installed only for the protected judge");
 });
 
+test("the protected fetch step waits for GitHub to publish the merge ref", () => {
+  assert.match(workflow, /MERGE_REF_RETRY_ATTEMPTS: "36"/u);
+  assert.match(workflow, /MERGE_REF_RETRY_DELAY_SECONDS: "10"/u);
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-fetch-"));
+  try {
+    const remote = join(dir, "remote.git");
+    const work = join(dir, "work");
+    const fakeBin = join(dir, "bin");
+    mkdirSync(work);
+    mkdirSync(fakeBin);
+    const bare = spawnSync("git", ["init", "--bare", "-q", remote], { encoding: "utf8" });
+    assert.equal(bare.status, 0, bare.stderr);
+    git(work, ["init", "-q"]);
+    git(work, ["remote", "add", "origin", remote]);
+    const baseBranch = git(work, ["symbolic-ref", "--short", "HEAD"]);
+    const base = commitFile(work, "base.ts", "export const base = true;\n", "base");
+    git(work, ["checkout", "-q", "-b", "feature"]);
+    const head = commitFile(work, "head.ts", "export const head = true;\n", "head");
+    git(work, ["checkout", "-q", baseBranch]);
+    git(work, ["merge", "--no-ff", "--no-edit", "feature"]);
+    const merge = git(work, ["rev-parse", "HEAD"]);
+    assert.notEqual(base, head);
+    assert.notEqual(merge, head, "the fixture must be a two-parent merge commit, not a fast-forward");
+    assert.equal(git(work, ["show", "-s", "--format=%P", merge]), `${base} ${head}`);
+    git(work, ["push", "-q", "origin", `${head}:refs/pull/7/head`]);
+    git(work, ["push", "-q", "origin", `${merge}:refs/heads/merge-source`]);
+
+    const realGit = spawnSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    assert.ok(realGit, "real git executable is required for the wrapper test");
+    const wrapper = join(fakeBin, "git");
+    writeFileSync(wrapper, `#!/bin/sh
+if [ "$FAIL_FETCH" = "1" ]; then
+  echo "fatal: Authentication failed for the remote repository" >&2
+  exit 128
+fi
+if [ "$MISSING_HEAD" = "1" ]; then
+  case " $* " in
+    *"refs/pull/7/head"*)
+      echo "fatal: couldn't find remote ref refs/pull/7/head" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [ "$MIXED_FETCH" = "1" ]; then
+  case " $* " in
+    *"refs/pull/7/merge"*)
+      echo "fatal: couldn't find remote ref refs/pull/7/merge" >&2
+      echo "fatal: unable to access the remote repository" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [ "$PUBLISH_MERGE" = "1" ] && [ ! -f "$MERGE_MARKER" ]; then
+  case " $* " in
+    *"refs/pull/7/merge"*)
+      : > "$MERGE_MARKER"
+      "$REAL_GIT" --git-dir="$REMOTE" update-ref refs/pull/7/merge "$MERGE_SHA" || exit 9
+      echo "fatal: couldn't find remote ref refs/pull/7/merge" >&2
+      exit 1
+      ;;
+  esac
+fi
+exec "$REAL_GIT" "$@"
+`);
+    chmodSync(wrapper, 0o755);
+
+    const script = workflowRunBlock("Fetch the proposed head and merge result as data");
+    const runStep = (overrides = {}) => spawnSync("bash", ["-e"], {
+      cwd: work,
+      env: {
+        ...fixtureGitEnv(),
+        PATH: `${fakeBin}${delimiter}${process.env.PATH}`,
+        PR_NUMBER: "7",
+        MERGE_REF_RETRY_ATTEMPTS: "3",
+        MERGE_REF_RETRY_DELAY_SECONDS: "0",
+        PUBLISH_MERGE: "0",
+        FAIL_FETCH: "0",
+        MISSING_HEAD: "0",
+        MIXED_FETCH: "0",
+        MERGE_MARKER: join(dir, "merge-ref-published"),
+        REAL_GIT: realGit,
+        REMOTE: remote,
+        MERGE_SHA: merge,
+        ...overrides,
+      },
+      input: script,
+      encoding: "utf8",
+    });
+
+    git(remote, ["update-ref", "refs/pull/7/merge", merge]);
+    const immediate = runStep();
+    assert.equal(immediate.status, 0, immediate.stderr);
+    assert.doesNotMatch(immediate.stderr, /is unavailable \(attempt/u);
+    assert.equal(git(work, ["rev-parse", "refs/remotes/pull/7/merge"]), merge);
+
+    git(remote, ["update-ref", "-d", "refs/pull/7/merge"]);
+    git(work, ["update-ref", "-d", "refs/remotes/pull/7/merge"]);
+    const waiting = runStep({ PUBLISH_MERGE: "1" });
+    assert.equal(waiting.status, 0, waiting.stderr);
+    assert.match(waiting.stderr, /refs\/pull\/7\/merge is unavailable \(attempt 1\/3\); retrying/u);
+    assert.equal(git(work, ["rev-parse", "refs/remotes/pull/7/merge"]), merge);
+
+    git(remote, ["update-ref", "-d", "refs/pull/7/merge"]);
+    git(work, ["update-ref", "-d", "refs/remotes/pull/7/merge"]);
+    const exhausted = runStep();
+    assert.notEqual(exhausted.status, 0);
+    assert.match(exhausted.stderr, /did not publish refs\/pull\/7\/merge within 3 attempts/u);
+    assert.match(exhausted.stderr, /conflicted pull request may never get a merge ref/u);
+
+    const mixed = runStep({ MIXED_FETCH: "1" });
+    assert.notEqual(mixed.status, 0);
+    assert.match(mixed.stderr, /couldn't find remote ref refs\/pull\/7\/merge/u);
+    assert.match(mixed.stderr, /unable to access the remote repository/u);
+    assert.match(mixed.stderr, /not retrying/u);
+    assert.doesNotMatch(mixed.stderr, /is unavailable \(attempt/u);
+
+    const missingHead = runStep({ MISSING_HEAD: "1" });
+    assert.notEqual(missingHead.status, 0);
+    assert.match(missingHead.stderr, /head fetch failed; not retrying/u);
+    assert.doesNotMatch(missingHead.stderr, /is unavailable \(attempt/u);
+
+    const failed = runStep({ FAIL_FETCH: "1" });
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /Authentication failed/u);
+    assert.match(failed.stderr, /not retrying/u);
+    assert.doesNotMatch(failed.stderr, /is unavailable \(attempt/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the trusted gate checks both the PR delta and the proposed merge result", () => {
   assert.match(workflow, /--target "\$MERGE_BASE" --candidate "\$HEAD_SHA"/u);
   assert.match(workflow, /--target "\$BASE_SHA" --candidate "\$MERGE_SHA"/u);
@@ -91,8 +222,9 @@ test("the protected revision step rejects a stale merge ref", () => {
     git(dir, ["checkout", "-q", "-b", "feature", `${baseTip}~1`]);
     const head = commitFile(dir, "head.ts", "export const head = true;\n", "head");
     git(dir, ["checkout", "-q", baseBranch]);
-    git(dir, ["merge", "--no-edit", "feature"]);
+    git(dir, ["merge", "--no-ff", "--no-edit", "feature"]);
     const merge = git(dir, ["rev-parse", "HEAD"]);
+    assert.notEqual(merge, head, "the stale-ref fixture must be a two-parent merge commit");
 
     git(dir, ["update-ref", "refs/remotes/pull/7/head", head]);
     git(dir, ["update-ref", "refs/remotes/pull/7/merge", merge]);

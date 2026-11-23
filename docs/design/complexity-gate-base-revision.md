@@ -114,9 +114,14 @@ The gate must not be judged by code in the candidate. The authoritative path is
 - GitHub runs the workflow and the analyzer from the protected target branch,
   not from the pull request.
 - The workflow resolves the base ref once at run time, fetches the PR head and
-  proposed merge refs, and records the resolved revisions. It rejects a stale
-  merge ref that does not contain both the current base and event head. No
-  source, policy, or test file contains a hard-coded commit SHA.
+  proposed merge refs, and records the resolved revisions. The head is fetched
+  once and fails immediately. The merge ref retries up to 36 times with
+  10-second delays while GitHub publishes it; only Git's exact
+  missing-merge-ref diagnostic is retryable, and mixed or unrelated failures
+  fail immediately. A PR that never gets a merge ref, such as a conflicted PR,
+  fails with an explicit message. It rejects a stale merge ref that does not
+  contain both the current base and event head. No source, policy, or test file
+  contains a hard-coded commit SHA.
 - The PR is present only as Git objects. The judge never installs, imports, or
   executes candidate code. It measures the base, head, and merge trees with the
   protected analyzer.
@@ -160,6 +165,30 @@ runtime. A GitHub UI merge can only be made authoritative by an app-scoped
 check, an organization/enterprise required workflow, or a ruleset path
 restriction that prevents candidate workflow changes. Those are repository
 configuration dependencies, not commit-SHA pins in the code.
+
+### Repository prerequisite: `pull_request_target` event policy
+
+Starting December 2, 2026, GitHub blocks `pull_request_target` by default in
+public repositories unless an applicable Actions event policy explicitly allows
+it. The repository-level policy list currently returns no policies, so this
+workflow would be blocked without owner action. This is an external
+infrastructure prerequisite, not a source-file setting; the branch cannot
+complete or verify it.
+
+A repository administrator must create an Actions policy that targets only
+`.github/workflows/complexity-gate.yml`, permits the `pull_request_target`
+event, and is set to Active. Do not allow `pull_request_target` repository-wide
+or for unrelated workflows. In repository Settings, open Actions then Policies,
+create the policy with workflow-path targeting, enable the event under Restrict
+events, and save. Verify the result on the Policy insights page: this workflow
+must not appear as a run that would be blocked. The owner should confirm at the
+repository, organization, and enterprise levels, because policies layer.
+
+Official references:
+
+- [GitHub changelog, November 2, 2026](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2/)
+- [Governing workflow execution](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution)
+- [Securely using `pull_request_target`](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target)
 
 CODEOWNERS routes policy paths, including itself, to the owner, but code-owner
 review is only blocking when the ruleset requires it. The owner must decide
@@ -224,7 +253,11 @@ Deterministic tests at the real CLI boundary (temporary git repositories):
 14. a source-derived target and a serialized legacy baseline produce the same
     ratchet findings for an ordinary change;
 15. the protected workflow measures both the PR delta and the proposed merge
-    result and uploads both evidence files.
+    result and uploads both evidence files;
+16. the protected fetch step succeeds immediately or retries a not-yet-published
+    merge ref against a genuine two-parent merge commit, fails explicitly when
+    the ref never appears, and fails immediately for a missing head, mixed
+    diagnostics, authentication, or another unrelated fetch error.
 
 Command-level demonstration uses `--json`, and CI keeps the target-relative
 comparison. Historical trends are recovered on demand and recorded as CI
