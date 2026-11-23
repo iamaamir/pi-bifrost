@@ -1,11 +1,12 @@
 // Verification workflow campaign regression tests (issue #85).
 //
-// The expanded campaign and Pi compatibility matrix ride the existing
-// Verification workflow. These tests lock the invariants issue #85 requires: all
-// seven release gates and the report publishers stay intact and unconditional,
-// campaign jobs stay opt-in for normal PR/push/default manual runs, the
-// compatibility matrix uses explicit version pins, and every added job keeps a
-// hard bound.
+// The expanded campaign and Pi compatibility matrix stay opt-in on the existing
+// Verification workflow, but their commands now live in reusable workflows
+// shared with the PR-label router. These tests keep the invariants issue #85
+// requires: all seven release gates and the report publishers stay intact and
+// unconditional, campaign jobs stay opt-in for normal PR/push/default manual
+// runs, the compatibility matrix uses explicit version pins, and every added
+// job keeps a hard bound.
 //
 // Mutation measurement is deliberately not here. It moved to
 // `.github/workflows/mutation.yml` because it is a scheduled measurement, not a
@@ -17,6 +18,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
+const campaignWorkflow = readFileSync(new URL("../.github/workflows/campaign.yml", import.meta.url), "utf8");
+const compatibilityWorkflow = readFileSync(new URL("../.github/workflows/pi-compatibility.yml", import.meta.url), "utf8");
 const ciReportSource = readFileSync(new URL("../scripts/ci-report.mjs", import.meta.url), "utf8");
 const verifyReleaseSource = readFileSync(new URL("../scripts/verify-release.mjs", import.meta.url), "utf8");
 const mergeEligibilitySource = readFileSync(new URL("../scripts/merge-eligibility.mjs", import.meta.url), "utf8");
@@ -70,6 +73,8 @@ function releaseGateScriptsFrom(source) {
 }
 
 const jobs = jobBlocks(workflow);
+const campaignJobs = jobBlocks(campaignWorkflow);
+const compatibilityJobs = jobBlocks(compatibilityWorkflow);
 const CAMPAIGN_JOBS = ["campaign", "pi-compatibility"];
 
 /**
@@ -248,9 +253,14 @@ test("dispatch inputs default to the ordinary path with bounded campaign values"
   assert.match(workflow, /^ {6}campaign_seed:\n(?:.*\n)*?^ {8}default: "1729"$/mu);
   assert.match(workflow, /^ {8}options:\n(?:.*\n)*?^ {10}- default\n(?:.*\n)*?^ {10}- expanded$/mu);
 
-  // The workflow hands its inputs to the bounded runner through the job env
-  // (no user input interpolated into shell text) and validates them first.
-  const campaign = jobs["campaign"];
+  // Verification forwards its dispatch inputs to the reusable campaign. The
+  // reusable job hands them to the bounded runner through the job env (no user
+  // input interpolated into shell text) and validates them first.
+  const campaignCaller = jobs["campaign"];
+  assert.match(campaignCaller, /uses: \.\/\.github\/workflows\/campaign\.yml/u);
+  assert.match(campaignCaller, /campaign_repeats: \$\{\{ inputs\.campaign_repeats \}\}/u);
+  assert.match(campaignCaller, /campaign_seed: \$\{\{ inputs\.campaign_seed \}\}/u);
+  const campaign = campaignJobs.campaign;
   assert.match(campaign, /^ {4}env:\n {6}CAMPAIGN_REPEATS: \$\{\{ inputs\.campaign_repeats \|\| '3' \}\}\n {6}CAMPAIGN_SEED: \$\{\{ inputs\.campaign_seed \|\| '1729' \}\}$/mu);
   assert.match(campaign, /--validate-only/u, "campaign bounds must be validated before any run");
   assert.match(campaign, /--repeat "\$CAMPAIGN_REPEATS"/u);
@@ -259,7 +269,8 @@ test("dispatch inputs default to the ordinary path with bounded campaign values"
 });
 
 test("Pi compatibility uses explicit matrix pins with an isolated install", () => {
-  const block = jobs["pi-compatibility"];
+  assert.match(jobs["pi-compatibility"], /uses: \.\/\.github\/workflows\/pi-compatibility\.yml/u);
+  const block = compatibilityJobs["pi-compatibility"];
   const matrix = block.match(/strategy:\n[\t ]*fail-fast[^\n]*\n[\t ]*matrix:\n[\t ]*pi:\n((?:[\t ]+- .+\n)+)/u);
   assert.ok(matrix, "compatibility matrix must declare pi pins");
   assert.deepEqual([...matrix[1].matchAll(/^[\t ]+- "([^"]+)"$/gmu)].map((entry) => entry[1]), ["1.3.0", "1.4.0"]);
@@ -298,8 +309,9 @@ test("fault control: a 45-minute release-gates budget turns the named budget ass
 });
 
 test("every campaign job keeps a hard job-level bound", () => {
+  const extracted = { campaign: campaignJobs.campaign, "pi-compatibility": compatibilityJobs["pi-compatibility"] };
   for (const job of CAMPAIGN_JOBS) {
-    const bound = jobs[job].match(/^ {4}timeout-minutes: (\d+)$/mu);
+    const bound = extracted[job].match(/^ {4}timeout-minutes: (\d+)$/mu);
     assert.ok(bound, `${job} must set timeout-minutes`);
     assert.ok(Number(bound[1]) >= 1 && Number(bound[1]) <= 60, `${job} bound must stay within 60 minutes, got ${bound[1]}`);
   }
@@ -328,7 +340,7 @@ test("verification campaign docs state the default-branch schedule boundary", ()
 });
 
 test("reliability campaign includes the receipt state machine", () => {
-  const command = jobs.campaign.split("- name: Reliability replay-control campaign")[1]?.split("- name:")[0];
+  const command = campaignJobs.campaign.split("- name: Reliability replay-control campaign")[1]?.split("- name:")[0];
   assert.ok(command, "reliability campaign command must exist");
   assert.match(command, /node scripts\/campaign-run\.mjs/u, "reliability campaign must use the bounded runner");
   assert.match(command, /^ {10}tests\/reliability-v2-state-machine\.test\.ts$/mu,

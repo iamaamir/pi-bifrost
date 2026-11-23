@@ -425,128 +425,15 @@ jobs:
   # Expanded campaign and compatibility jobs stay opt-in. They run only for a
   # manual dispatch with campaign=expanded or for the bounded schedule above;
   # ordinary PR, push, and default manual runs keep only release-gates, so the
-  # required checks never become permanently expensive.
+  # required checks never become permanently expensive. Their commands live in
+  # reusable workflows shared with the PR-label router.
   campaign:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.campaign == 'expanded')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      CAMPAIGN_REPEATS: ${{ inputs.campaign_repeats || '3' }}
-      CAMPAIGN_SEED: ${{ inputs.campaign_seed || '1729' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # v7.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - name: Validate bounded campaign inputs
-        run: >-
-          node scripts/campaign-run.mjs --name bounds
-          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
-          --validate-only -- node --version
-      - name: Seeded property campaign
-        run: >-
-          node scripts/campaign-run.mjs --name properties
-          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
-          --timeout-ms 600000 --out "$RUNNER_TEMP/bifrost-campaign" --
-          node --test --experimental-strip-types
-          tests/model-selection-properties.test.ts
-          tests/classifier-properties.test.ts
-          tests/discovery-properties.test.ts
-      - name: Reliability replay-control campaign
-        run: >-
-          node scripts/campaign-run.mjs --name reliability
-          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
-          --timeout-ms 600000 --out "$RUNNER_TEMP/bifrost-campaign" --
-          node --test --experimental-strip-types
-          tests/reliability-state-machine.test.ts
-          tests/reliability-v2-state-machine.test.ts
-          tests/reliability-filter-properties.test.ts
-          tests/cache-properties.test.ts
-      - name: Bounded integration repeats
-        run: >-
-          node scripts/campaign-run.mjs --name integration
-          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
-          --timeout-ms 1200000 --out "$RUNNER_TEMP/bifrost-campaign" --
-          npm run test:integration
-      - name: Upload campaign evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: verification-campaign-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/bifrost-campaign/
-          if-no-files-found: ignore
-          retention-days: 14
+    uses: ./.github/workflows/campaign.yml # zizmor: ignore[self-repository]
+    with:
+      campaign_repeats: ${{ inputs.campaign_repeats }}
+      campaign_seed: ${{ inputs.campaign_seed }}
 
-  # Pi compatibility matrix: pinned baseline and current Pi, installed into
-  # node_modules only (no tracked package or lock edit, no credentials), with
-  # real native SDK, process, package-consumer, and typecheck checks. The
-  # pinned verify-release preflight still demands 1.4.0 and is deliberately not
-  # used as an alternate-version oracle; release-gates keeps running it pinned.
   pi-compatibility:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.campaign == 'expanded')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        pi:
-          - "1.3.0"
-          - "1.4.0"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # v7.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - name: Install the pinned Pi version without editing tracked dependency files
-        env:
-          PI_VERSION: ${{ matrix.pi }}
-        # zizmor: ignore[adhoc-packages] The matrix intentionally installs an
-        # alternate Pi version without touching the tracked lockfile, then
-        # verifies the tree is unchanged.
-        run: |
-          # Keep the baseline's locked transitive packages from npm ci.
-          if [ "$PI_VERSION" != "1.4.0" ]; then
-            npm install --no-save --package-lock=false --no-audit --no-fund \
-              "@earendil-works/pi-ai@$PI_VERSION" \
-              "@earendil-works/pi-coding-agent@$PI_VERSION"
-          fi
-          test "$(node -p "require('./node_modules/@earendil-works/pi-ai/package.json').version")" = "$PI_VERSION"
-          test "$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")" = "$PI_VERSION"
-          if [ -n "$(git status --porcelain)" ]; then
-            git status --porcelain
-            echo "compatibility install changed tracked files" >&2
-            exit 1
-          fi
-      - name: Record installed versions
-        env:
-          PI_VERSION: ${{ matrix.pi }}
-        run: |
-          node -p "JSON.stringify({ expected: process.env.PI_VERSION, node: process.version, piAi: require('./node_modules/@earendil-works/pi-ai/package.json').version, piCodingAgent: require('./node_modules/@earendil-works/pi-coding-agent/package.json').version }, null, 2)" | tee "$RUNNER_TEMP/pi-compatibility-versions.json"
-      - name: Typecheck against the matrix Pi version
-        run: npm run typecheck
-      - name: Run native SDK, process, and package consumer tests
-        run: >-
-          node --test --experimental-strip-types
-          tests/router-package.test.mjs
-          tests/integration/native-classifier.test.mjs
-          tests/integration/native-faux-provider.test.mjs
-          tests/integration/native-faux-lifecycle.test.mjs
-          tests/integration/native-tool-continuation.test.mjs
-      - name: Upload compatibility evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pi-compatibility-${{ matrix.pi }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/pi-compatibility-versions.json
-          if-no-files-found: ignore
-          retention-days: 14
+    uses: ./.github/workflows/pi-compatibility.yml # zizmor: ignore[self-repository]

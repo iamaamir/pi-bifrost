@@ -1,7 +1,9 @@
 name: Mutation measurement
 
-# Scheduled mutation testing. This is a measurement job, not a release gate: it
-# is never required for a merge and never runs on pull requests. A full
+# Mutation measurement. This is a measurement job, not a release gate: it is
+# never required for a merge. It runs automatically only on the nightly schedule
+# from the default branch. The `ci:mutation` PR label can also request a
+# diagnostic run through the PR-label router; that check is not required. A full
 # measurement is too slow to gate on, and a per-pull-request subset would measure
 # a different, incomparable population. One nightly run over the whole target set
 # keeps the score comparable over time.
@@ -15,6 +17,36 @@ on:
   schedule:
     # 04:47 UTC daily. Scheduled runs execute from the default branch only.
     - cron: "47 4 * * *"
+  # The PR-label router calls this workflow directly. Declaring the same inputs
+  # here keeps the plan, matrix, and report identical for every trigger; the
+  # defaults below reproduce the nightly run exactly.
+  workflow_call:
+    inputs:
+      target:
+        description: "Module to measure (any key in mutation/config.mjs TARGETS), or 'all'"
+        required: false
+        default: all
+        type: string
+      shards:
+        description: "Shards per module (1 = no sharding, 0 = auto from measured cost)"
+        required: false
+        default: "0"
+        type: string
+      concurrency:
+        description: "Stryker worker processes (1-16)"
+        required: false
+        default: "4"
+        type: string
+      timeout_tolerance:
+        description: "Max timed-out mutants before the run is unusable (blank = max(10, 2%))"
+        required: false
+        default: ""
+        type: string
+      fail_on_unusable:
+        description: "Fail the job when the measurement is unusable (missing/timeouts/conflicts)"
+        required: false
+        default: true
+        type: boolean
   # Every knob is also settable by hand. The defaults reproduce the nightly run
   # exactly, so a manual dispatch with no changes measures the same thing.
   workflow_dispatch:
@@ -77,6 +109,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # A PR caller measures its head, not the ephemeral merge ref.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -110,6 +144,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # A PR caller measures its head, not the ephemeral merge ref.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -170,7 +206,7 @@ jobs:
           # The shard index is part of the name so the shards of one module are
           # distinct artifacts rather than overwriting each other. The stem, not
           # the target, because an artifact name may not contain `/`.
-          name: mutation-report-${{ matrix.stem }}-shard${{ matrix.shard }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: mutation-report-${{ matrix.stem }}-shard${{ matrix.shard }}-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: mutation-out/${{ matrix.stem }}-shard${{ matrix.shard }}/
           if-no-files-found: warn
           retention-days: 30
@@ -186,6 +222,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # A PR caller measures its head, not the ephemeral merge ref.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -242,15 +280,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: mutation-summary-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: mutation-summary-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: mutation-out/
           if-no-files-found: warn
           retention-days: 30
       - name: Fail on an unusable measurement
         # Never fail on a low score: the score is the measurement, not a gate.
-        # Fail when the run cannot be trusted as a measurement. A manual dispatch
-        # may switch this off to inspect a partial run.
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.fail_on_unusable }}
+        # A schedule has no `inputs` context, so the event guard is what keeps
+        # the nightly honest. Dispatch and reusable callers keep the opt-out.
+        if: ${{ github.event_name == 'schedule' || inputs.fail_on_unusable }}
         env:
           TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
         run: node mutation/workflow.mjs require-usable mutation-out/summary.json
