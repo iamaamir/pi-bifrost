@@ -165,7 +165,7 @@ test("verification keeps its gates and delegates the extracted jobs", () => {
       "caller jobs must not duplicate the extracted steps");
   }
   assert.match(verificationJobs["release-gates"],
-    /^ {4}needs: \[head-acceptance, acceptance-merge, crap-trend, finalize-report\]$/mu);
+    /^ {4}needs: \[head-acceptance, acceptance-merge, crap-trend, complexity, finalize-report\]$/mu);
 });
 
 test("extracted commands exist once and keep their bounds", () => {
