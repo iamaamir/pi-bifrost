@@ -307,7 +307,9 @@ An external check depends on third-party uptime and rate limits, so making it a
 required pull-request check would gate merges on outages this repository does not
 control. The scheduled job uses [`.lychee.toml`](../.lychee.toml) for timeouts,
 retries, and reviewed exclusions; broken links appear in the run summary and
-never fail the job.
+never fail the job. A configuration or runtime failure does fail it: the job
+checks lychee's exit code and requires a nonempty report, so the check cannot
+silently stop working.
 
 Pull-request security checks are diff-scoped where the tool supports it, so
 old findings do not block unrelated work. The dispatch-only workflow scans
