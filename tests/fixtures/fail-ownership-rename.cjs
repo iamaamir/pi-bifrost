@@ -8,7 +8,7 @@ if (process.env.BIFROST_TEST_FAIL_OWNERSHIP_RENAME === "1") {
   const real = fs.renameSync;
   let fired = false;
   fs.renameSync = function patchedRenameSync(oldPath, newPath) {
-    if (!fired && typeof newPath === "string" && /bifrost-reconcile-ownership\.json$/.test(newPath)) {
+    if (!fired && typeof newPath === "string" && newPath.endsWith("bifrost-reconcile-ownership.json")) {
       fired = true;
       const err = new Error("BIFROST_TEST_FAIL_OWNERSHIP_RENAME");
       err.code = "EIO";
