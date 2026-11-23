@@ -68,6 +68,7 @@ describe("economic signal snapshots", () => {
     assert.equal(validateEconomicPolicy(valid).valid, true);
     assert.equal(validateEconomicPolicy(policy({ sourceOrder: { selected: ["unknown"] } })).valid, false);
     assert.equal(validateEconomicPolicy(policy({ sources: [{ id: "api", scopeRef: "missing", authority: "authoritative" }] })).valid, false);
+    assert.equal(validateEconomicPolicy(policy({ scopes: { " selected": { kind: "model", model: "fixture/model" } } })).valid, false);
 
     const unsupportedAccount = policy({
       scopes: { selected: { kind: "account", provider: "fixture", accountRef: "acct", epoch: "one" } },
