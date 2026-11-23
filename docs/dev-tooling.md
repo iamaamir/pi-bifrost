@@ -336,6 +336,16 @@ marker to the budget reddened only the report bound, at 121 lines.
 | [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml) | `pull_request_target` | trusted complexity judge from the protected base branch; PR delta and proposed merge-result evidence |
 | [`report-publisher-checks.yml`](../.github/workflows/report-publisher-checks.yml) | Pull request, push to `main` | `node --test tests/ci-report-publish.test.mjs` for the trusted report publisher |
 | [`acceptance-report.yml`](../.github/workflows/acceptance-report.yml) | `workflow_run` of Verification | adds one marker-owned report comment to the pull request. It uses only default-branch code and never operates pull-request code |
+| [`docs-links-scheduled.yml`](../.github/workflows/docs-links-scheduled.yml) | Weekly cron, manual dispatch | advisory external URL check (lychee), reported in the job summary; never runs on pull requests or gates a merge |
+
+External documentation URLs are checked on a schedule, not on pull requests.
+The deterministic docs tests already resolve relative links and heading anchors,
+and `scripts/check-issue-refs.mjs` keeps issue-cited repository paths honest.
+An external check depends on third-party uptime and rate limits, so making it a
+required pull-request check would gate merges on outages this repository does not
+control. The scheduled job uses [`.lychee.toml`](../.lychee.toml) for timeouts,
+retries, and reviewed exclusions; broken links appear in the run summary and
+never fail the job.
 
 Pull-request security checks are diff-scoped where the tool supports it, so
 old findings do not block unrelated work. The dispatch-only workflow scans

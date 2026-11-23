@@ -1,0 +1,18 @@
+# External link inventory for the scheduled, advisory check in docs-links-scheduled.yml.
+timeout = 20
+max_retries = 2
+retry_wait_time = 3
+max_concurrency = 8
+max_redirects = 5
+
+exclude = [
+  # Documented POST example, not a GET link: GET returns 405 (measured locally).
+  '^https://api\.typesafe\.ai/v1/systemone$',
+]
+
+exclude_path = [
+  # Third-party package docs are generated/local-only and not ours to repair.
+  '(^|/)node_modules/',
+  # Worktrees are local-only copies of the same docs, not a second input set.
+  '(^|/)\.worktrees/',
+]
