@@ -200,7 +200,8 @@ function startRpc({ home, work, port, rngExtension, toolExtension, toolCounter }
       const finish = (error, value) => {
         clearTimeout(timer);
         if (wake === scan) wake = undefined;
-        error ? reject(error) : resolve(value);
+        if (error) reject(error);
+        else resolve(value);
       };
       scan();
     });

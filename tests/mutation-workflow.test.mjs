@@ -46,7 +46,7 @@ import {
   resolveTimeoutTolerance,
   summaryLines,
 } from "../mutation/workflow.mjs";
-import { annotationLines, buildPayload, mergeShardReports, modulesOf, readReports, renderSummary, selectMeasurement, summarise, survivorRows } from "../mutation/report.mjs";
+import { annotationLines, buildPayload, mergeShardReports, modulesOf, readReports, renderSummary, summarise, survivorRows } from "../mutation/report.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/mutation.yml", import.meta.url), "utf8");
 const verificationWorkflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
@@ -1997,13 +1997,11 @@ test("gate and summary agree on every measurement state", () => {
 
   // Completeness: every diagnostic the policy can emit has a row above. Adding a
   // rule without a row fails here rather than in a later review.
-  const emitted = new Set([
-    ...cases.flatMap(([, reports, options]) => {
-      const { identityFor, ...rest } = options;
-      return measurementDiagnostics(buildPayload({ reports, expectedTargets: [MODULE], ...rest }), identityFor ? { identityFor } : {})
-        .map((entry) => entry.code);
-    }),
-  ]);
+  const emitted = new Set(cases.flatMap(([, reports, options]) => {
+    const { identityFor, ...rest } = options;
+    return measurementDiagnostics(buildPayload({ reports, expectedTargets: [MODULE], ...rest }), identityFor ? { identityFor } : {})
+      .map((entry) => entry.code);
+  }));
   const source = readFileSync(new URL("../mutation/config.mjs", import.meta.url), "utf8");
   const declared = new Set([...source.matchAll(/note\(\s*"([a-z-]+)",\s*(?:BLOCKING|ADVISORY)/g)].map((match) => match[1]));
   assert.deepEqual([...declared].sort(), [...emitted].sort(), "every declared diagnostic has a truth-table row");

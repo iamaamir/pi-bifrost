@@ -396,7 +396,7 @@ function checkedAffinitySnapshot(value: RouterAffinitySnapshot, now: number): Ro
   }
   const rawAnchor = record.anchor;
   if (rawAnchor === undefined) {
-    return { ...(targetOrigin !== undefined ? { targetOrigin: targetOrigin as string } : {}) };
+    return (targetOrigin !== undefined ? { targetOrigin: targetOrigin as string } : {});
   }
   const anchor = plainOwnDataRecord(rawAnchor, ["modelKey", "provider", "lastSuccessfulDispatchAt"]);
   if (!anchor || typeof anchor.modelKey !== "string" || typeof anchor.provider !== "string"

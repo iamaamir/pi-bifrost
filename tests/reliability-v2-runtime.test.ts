@@ -391,7 +391,6 @@ describe("reliability v2 registered Auto runtime", () => {
     const model = makeModel("fixture", "allowed");
     const classifier = makePiClassifierModel("fixture", "classifier");
     let classifierCalls = 0;
-    let duringClassify: (() => Promise<void>) | undefined;
     let setModelCalls = 0;
     let refreshCalls = 0;
     let refreshGate: { entered: () => void; enteredPromise: Promise<void>; releasePromise: Promise<void> } | undefined;
@@ -411,7 +410,6 @@ describe("reliability v2 registered Auto runtime", () => {
         getModelOfType: (_type: string, provider: string, id: string) => provider === classifier.provider && id === classifier.id ? classifier : undefined,
         classify: async () => {
           classifierCalls += 1;
-          await duringClassify?.();
           return { api: "systemone", provider: classifier.provider, model: classifier.id, answers: { tier: { type: "choice", choice: "quick", confidence: 0.9, probabilities: { quick: 0.9 } } }, stopReason: "stop", timestamp: Date.now() } as never;
         },
         getProviderAuthStatus: () => ({ configured: false }),

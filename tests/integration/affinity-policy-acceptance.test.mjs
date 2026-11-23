@@ -76,7 +76,7 @@ function openCircuitState(modelKey, now) {
   return { version: 1, models: { [modelKey]: { failures: [], openUntil: now + 600_000, trialActive: false } } };
 }
 
-function resolve(routing, { config, available, modelKey, anchor, origin = "automatic", mode, strategy = "random", randomValue = 0.9, reliabilityState, now = 1_000, tier = "quick", economic }) {
+function resolve(routing, { config, available, anchor, origin = "automatic", mode, randomValue = 0.9, reliabilityState, now = 1_000, tier = "quick", economic }) {
   const pool = available.map((model) => `${model.provider}/${model.id}`);
   const draws = [];
   const random = () => { draws.push(randomValue); return randomValue; };

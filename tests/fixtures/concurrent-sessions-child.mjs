@@ -69,8 +69,6 @@ let fauxA;
 let fauxB;
 let sessionA;
 let sessionB;
-let loaderA;
-let loaderB;
 // Ownership records are append-only: setup() never overwrites them, teardown
 // disposes every recorded session even when a later setup replaces live refs.
 const ownedSessions = [];
@@ -93,7 +91,7 @@ function teardownLivePair() {
   try { sessionB?.dispose(); } catch {}
   try { if (runtimeA) runtimeA.unregisterProvider("faux-a"); } catch {}
   try { if (runtimeB && runtimeB !== runtimeA) runtimeB.unregisterProvider("faux-b"); } catch {}
-  sessionA = sessionB = loaderA = loaderB = undefined;
+  sessionA = sessionB = undefined;
   runtimeA = runtimeB = undefined;
 }
 
@@ -134,8 +132,6 @@ async function setup() {
     ownedRuntimes.push(nextRuntimeA, nextRuntimeB);
     fauxA = nextFauxA;
     fauxB = nextFauxB;
-    loaderA = nextLoaderA;
-    loaderB = nextLoaderB;
     sessionA = nextSessionA;
     sessionB = nextSessionB;
   } catch (error) {
@@ -297,7 +293,7 @@ it("cancels one native session while the other session stays active and cleans p
   const outcomeB = await promptB;
   void outcomeB;
   gateA.resolve();
-  const [settledA] = await Promise.all([Promise.allSettled([promptA, abortPromise])]);
+  const settledA = await Promise.allSettled([promptA, abortPromise]);
   assert.ok(settledA.every((result) => result.status === "fulfilled" || result.status === "rejected"));
   assert.equal(sessionB.getLastAssistantText(), "session-b survives cancellation");
   assert.notEqual(sessionA.getLastAssistantText(), "must not be delivered");
