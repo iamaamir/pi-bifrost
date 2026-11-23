@@ -42,8 +42,8 @@ jobs:
         run: |
           set -uo pipefail
           lint_output="$(mktemp)"
-          npm run lint > "$lint_output" 2>&1
-          status=$?
+          status=0
+          npm run lint > "$lint_output" 2>&1 || status=$?
           cat "$lint_output"
           {
             echo "### Lint"
@@ -52,7 +52,7 @@ jobs:
             echo "Warnings: $total"
             echo
             echo "By rule:"
-            grep -oE '(title=|warning )[a-z]+\([^)]+\)' "$lint_output" \
+            { grep -oE '(title=|warning )[a-z]+\([^)]+\)' "$lint_output" || true; } \
               | sed -E 's/^(title=|warning )//' | sort | uniq -c | sort -rn \
               | awk '{print "- " $2 ": " $1}'
           } >> "$GITHUB_STEP_SUMMARY"
