@@ -582,14 +582,7 @@ function reconciliationPaths(source: ReconciliationConfigSource): { configPath: 
   };
 }
 
-/**
- * Describe an Init commit failure without claiming the files were preserved.
- *
- * `applyReconciliationTransaction` installs the staged config before it writes the
- * ownership sidecar and the final journal records, so a failure after that rename
- * leaves the reviewed memberships on disk.
- */
-export function describeInitCommitFailure(failure: {
+type InitCommitFailureContext = {
   readonly locked: boolean;
   readonly receiptOnly: boolean;
   readonly configPath: string;
@@ -599,60 +592,22 @@ export function describeInitCommitFailure(failure: {
   readonly journalPath: string;
   readonly target: string;
   readonly recoveryCommand: string;
-}): string {
-  if (failure.locked) return "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
-  if (failure.receiptOnly) return "Init could not safely commit the reviewed membership update; existing files were preserved.";
-  // `applyReconciliationTransaction` writes the journal before it renames either
-  // target. A journal therefore means a rename may already have happened, while
-  // its absence proves none did. Matching config bytes prove only the current
-  // content, because an ownership-only plan never changes the config.
-  const journal = inspectJournalState(failure.journalPath);
-  const installed = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
-  if (journal === "absent") {
-    if (installed === "matches") {
-      const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
-      if (ownership === "matches") {
-        return `Init could not confirm the reviewed membership update completed. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`;
-      }
-      if (ownership === "unknown") {
-        return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`;
-      }
-      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect ${failure.target} and its ownership record before you retry.`;
-    }
-    if (installed === "unknown") {
-      // Unreadable proves nothing either way; promise neither outcome.
-      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present; inspect that file before you retry.`;
-    }
-    return "Init could not safely commit the reviewed membership update; existing files were preserved.";
-  }
-  if (journal === "unknown") {
-    // A failed check cannot be reported as absence: recovery degrades to
-    // `nothing_to_recover`, so asking for it first is safe even with no journal.
-    const advice = `Run ${failure.recoveryCommand} before you retry; it reports nothing to recover when no journal exists.`;
-    if (installed === "matches") {
-      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${advice}`;
-    }
-    if (installed === "unknown") {
-      return `Init could not finish the reviewed membership update, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${advice}`;
-    }
-    return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${advice}`;
-  }
-  if (installed === "matches") {
-    return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
-  }
-  if (installed === "unknown") {
-    return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`;
-  }
-  // The journal can reach `config_installed` before a later conflict throws, so
-  // differing bytes no longer prove the rename did not happen.
-  return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`;
+};
+
+/** "unknown" means the file/journal could not be inspected safely; it is not the same as absent/different. */
+type InstalledFileState = "matches" | "differs" | "unknown";
+type JournalState = "present" | "absent" | "unknown";
+
+interface InitCommitFailureDiagnosis {
+  readonly journal: JournalState;
+  readonly config: InstalledFileState;
+  readonly ownership: InstalledFileState | "not_inspected";
 }
 
-/** "unknown" is an unsafe or unreadable file, which is not the same as a config that differs. */
-type InstalledConfigState = "matches" | "differs" | "unknown";
-
-/** "unknown" is a failed check, which must not be reported as a missing journal. */
-type JournalState = "present" | "absent" | "unknown";
+const INIT_LOCK_FAILURE_MESSAGE =
+  "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
+const INIT_PRESERVED_MESSAGE =
+  "Init could not safely commit the reviewed membership update; existing files were preserved.";
 
 function inspectJournalState(path: string): JournalState {
   try {
@@ -663,30 +618,143 @@ function inspectJournalState(path: string): JournalState {
   }
 }
 
-/** Reject non-regular, oversized and unstable files instead of blocking or allocating on them. */
-function inspectInstalledConfig(configPath: string, nextConfigBytes: Uint8Array): InstalledConfigState {
+/**
+ * Compare an installed file to the expected bytes using a bounded, regular-file snapshot.
+ * Missing files are `differs` because they cannot contain the planned bytes; callers
+ * interpret that fact based on reconciliation phase evidence.
+ */
+function inspectInstalledFile(path: string, nextBytes: Uint8Array, maxBytes: number): InstalledFileState {
   let installed: Buffer | undefined;
   try {
-    installed = readBoundedRegularSnapshot(configPath);
+    installed = readBoundedRegularSnapshot(path, maxBytes);
   } catch {
     return "unknown";
   }
-  // A missing config holds nothing, so the preserved wording stays true.
   if (installed === undefined) return "differs";
-  if (installed.byteLength > MAX_CONFIG_SOURCE_BYTES) return "unknown";
-  return installed.equals(Buffer.from(nextConfigBytes)) ? "matches" : "differs";
+  if (installed.byteLength > maxBytes) return "unknown";
+  return installed.equals(Buffer.from(nextBytes)) ? "matches" : "differs";
 }
 
-function inspectInstalledOwnership(ownershipPath: string, nextOwnershipBytes: Uint8Array): InstalledConfigState {
-  let installed: Buffer | undefined;
-  try {
-    installed = readBoundedRegularSnapshot(ownershipPath);
-  } catch {
-    return "unknown";
+function inspectInstalledConfig(configPath: string, nextConfigBytes: Uint8Array): InstalledFileState {
+  return inspectInstalledFile(configPath, nextConfigBytes, MAX_CONFIG_SOURCE_BYTES);
+}
+
+function inspectInstalledOwnership(ownershipPath: string, nextOwnershipBytes: Uint8Array): InstalledFileState {
+  return inspectInstalledFile(ownershipPath, nextOwnershipBytes, MAX_RECONCILIATION_OWNERSHIP_BYTES);
+}
+
+function initRecoveryAdvice(recoveryCommand: string): string {
+  return `Run ${recoveryCommand} before you retry; it reports nothing to recover when no journal exists.`;
+}
+
+function describeAbsentJournalFailure(failure: InitCommitFailureContext, config: InstalledFileState): { message: string; ownership: InstalledFileState | "not_inspected" } {
+  if (config !== "matches") {
+    if (config === "unknown") {
+      return {
+        ownership: "not_inspected",
+        // Unreadable proves nothing either way; promise neither outcome.
+        message: `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present; inspect that file before you retry.`,
+      };
+    }
+    // No journal means no target rename started; differing/missing config keeps the preserved wording safe.
+    return { ownership: "not_inspected", message: INIT_PRESERVED_MESSAGE };
   }
-  if (installed === undefined) return "differs";
-  if (installed.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES) return "unknown";
-  return installed.equals(Buffer.from(nextOwnershipBytes)) ? "matches" : "differs";
+
+  // Config matches the planned bytes and no journal exists. That can mean a completed save whose
+  // post-commit lock check failed, or an ownership-only update that never wrote a journal. Inspect
+  // ownership before telling the user to retry Init.
+  const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
+  if (ownership === "matches") {
+    return {
+      ownership,
+      message: `Init could not confirm the reviewed membership update completed. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`,
+    };
+  }
+  if (ownership === "unknown") {
+    return {
+      ownership,
+      message: `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`,
+    };
+  }
+  return {
+    ownership,
+    message: `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect ${failure.target} and its ownership record before you retry.`,
+  };
+}
+
+function describeUnknownJournalFailure(failure: InitCommitFailureContext, config: InstalledFileState): string {
+  // A failed journal check cannot be reported as absence: recovery degrades to
+  // `nothing_to_recover`, so asking for it first is safe even with no journal.
+  const advice = initRecoveryAdvice(failure.recoveryCommand);
+  if (config === "matches") {
+    return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${advice}`;
+  }
+  if (config === "unknown") {
+    return `Init could not finish the reviewed membership update, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${advice}`;
+  }
+  return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${advice}`;
+}
+
+function describePresentJournalFailure(failure: InitCommitFailureContext, config: InstalledFileState): string {
+  if (config === "matches") {
+    return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+  }
+  if (config === "unknown") {
+    return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`;
+  }
+  // The journal can reach `config_installed` before a later conflict throws, so
+  // differing bytes no longer prove the rename did not happen.
+  return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`;
+}
+
+function classifyInitCommitFailure(failure: InitCommitFailureContext): { message: string; diagnosis: InitCommitFailureDiagnosis } {
+  if (failure.locked) {
+    return { message: INIT_LOCK_FAILURE_MESSAGE, diagnosis: { journal: "absent", config: "unknown", ownership: "not_inspected" } };
+  }
+  if (failure.receiptOnly) {
+    return { message: INIT_PRESERVED_MESSAGE, diagnosis: { journal: "absent", config: "unknown", ownership: "not_inspected" } };
+  }
+
+  // `applyReconciliationTransaction` writes the journal before it renames either
+  // target. A journal therefore means a rename may already have happened, while
+  // its absence proves none did. Matching config bytes prove only the current
+  // content, because an ownership-only plan never changes the config.
+  const journal = inspectJournalState(failure.journalPath);
+  const config = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
+
+  if (journal === "absent") {
+    const { message, ownership } = describeAbsentJournalFailure(failure, config);
+    return { message, diagnosis: { journal, config, ownership } };
+  }
+  if (journal === "unknown") {
+    return { message: describeUnknownJournalFailure(failure, config), diagnosis: { journal, config, ownership: "not_inspected" } };
+  }
+  return { message: describePresentJournalFailure(failure, config), diagnosis: { journal, config, ownership: "not_inspected" } };
+}
+
+/**
+ * Describe an Init commit failure without claiming the files were preserved.
+ *
+ * `applyReconciliationTransaction` installs the staged config before it writes the
+ * ownership sidecar and the final journal records, so a failure after that rename
+ * leaves the reviewed memberships on disk.
+ */
+export function describeInitCommitFailure(failure: InitCommitFailureContext): string {
+  return classifyInitCommitFailure(failure).message;
+}
+
+function logInitCommitFailure(ctx: ExtensionContext, error: unknown, failure: InitCommitFailureContext): void {
+  const { message, diagnosis } = classifyInitCommitFailure(failure);
+  debug("command", "init_commit_failure", {
+    locked: failure.locked,
+    receiptOnly: failure.receiptOnly,
+    errorCode: error instanceof ReconciliationStoreError ? error.code : "unexpected",
+    journal: diagnosis.journal,
+    config: diagnosis.config,
+    ownership: diagnosis.ownership,
+    target: failure.target,
+  });
+  log(ctx, message, "error");
 }
 
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
@@ -1669,7 +1737,7 @@ async function handleInit(
   }
   catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
-    log(ctx, describeInitCommitFailure({
+    logInitCommitFailure(ctx, error, {
       locked,
       receiptOnly,
       configPath: transaction.configPath,
@@ -1681,7 +1749,7 @@ async function handleInit(
       recoveryCommand: source.source === "user"
         ? "/bifrost config reconcile --source user --recover"
         : "/bifrost config reconcile --recover",
-    }), "error");
+    });
     return;
   }
 
@@ -2534,7 +2602,7 @@ async function handleReliabilityCommand(args: string, ctx: ExtensionContext, sta
 
 const MAX_RELIABILITY_MIGRATION_SOURCE_BYTES = 16 * 1024 * 1024;
 
-function readBoundedRegularSnapshot(path: string): Buffer | undefined {
+function readBoundedRegularSnapshot(path: string, maxBytes = MAX_RELIABILITY_MIGRATION_SOURCE_BYTES): Buffer | undefined {
   let pathStat;
   try { pathStat = lstatSync(path); }
   catch (error) {
@@ -2547,15 +2615,15 @@ function readBoundedRegularSnapshot(path: string): Buffer | undefined {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const before = fstatSync(fd);
     if (!before.isFile() || before.dev !== pathStat.dev || before.ino !== pathStat.ino
-      || before.size > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("unsafe source");
-    const bytes = Buffer.alloc(MAX_RELIABILITY_MIGRATION_SOURCE_BYTES + 1);
+      || before.size > maxBytes) throw new Error("unsafe source");
+    const bytes = Buffer.alloc(maxBytes + 1);
     let offset = 0;
     while (offset < bytes.length) {
       const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
       if (count === 0) break;
       offset += count;
     }
-    if (offset > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("source too large");
+    if (offset > maxBytes) throw new Error("source too large");
     const after = fstatSync(fd);
     if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
       || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs || offset !== before.size) {
