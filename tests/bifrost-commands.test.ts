@@ -1312,6 +1312,38 @@ describe("bifrost command ui", () => {
     assert(lines.includes("final source: fallback"));
   });
 
+  it("allows an empty existing config with a receipt, but blocks a genuine orphan", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-empty-receipt-"));
+    const cwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(".pi");
+      const config = join(".pi", "bifrost.json");
+      const receipt = join(".pi", "bifrost-reconcile-ownership.json");
+      const originalReceipt = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", {})));
+      writeFileSync(receipt, originalReceipt);
+      writeRecentProbeCache(join(".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const run = createCommandRouter(makeState() as never);
+      await run("init --write", ctx as never);
+      assert.equal(existsSync(config), false);
+      assert.deepEqual(readFileSync(receipt), originalReceipt);
+      writeFileSync(config, "{}\n");
+      await run("init --write", ctx as never);
+      assert.ok(Object.keys(JSON.parse(readFileSync(config, "utf8")).models).length);
+      const savedConfig = readFileSync(config);
+      const savedReceipt = readFileSync(receipt);
+      await run("init --write", ctx as never);
+      assert.deepEqual(readFileSync(config), savedConfig);
+      assert.deepEqual(readFileSync(receipt), savedReceipt);
+    } finally {
+      process.chdir(cwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses detected classifier defaults after init without opening the picker", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-guidance-"));
     const previousCwd = process.cwd();
@@ -2403,6 +2435,57 @@ describe("bifrost command ui", () => {
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("confirms ownership-only init and preserves files when declined", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-init-ownership-confirm-"));
+    const cwd = process.cwd();
+    const agent = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(dir);
+    try {
+      mkdirSync(".pi");
+      writeRecentProbeCache(".pi/bifrost-probe.json", [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const model = makeModel("fixture", "chat", 0.2, 0.2);
+      const { ctx } = makeCtx([model as never]);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+      const run = createCommandRouter(state);
+      await run("init --write", ctx as never);
+      const config = ".pi/bifrost.json";
+      const receipt = ".pi/bifrost-reconcile-ownership.json";
+      const savedConfig = readFileSync(config);
+      const ownership = JSON.parse(readFileSync(receipt, "utf8"));
+      ownership.tiers.other = buildInitOwnershipReceipt("project", { other: ["fixture/old"] })!.tiers.other;
+      writeFileSync(receipt, JSON.stringify(ownership));
+      const oldReceipt = readFileSync(receipt);
+      let confirmations = 0;
+      (ctx as any).ui.confirm = async () => { confirmations++; return false; };
+      await run("init", ctx as never);
+      assert.equal(confirmations, 1);
+      assert.deepEqual(readFileSync(config), savedConfig);
+      assert.deepEqual(readFileSync(receipt), oldReceipt);
+      await run("init --write", ctx as never);
+      assert.equal(confirmations, 1);
+      assert.deepEqual(readFileSync(config), savedConfig);
+      assert.notDeepEqual(readFileSync(receipt), oldReceipt);
+      const savedReceipt = readFileSync(receipt);
+      await run("init", ctx as never);
+      assert.equal(confirmations, 1);
+      assert.deepEqual(readFileSync(config), savedConfig);
+      assert.deepEqual(readFileSync(receipt), savedReceipt);
+    } finally {
+      process.chdir(cwd);
+      if (agent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = agent;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

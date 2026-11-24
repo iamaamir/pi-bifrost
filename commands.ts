@@ -2834,7 +2834,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         initPoolHasCompleteInventory(inherited.pool, available, state, ctx,
           initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), authFailedProbeProviders, initRefreshReceipt);
     });
-    if (source.ownershipBytes !== null) {
+    if (source.configBytes === null && source.ownershipBytes !== null) {
       reportInitOutcome(
         ctx,
         "blocked",
@@ -2991,8 +2991,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
 
   if (!writeWithoutPrompt && !actionSelectionApproved) {
     if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
-    const needsApproval = !hasConfiguredTiers || settingsAdded;
-    if (ctx.mode === "tui" && ctx.hasUI && needsApproval) {
+    if (ctx.mode === "tui" && ctx.hasUI) {
       try {
         const result = await showInitReview(ctx, previewLines.slice(0, 12), previewLines, ["Approve and save", "Cancel"]);
         if (result !== "Approve and save") {
@@ -3027,8 +3026,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   const ok =
     writeWithoutPrompt ||
     actionSelectionApproved ||
-    ((!hasConfiguredTiers || settingsAdded) &&
-      (await ctx.ui.confirm("Save Bifrost setup?", "Apply the changes shown above?")));
+    (await ctx.ui.confirm("Save Bifrost setup?", "Apply the changes shown above?"));
   // The review card is stale from here on: every remaining exit either saves or
   // reports why not, and the footer card must be the terminal state.
   clearBifrostWidgets(ctx);
