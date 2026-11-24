@@ -80,20 +80,24 @@ describe("result viewer", () => {
   it("shows and confirms every selected action at normal and narrow widths", () => {
     const actions = ["Keep my models", "Merge new models", "Bifrost defaults"];
     for (const width of [80, 18]) {
-      for (let selected = 0; selected < actions.length; selected++) {
-        let result = "";
-        const review = new InitReview([], [], actions, { fg: (_color, text) => text }, (value) => { result = value; }, () => {});
-        for (let i = 0; i < selected; i++) review.handleInput("\x1b[B");
-        const rows = review.render(width);
-        assert.ok(rows.some((line) => line.startsWith("❯ ")), `selection marker visible at width ${width}`);
-        const actionStart = rows.indexOf("") + 1;
-        const visibleActions = rows.slice(actionStart, -1).map((line) => line.replace(/^❯?\s*/, "")).join("").replace(/\s/g, "");
-        for (const action of actions) assert.ok(visibleActions.includes(action.replace(/\s/g, "")), `${action} visible at width ${width}`);
-        review.handleInput("\r");
-        assert.equal(result, actions[selected]);
-      }
+      assertSelectedActionsVisible(width, actions);
     }
   });
+
+  function assertSelectedActionsVisible(width: number, actions: string[]) {
+    for (let selected = 0; selected < actions.length; selected++) {
+      let result = "";
+      const review = new InitReview([], [], actions, { fg: (_color, text) => text }, (value) => { result = value; }, () => {});
+      for (let i = 0; i < selected; i++) review.handleInput("\x1b[B");
+      const rows = review.render(width);
+      assert.ok(rows.some((line) => line.startsWith("❯ ")), `selection marker visible at width ${width}`);
+      const actionStart = rows.indexOf("") + 1;
+      const visibleActions = rows.slice(actionStart, -1).map((line) => line.replace(/^❯?\s*/, "")).join("").replace(/\s/g, "");
+      for (const action of actions) assert.ok(visibleActions.includes(action.replace(/\s/g, "")), `${action} visible at width ${width}`);
+      review.handleInput("\r");
+      assert.equal(result, actions[selected]);
+    }
+  }
 
   it("fails closed when terminal cannot render selected action marker and label", () => {
     let result = "";

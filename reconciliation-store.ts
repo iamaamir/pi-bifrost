@@ -242,14 +242,18 @@ export function assertOwnershipPayload(bytes: Uint8Array): void {
         if (membershipCount > MAX_RECORDS * 100) throw new ReconciliationStoreError("invalid_input");
       }
     }
-    for (const [tier, rawMemberships] of Object.entries(source.generated as Record<string, unknown>)) {
-      if (!Array.isArray(rawMemberships)) throw new ReconciliationStoreError("invalid_input");
-      const memberships = rawMemberships;
-      for (const modelKey of memberships) {
-        const claim = `${tier}\u0000${modelKey}`;
-        if (generatedClaims.has(claim)) throw new ReconciliationStoreError("invalid_input");
-        generatedClaims.add(claim);
-      }
+    addGeneratedClaims(source.generated, generatedClaims);
+  }
+}
+
+function addGeneratedClaims(generated: Record<string, unknown>, generatedClaims: Set<string>): void {
+  for (const [tier, rawMemberships] of Object.entries(generated)) {
+    if (!Array.isArray(rawMemberships)) throw new ReconciliationStoreError("invalid_input");
+    const memberships = rawMemberships;
+    for (const modelKey of memberships) {
+      const claim = `${tier}\u0000${modelKey}`;
+      if (generatedClaims.has(claim)) throw new ReconciliationStoreError("invalid_input");
+      generatedClaims.add(claim);
     }
   }
 }
