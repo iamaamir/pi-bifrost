@@ -130,15 +130,20 @@ export class InitReview {
       return;
     }
     if (data === "\x0f") this.expanded = !this.expanded;
-    else if (data === "\x1b[A") this.selected = (this.selected + this.actions.length - 1) % this.actions.length;
-    else if (data === "\x1b[B") this.selected = (this.selected + 1) % this.actions.length;
-    else if (data === "k" || data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - 1);
-    else if (data === "j" || data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + 1);
     else if (data === "\r" || data === "\n") {
       if (this.canConfirm && this.actions.length > 0) this.done(this.actions[this.selected]);
     }
-    else return;
+    else if (!this.selectOrScroll(data)) return;
     this.requestRender();
+  }
+
+  private selectOrScroll(data: string): boolean {
+    if (data === "\x1b[A") this.selected = (this.selected + this.actions.length - 1) % this.actions.length;
+    else if (data === "\x1b[B") this.selected = (this.selected + 1) % this.actions.length;
+    else if (data === "k" || data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+    else if (data === "j" || data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + 1);
+    else return false;
+    return true;
   }
 
   render(width: number): string[] {
