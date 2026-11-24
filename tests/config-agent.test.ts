@@ -15,7 +15,6 @@ import {
   buildConfigAgentCatalog,
   createBifrostConfigTool,
   configAgentConfigDigest,
-  PROBE_OUTPUT_TOKEN_CAP,
   resolveProviderAuth,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
@@ -25,6 +24,7 @@ import {
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
 import { PROBE_MAX_TOKENS } from "../probe.ts";
+import { PROBE_RESOURCE_DISCLOSURE } from "../probe-workload.ts";
 import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
@@ -745,14 +745,15 @@ describe("provider sign-in state", () => {
       assert.equal(plain.liveProbe, undefined);
       assert.equal(harness.probeCalls().length, 0);
       assert.equal(harness.probeConfirmations().length, 0, "a plain check must not even ask");
-      assert.match(contentOf(await harness.run({ operation: "check", candidate })), /live probe not run: 2 model\(s\), one request each -- alpha\/strong, beta\/code/);
+      assert.match(contentOf(await harness.run({ operation: "check", candidate })), /live probe not run: 2 model\(s\), one primary probe each, no session fallback -- alpha\/strong, beta\/code/);
 
       // A declined dialog sends nothing and says so.
       const declined = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate, probe: true }));
       assert.equal(harness.probeCalls().length, 0);
       assert.match(declined.notes.join("\n"), /Live probe was declined; nothing was sent\./);
       const [question] = harness.probeConfirmations();
-      assert.match(question?.message ?? "", /one request of at most 5 output tokens to each of 2 model\(s\): alpha\/strong, beta\/code/);
+      assert.match(question?.message ?? "", /one primary probe per target, without session fallback, for 2 model\(s\): alpha\/strong, beta\/code/);
+      assert.ok(question?.message.includes(PROBE_RESOURCE_DISCLOSURE));
     } finally {
       harness.cleanup();
     }
@@ -790,6 +791,7 @@ describe("provider sign-in state", () => {
       }));
       assert.deepEqual(delegated.probeCalls(), [["alpha/strong"]]);
       assert.match(ran.notes.join("\n"), /delegated consent: this host has no approval dialog/);
+      assert.ok(ran.notes.join("\n").includes(PROBE_RESOURCE_DISCLOSURE));
     } finally {
       delegated.cleanup();
     }
@@ -810,6 +812,7 @@ describe("provider sign-in state", () => {
       const details = detailsOf<ConfigAgentCheckResult>(checked);
       assert.deepEqual(approved.probeCalls(), [["alpha/strong"]]);
       assert.match(details.notes.join("\n"), /ran with dialog approval/);
+      assert.ok(details.notes.join("\n").includes(PROBE_RESOURCE_DISCLOSURE));
       const applied = detailsOf<ConfigAgentApplyResult>(await approved.run({
         ...applyParams(details, { candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } } }),
         probe: true,
@@ -860,11 +863,25 @@ describe("provider sign-in state", () => {
     }
   });
 
-  it("states the same output cap the probe transport enforces", () => {
-    // Policy states the number; the adapter enforces it. They are separate
-    // modules by the architecture rule, so this is the seam that keeps the
-    // consent text honest if either number moves.
-    assert.equal(PROBE_OUTPUT_TOKEN_CAP, PROBE_MAX_TOKENS);
+  it("discloses the requested budget and its limits in the schema and offline plan", async () => {
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+    });
+    try {
+      assert.match(PROBE_RESOURCE_DISCLOSURE, new RegExp(`Requests ${PROBE_MAX_TOKENS} output tokens`));
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /may raise or omit this limit/);
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /may send additional requests/);
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /Charges may apply/);
+      assert.ok(JSON.stringify(harness.tool.parameters).includes(PROBE_RESOURCE_DISCLOSURE));
+      const checked = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      });
+      assert.ok(contentOf(checked).includes(PROBE_RESOURCE_DISCLOSURE));
+      assert.equal(harness.probeCalls().length, 0);
+    } finally {
+      harness.cleanup();
+    }
   });
 
   it("counts a probe against what it requested, not what came back", async () => {
@@ -1331,7 +1348,7 @@ describe("provider sign-in state", () => {
       assert.deepEqual(planned.probePlan, ["alpha/strong"], "a transport-free check still plans");
       assert.equal(planned.liveProbe, undefined);
       assert.match(contentOf(await harness.run({ operation: "check", candidate })),
-        /live probe not run: 1 model\(s\), one request each -- alpha\/strong/);
+        /live probe not run: 1 model\(s\), one primary probe each, no session fallback -- alpha\/strong/);
 
       const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
         operation: "check",

@@ -20,6 +20,8 @@ import {
   type ConfigAgentToolResult,
 } from "./config-agent.ts";
 
+import { PROBE_RESOURCE_DISCLOSURE } from "./probe-workload.ts";
+
 const MAX_REPORT_LINES = 120;
 /** Changes get their own budget: a long proposal must not push warnings, probe
  * scope, write eligibility, or the apply digests out of the report. */
@@ -149,7 +151,8 @@ function probeLines(result: ConfigAgentCheckResult): string[] {
   const lines: string[] = [];
   if (result.probePlan && result.probePlan.length > 0) {
     const planned = result.liveProbe ? "live probe targets" : "live probe not run";
-    lines.push(`${planned}: ${result.probePlan.length} model(s), one request each -- ${result.probePlan.join(", ")}`);
+    lines.push(`${planned}: ${result.probePlan.length} model(s), one primary probe each, no session fallback -- ${result.probePlan.join(", ")}`);
+    lines.push(`  ${PROBE_RESOURCE_DISCLOSURE}`);
     if (!result.liveProbe) lines.push("  run it only with probe: true after the user agrees; a plain check sends nothing");
   }
   // A skipped model was never asked, so it is neither a pass nor a failure.
