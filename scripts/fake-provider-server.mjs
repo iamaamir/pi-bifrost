@@ -39,6 +39,96 @@ function toolCallSse(response) {
   response.end(`data: ${JSON.stringify({ id: "fake-tool", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
 }
 
+/**
+ * Deterministic 20-model pool for the probe-consent capture. Real model ids are
+ * this long, and a 20-model list is what overflows a 60x24 dialog, so the capture
+ * exercises the case the wording has to survive rather than a single-model happy
+ * path. `config-consent` is first so `strategy: "first"` routes the turn to the
+ * model that calls the tool.
+ */
+const CONSENT_POOL = [
+  "config-consent",
+  "claude-sonnet-4-5-20250929",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.1-codex-mini",
+  "gemini-2.5-pro-preview-06-05",
+  "deepseek-v3.2-exp",
+  "kimi-k2-thinking-0905",
+  "qwen3-coder-480b-a35b",
+  "glm-4.6-air",
+  "llama-4-maverick-17b",
+  "mistral-large-2411",
+  "grok-4-fast-reasoning",
+  "sonar-pro-reasoning",
+  "command-a-03-2025",
+  "nova-pro-v1",
+  "phi-4-reasoning-plus",
+  "ernie-4.5-turbo",
+  "yi-lightning",
+  "minimax-m2-0905",
+  "step-3-flash",
+];
+
+/**
+ * A model turn that calls the shipped `bifrost_config` tool with an opt-in live
+ * probe, so the real Pi consent dialog renders in a TUI screen capture.
+ */
+function bifrostConfigCheckSse(response) {
+  const args = {
+    operation: "check",
+    source: "project",
+    candidate: {
+      schemaVersion: 2,
+      enabled: true,
+      default: "general",
+      // Mirror the extension layer's tier names. A candidate that drops a tier
+      // leaves the inherited categoryStrategies pointing at a tier that no longer
+      // exists, and the tool rejects that before any consent dialog appears.
+      models: {
+        quick: CONSENT_POOL.map((id) => `fake/${id}`),
+        general: CONSENT_POOL.map((id) => `fake/${id}`),
+        frontier: CONSENT_POOL.map((id) => `fake/${id}`),
+      },
+      strategy: "first",
+      categoryStrategies: { quick: "first", general: "first", frontier: "first" },
+      rules: [],
+      classifier: { enabled: false },
+    },
+    probe: true,
+  };
+  response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+  response.write(`data: ${JSON.stringify({ id: "fake-config-tool", object: "chat.completion.chunk", choices: [{
+    index: 0,
+    delta: { tool_calls: [{ index: 0, id: "fixture-config-call", type: "function", function: { name: "bifrost_config", arguments: JSON.stringify(args) } }] },
+    finish_reason: null,
+  }] })}\n\n`);
+  response.end(`data: ${JSON.stringify({ id: "fake-config-tool", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
+}
+
+/**
+ * Single-turn fixtures that only need a canned answer. Extracted so the main
+ * request handler keeps a bounded branch count as fixtures accumulate.
+ * Returns true when this call handled the response.
+ */
+function simpleFixture(response, model) {
+  if (model === "probe-background-slow-fail") {
+    setTimeout(() => sse(response, "slow-generation-done"), 4_000);
+    return true;
+  }
+  // "slow" keeps an agent run open long enough to queue steer prompts.
+  if (model === "slow") {
+    setTimeout(() => sse(response, "slow-done"), 8000);
+    return true;
+  }
+  // Drives the real bifrost_config tool so the TUI renders its probe consent
+  // dialog; later turns answer normally so the captured frame settles.
+  if (model === "config-consent") {
+    bifrostConfigCheckSse(response);
+    return true;
+  }
+  return false;
+}
+
 const server = http.createServer((request, response) => {
   response.on("error", () => {});
   request.on("error", () => {});
@@ -183,9 +273,7 @@ const server = http.createServer((request, response) => {
     if (model === "registered-inaccessible") return json(response, 403, {
       error: { message: "synthetic fixture model is registered but inaccessible" },
     });
-    if (model === "probe-background-slow-fail") return setTimeout(() => sse(response, "slow-generation-done"), 4_000);
-    // "slow" keeps an agent run open long enough to queue steer prompts.
-    if (model === "slow") return setTimeout(() => sse(response, "slow-done"), 8000);
+    if (simpleFixture(response, model)) return;
     return sse(response, "healthy");
   });
 });

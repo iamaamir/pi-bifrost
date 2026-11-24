@@ -298,7 +298,20 @@ function startRpc({ home, work, port, timeoutMs = 60_000 }) {
     return closePromise;
   }
 
-  return { prompt, userTurn, close, get records() { return records; }, get stderr() { return stderr; } };
+  return {
+    prompt,
+    userTurn,
+    close,
+    get records() { return records; },
+    get stderr() { return stderr; },
+    /** Consent dialogs real Pi asked for, kept so tests can assert their text. */
+    get probeConsents() {
+      return records
+        .filter((record) => record.type === "extension_ui_request" && record.method === "confirm")
+        .map((record) => ({ id: record.id, title: record.title, message: record.message ?? "" }))
+        .filter((record) => record.title === "Run the live probe?");
+    },
+  };
 }
 
 // The preview marker is written to the child's stderr, which races the RPC
@@ -344,6 +357,13 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
 
       const dialogs = rpc.records.filter((record) => record.type === "extension_ui_request" && ["confirm", "select", "editor", "custom"].includes(record.method));
       assert.deepEqual(dialogs, [], "RPC apply must not request a weaker approval");
+      assert.match(lastCheckReport ?? "", /--- bifrost candidate check ---/);
+
+      // RPC has no approval dialog, so the probe must run under delegated consent
+      // and say so rather than implying a user approved it. The consent text a TUI
+      // would show is covered by the unit suite against Pi's real dialog component.
+      assert.deepEqual(rpc.probeConsents, [], "RPC must not fabricate a consent dialog");
+      assert.match(lastCheckReport ?? "", /delegated consent: this host has no approval dialog/);
       assert.match(lastCheckReport ?? "", /classifier runtime now: disabled \(legacy-conflict\).*configured=off; backend=prompt/i);
       assert.match(lastCheckReport ?? "", /configured false overrides legacy classifierEnabled=true/);
       // The opt-in probe ran on real Pi against the local fixture: one request

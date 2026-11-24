@@ -34,6 +34,32 @@ WIDTH = 120
 HEIGHT = 36
 TABSTOP = 8
 
+# Mirrors CONSENT_POOL in scripts/fake-provider-server.mjs. The consent capture
+# registers this whole pool so probeTargets plans 20 models, the case where an
+# over-tall dialog would scroll its own title and leading ids off a 60x24 screen.
+CONSENT_POOL = [
+    "config-consent",
+    "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5-20251001",
+    "gpt-5.1-codex-mini",
+    "gemini-2.5-pro-preview-06-05",
+    "deepseek-v3.2-exp",
+    "kimi-k2-thinking-0905",
+    "qwen3-coder-480b-a35b",
+    "glm-4.6-air",
+    "llama-4-maverick-17b",
+    "mistral-large-2411",
+    "grok-4-fast-reasoning",
+    "sonar-pro-reasoning",
+    "command-a-03-2025",
+    "nova-pro-v1",
+    "phi-4-reasoning-plus",
+    "ernie-4.5-turbo",
+    "yi-lightning",
+    "minimax-m2-0905",
+    "step-3-flash",
+]
+
 ANSI_LOG = OUT / "pi-tui.log"
 
 
@@ -526,12 +552,21 @@ def assert_fake_only_inventory(home: Path, cwd: Path, agent_dir: Path, port: int
     assert_no_network_violations(home)
 
 
-def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path, provider: str = "fake", model: str = "healthy") -> tuple[subprocess.Popen[bytes], int]:
+def spawn_pi(
+    log_path: Path,
+    cwd: Path,
+    agent_dir: Path,
+    provider: str = "fake",
+    model: str = "healthy",
+    enable_tools: bool = False,
+    size: tuple[int, int] = (WIDTH, HEIGHT),
+) -> tuple[subprocess.Popen[bytes], int]:
     if not PI or not Path(PI).exists():
         raise SystemExit(f"pinned Pi binary not found: {PI}")
 
+    columns, rows = size
     master, slave = pty.openpty()
-    set_winsize(master, HEIGHT, WIDTH)
+    set_winsize(master, rows, columns)
     assert FAKE_PORT is not None
     env = pi_test_environment(agent_dir.parent.parent, agent_dir, FAKE_PORT)
     env.update({
@@ -546,7 +581,9 @@ def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path, provider: str = "fake",
             str(ROOT),
             "--approve",
             "--no-session",
-            "--no-tools",
+            # The consent-dialog capture needs the shipped bifrost_config tool, so
+            # that one scenario launches with tools instead of disabling them.
+            *([] if enable_tools else ["--no-tools"]),
             "--provider",
             provider,
             "--model",
@@ -603,6 +640,8 @@ def capture(
     launch_auto: bool = False,
     only_models: Iterable[str] | None = None,
     runtime_state_override: str | None = None,
+    enable_tools: bool = False,
+    size: tuple[int, int] = (WIDTH, HEIGHT),
 ) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"{name}.ansi.log"
@@ -639,7 +678,9 @@ def capture(
     previous_attempts = before.get("attempts", {})
     attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
     provider, model = ("bifrost", "auto") if launch_auto or name in ("allowance-recovery", "auto-large-pool") else ("fake", "healthy")
-    proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model)
+    if name == "probe-consent-narrow":
+        provider, model = "fake", "config-consent"
+    proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model, enable_tools=enable_tools, size=size)
     stop = threading.Event()
     t = threading.Thread(target=reader, args=(master, stop), daemon=True)
     t.start()
@@ -806,10 +847,35 @@ def capture(
                 raise AssertionError("manual init did not preview the exact project membership changes")
 
         time.sleep(2.0)
-        assert_no_network_violations(home)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
-        screen = Screen(WIDTH, HEIGHT)
+        screen = Screen(*size)
         screen.parse(raw)
+
+        if name == "probe-consent-narrow":
+            # Real Pi rendered the shipped bifrost_config probe consent dialog in a
+            # 60x24 terminal with 20 registered models. The frame must keep the title,
+            # the full model list, the token budget, the caveats, the choice and the
+            # key hints: Pi keeps the bottom of an overflowing dialog, so an over-tall
+            # body silently scrolls real content off the top.
+            captured = " ".join(screen.lines())
+            for required in (
+                "Run the live probe?",
+                "20 probes, one each, no fallback",
+                "fake/config-consent",
+                "fake/step-3-flash",
+                "5 output tokens each",
+                "raise/omit",
+                "retries may add",
+                "charges may apply",
+                "→ Yes",
+                "navigate",
+            ):
+                if required not in captured:
+                    raise AssertionError(
+                        f"narrow probe consent dialog lost {required!r}; captured screen:\n" + "\n".join(screen.lines()),
+                    )
+
+        assert_no_network_violations(home)
         txt_path.write_text("\n".join(screen.lines()) + "\n")
         screen.draw(png_path)
         return png_path
@@ -974,6 +1040,33 @@ def main() -> int:
             [],
             True,
         ),
+        # The shipped bifrost_config probe consent dialog on a narrow terminal.
+        # Tools stay enabled so the scripted model can call the real tool; the
+        # window is the smallest size the suite drives (60x24).
+        (
+            "probe-consent-narrow",
+            True,
+            [(1.5, "check the probe setup\r")],
+            {
+                "classifier": {"enabled": False},
+                # The routed model is the one that calls bifrost_config, so the
+                # consent dialog is what the capture shows. The pool mirrors the
+                # fake provider's CONSENT_POOL: probeTargets only plans models that
+                # exist in the catalog, so the fixture must register every id.
+                "models": {
+                    tier: [f"fake/{model}" for model in CONSENT_POOL]
+                    for tier in ("quick", "general", "frontier")
+                },
+            },
+            CONSENT_POOL,
+            False,
+            False,
+            False,
+            None,
+            None,
+            True,
+            (60, 24),
+        ),
     ]
         results = []
         for capture_spec in captures:
@@ -985,6 +1078,8 @@ def main() -> int:
             launch_auto = capture_spec[7] if len(capture_spec) > 7 else False
             only_models = capture_spec[8] if len(capture_spec) > 8 else None
             runtime_state_override = capture_spec[9] if len(capture_spec) > 9 else None
+            enable_tools = capture_spec[10] if len(capture_spec) > 10 else False
+            size = capture_spec[11] if len(capture_spec) > 11 else (WIDTH, HEIGHT)
             print(f"[ui-smoke] capturing {name}…")
             results.append(capture(
                 name,
@@ -997,6 +1092,8 @@ def main() -> int:
                 launch_auto,
                 only_models,
                 runtime_state_override,
+                enable_tools,
+                size,
             ))
             if name == "startup":
                 startup_text = (OUT / "startup.txt").read_text(errors="ignore")
