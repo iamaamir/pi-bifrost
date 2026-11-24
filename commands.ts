@@ -52,10 +52,29 @@ import {
   readConfigMigrationSource,
 } from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
-import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
+import {
+  cachePath,
+  loadCache,
+  saveCache,
+  DEFAULT_MAX_ENTRIES,
+  DEFAULT_THRESHOLD,
+} from "./cache.ts";
+import {
+  buildRouteDecisionSummary,
+  type ClassificationPipeline,
+  type ClassificationResult,
+  type ClassificationSource,
+  type ClassifierAttemptSummary,
+  type RouteDecisionSummary,
+} from "./classification-pipeline.ts";
 import { setupDebug, debug, debugLogInfo, debugMeasure } from "./debug.ts";
-import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReportCacheHit, describeProbeReportCacheAge, describeProbeReuseReason } from "./probe.ts";
+import {
+  runProbe,
+  probeOptionsFromConfig,
+  PROBE_PROMPT_TEXT,
+  readRecentCompleteProbeReport,
+  failureDetails,
+} from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult, showInitReview } from "./result-viewer.ts";
 import {
@@ -404,6 +423,19 @@ function uiOutput(ctx: ExtensionContext, lines: string[]) {
   }
 }
 
+async function renderInitPreview(ctx: ExtensionContext, lines: readonly string[]): Promise<boolean> {
+  if (ctx.mode !== "tui" || !ctx.hasUI) {
+    uiOutput(ctx, [...lines]);
+    return true;
+  }
+
+  try {
+    return await showBifrostResult(ctx, "Bifrost · Setup preview", lines);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Render a filesystem path on one line. Backslashes double so output escapes
  * cannot be confused with literal backslashes; newlines and other control
@@ -700,50 +732,6 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
-
-async function runInitProbe(
-  ctx: ExtensionContext,
-  state: BifrostState,
-  initConfig: BifrostConfig,
-  available: readonly { provider: string; id: string }[],
-): Promise<{ workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] } | undefined> {
-  let okCount = 0;
-  let errCount = 0;
-  const lastModels: string[] = [];
-  uiBusy(ctx, `Probing ${available.length} models...`);
-  const probeRun = await runProbe(ctx, {
-    ...probeOptionsFromConfig(initConfig.probe),
-    signal: ctx.signal,
-    onProgress: (done, total, last) => {
-      if (last.status === "ok") okCount++;
-      else if (last.status === "error" || last.status === "timeout") errCount++;
-      lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
-      if (lastModels.length > 5) lastModels.shift();
-      if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", [`Probing models: ${done}/${total}`, `  ok: ${okCount}  errors: ${errCount}`, "", ...lastModels]);
-    },
-  });
-  uiDone(ctx);
-  // The probe widget must never outlive the probe: every later exit path renders
-  // its feedback in the chat, and a stale progress panel reads as "still probing".
-  if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
-  if (probeRun.cancelled || ctx.signal?.aborted) {
-    log(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
-    return undefined;
-  }
-  const { results } = probeRun;
-  state.reliabilityStore.applyOutcomes(results.map((r) => r.status === "ok"
-    ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-    : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }), Date.now());
-  const ok = results.filter((r) => r.status === "ok").length;
-  const errors = results.filter((r) => r.status === "error").length;
-  const timeouts = results.filter((r) => r.status === "timeout").length;
-  const skipped = results.filter((r) => r.status === "skipped").length;
-  log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
-  return { workingModels: results.filter((r) => r.status === "ok").map((r) => ({
-    provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
-  })) };
-}
-
 const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
 
 /** An empty v2 payload records that no tier is proven Bifrost-managed. */
@@ -1032,20 +1020,6 @@ export function initRecoveryCommand(source: ReconciliationConfigSource): string 
   return source === "project"
     ? "/bifrost config reconcile --recover"
     : `/bifrost config reconcile --source ${source} --recover`;
-}
-
-function logInitCommitFailure(ctx: ExtensionContext, error: unknown, failure: InitCommitFailureContext): void {
-  const { message, diagnosis } = classifyInitCommitFailure(failure);
-  debug("command", "init_commit_failure", {
-    locked: failure.locked,
-    receiptOnly: failure.receiptOnly,
-    errorCode: error instanceof ReconciliationStoreError ? error.code : "unexpected",
-    journal: diagnosis.journal,
-    config: diagnosis.config,
-    ownership: diagnosis.ownership,
-    target: failure.target,
-  });
-  log(ctx, message, "error");
 }
 
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
@@ -1427,7 +1401,11 @@ async function handleReconciliationCommand(
   const commandArgs = args.replace(/^config\s+reconcile(?:\s+|$)/iu, "");
   const parsed = parseReconciliationCommandArgs(commandArgs);
   if (!parsed.ok) {
-    log(ctx, "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
+    log(
+      ctx,
+      "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]",
+      "warning",
+    );
     return;
   }
   const request = parsed.request;
@@ -1891,28 +1869,120 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   const initStateDirectory = selectedSource === "user" ? getAgentDir() : join(process.cwd(), CONFIG_DIR_NAME);
   const probePath = join(initStateDirectory, "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
-  const forced = isForced(args);
-  const reused = forced ? undefined : readRecentCompleteProbeReportCacheHit(probePath, available);
-  let workingModels = reused ? reused.results.filter((r) => r.status === "ok").map((r) => ({
-    provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
-  })) : [];
+  let workingModels: {
+    provider: string;
+    model: string;
+    cost: { input: number; output: number };
+    duration_ms: number;
+  }[] = [];
+  let probeLoaded = false;
   let ranProbe = false;
-  const probeAge = reused ? describeProbeReportCacheAge(reused) : "";
+  let probeAge = "";
+  const authFailedProbeProviders = new Set<string>();
 
-  if (!reused) {
-    ranProbe = true;
-    log(ctx, `Checking ${available.length} models (${describeProbeReuseReason(forced)}).`);
-    const probeRun = await runInitProbe(ctx, state, initConfig, available);
-    if (!probeRun) return;
-    workingModels = probeRun.workingModels;
+  if (!isForced(args)) {
+    const cachedResults = readRecentCompleteProbeReport(probePath, available);
+    if (cachedResults) {
+      for (const result of cachedResults) {
+        if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+      }
+      workingModels = cachedResults
+        .filter((result) => result.status === "ok")
+        .map((result) => ({
+          provider: result.provider,
+          model: result.model,
+          cost: { input: result.cost_input ?? 0, output: result.cost_output ?? 0 },
+          duration_ms: result.duration_ms ?? 0,
+        }));
+      probeAge = "within the past hour";
+      probeLoaded = true;
+    }
   }
 
-  if (workingModels.length === 0) {
-    const source = ranProbe ? "this check" : `saved probe results (${probeAge} old)`;
-    const action = ranProbe
-      ? "Check API keys, network, and credits; no configuration was changed."
-      : "Run /bifrost init -f after checking access. Configuration unchanged.";
-    log(ctx, `No usable models found in ${source}. ${action}`, "error");
+  if (!probeLoaded) {
+    ranProbe = true;
+    const availableCount = available.length;
+    log(ctx, `Probing ${availableCount} models to find working ones...`);
+    let okCount = 0;
+    let errCount = 0;
+
+    uiBusy(ctx, `Probing ${availableCount} models...`);
+    let probeRun: Awaited<ReturnType<typeof runProbe>>;
+    try {
+      probeRun = await runProbe(ctx, {
+        ...probeOptionsFromConfig(initConfig.probe),
+        path: probePath,
+        signal: ctx.signal,
+
+        onProgress: (done, total, last) => {
+          if (last.status === "ok") okCount++;
+          else if (last.status === "error" || last.status === "timeout") errCount++;
+
+          setProbeProgress(ctx, { done, total, okCount, errCount });
+        },
+      });
+    } finally {
+      // The probe widget must never outlive the probe: every later exit path
+      // renders its feedback in the chat, and a stale progress panel reads as
+      // "still probing". A rejected probe skips the code below, so clear here.
+      uiDone(ctx);
+      if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+    }
+    if (probeRun.cancelled || ctx.signal?.aborted) {
+      reportInitOutcome(
+        ctx,
+        "cancelled",
+        "Nothing was saved.",
+        "Probe results from this run were discarded; run /bifrost init again to retry.",
+        "info",
+      );
+      return;
+    }
+    const { results } = probeRun;
+    for (const result of results) {
+      if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+    }
+    if (selectedSource !== "user") {
+      state.reliabilityStore.applyOutcomes(
+        results.map((r) =>
+          r.status === "ok"
+            ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
+            : {
+                model: `${r.provider}/${r.model}`,
+                ok: false as const,
+                source: "probe",
+                reason: r.error ?? r.status,
+              },
+        ),
+        Date.now(),
+      );
+    }
+
+    workingModels = results
+      .filter((r) => r.status === "ok")
+      .map((r) => ({
+        provider: r.provider,
+        model: r.model,
+        cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 },
+        duration_ms: r.duration_ms ?? 0,
+      }));
+    probeLoaded = true;
+    probeAge = "just now";
+
+    const ok = results.filter((r) => r.status === "ok").length;
+    const errors = results.filter((r) => r.status === "error").length;
+    const timeouts = results.filter((r) => r.status === "timeout").length;
+    const skipped = results.filter((r) => r.status === "skipped").length;
+    log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
+  }
+  if (probeLoaded && workingModels.length === 0) {
+    reportInitOutcome(
+      ctx,
+      "failed — no working models",
+      "Nothing was saved.",
+      "Check API keys, credits, and network, then retry.",
+      "error",
+    );
     return;
   }
 
@@ -1935,10 +2005,13 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   }
 
-  if (ranProbe) {
-    log(ctx, `Using ${workingModels.length} working models from this check.`);
-  } else {
-    log(ctx, `Using ${workingModels.length} saved probe results (${probeAge} old). Run /bifrost init -f to check again.`);
+  if (probeLoaded && workingModels.length > 0 && ctx.mode !== "tui") {
+    logImportant(
+      ctx,
+      "Using verified models",
+      `${workingModels.length} working models (${probeAge}).`,
+      "info",
+    );
   }
 
   const models: Record<string, string[]> = {};
@@ -1948,10 +2021,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const key = `${m.provider}/${m.id}`;
 
     // If probe data is loaded, skip models that failed or timed out.
-    const working = workingModels.find(
-      (w) => w.provider === m.provider && w.model === m.id,
-    );
-    if (!working) continue;
+    if (probeLoaded) {
+      const working = workingModels.find((w) => w.provider === m.provider && w.model === m.id);
+      if (!working) continue;
+    }
 
     const tier = guessTier(m);
     if (tier) {
@@ -1962,8 +2035,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   }
 
-  if (Object.values(models).every((pool) => pool.length === 0)) {
-    log(ctx, "No usable models remain in Pi's current catalog; no configuration was changed.", "error");
+  if (probeLoaded && Object.values(models).every((pool) => pool.length === 0)) {
+    reportInitOutcome(
+      ctx,
+      "failed — no working models",
+      "Nothing was saved.",
+      "Check API keys, credits, and network, then retry.",
+      "error",
+    );
     return;
   }
   const probeVerified = new Set(Object.values(models).flat());
@@ -2111,13 +2190,20 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         return !circuit.open && !hasActiveAllowanceCooldown(reliability, key, Date.now());
       });
     const eligibleKeys = new Set(eligible.map(modelKey));
-    const probeChoices = workingModels
-      .filter((model) => eligibleKeys.has(`${model.provider}/${model.model}`)
-        && (model.cost.input + model.cost.output) < 2)
-      .sort((left, right) => left.duration_ms - right.duration_ms);
+    const probeChoices = probeLoaded
+      ? workingModels
+          .filter(
+            (model) =>
+              eligibleKeys.has(`${model.provider}/${model.model}`) &&
+              model.cost.input + model.cost.output < 2,
+          )
+          .sort((left, right) => left.duration_ms - right.duration_ms)
+      : [];
     classifierModel = probeChoices[0]
       ? `${probeChoices[0].provider}/${probeChoices[0].model}`
-      : undefined;
+      : !probeLoaded && eligible[0]
+        ? modelKey(eligible[0])
+        : undefined;
     if (!classifierModel) {
       logImportant(
         ctx,
@@ -2675,39 +2761,119 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   const savedPools = (
     JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
-  ).models as Record<string, unknown>;
-  const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
-    typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool.filter((key): key is string => typeof key === "string") : []);
-  const unverifiedSavedCount = savedModelKeys.filter((key) => !probeVerified.has(key)).length;
+  ).models as Record<string, unknown> | undefined;
+  const savedModelKeys = Object.values(savedPools ?? {}).flatMap((pool) =>
+    typeof pool === "string"
+      ? [pool]
+      : Array.isArray(pool)
+        ? pool.filter((key): key is string => typeof key === "string")
+        : [],
+  );
+  const unverifiedSavedCount = probeLoaded
+    ? savedModelKeys.filter((key) => !probeVerified.has(key)).length
+    : 0;
   const added = changes.filter((change) => change.kind === "add");
   const removed = changes.filter((change) => change.kind === "remove");
-  const tierSummary = [...new Set(changes.map((change) => change.tier))]
-    .sort()
-    .map(
-      (tier) =>
-        tier +
-        ": +" +
-        added.filter((change) => change.tier === tier).length +
-        "/-" +
-        removed.filter((change) => change.tier === tier).length,
-    )
-    .slice(0, 5);
-  const deltaSummary = "memberships: +" + added.length + " / -" + removed.length
-    + (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
-  uiOutput(ctx, [
-    "--- init ---",
-    `source: ${ranProbe ? `probe (${workingModels.length} working)` : `saved probe (${workingModels.length} working, ${probeAge} old)`}`,
-    `save target: ${initSourceLabel(source)}`,
-    deltaSummary,
-    `classifier: ${effectiveClassifierSummary}`,
-    settingsAdded ? "settings: standard routing defaults added where missing" : "",
-    `uncategorized: ${uncategorized.length}`,
-    "proposed config: classifier and routing defaults detected from Pi's available models",
-    "----------------",
+  const changedTiers = plannedTierReview
+    ? plannedTierReview
+        .filter(({ before, after, ownershipBefore, ownershipAfter }) =>
+          JSON.stringify(before) !== JSON.stringify(after) ||
+          ownershipBefore !== ownershipAfter ||
+          ownershipBefore === "user" ||
+          ownershipBefore === "deleted",
+        )
+        .map(({ tier }) => tier)
+    : [...new Set([...changes.map((change) => change.tier), ...(!hasConfiguredTiers ? Object.keys(generatedPools) : [])])].sort();
+  const poolLines = changedTiers.flatMap((tier) => {
+    const reviewedTier = plannedTierReview?.find((entry) => entry.tier === tier);
+    if (!reviewedTier && !hasConfiguredTiers && generatedPools[tier]) {
+      return [`  ${tier}:`, ...generatedPools[tier].map((key, index) => `    ${index + 1}. ${key}`)];
+    }
+    if (reviewedTier) {
+      if (selectedSource === "project" && reviewedTier.before === undefined && reviewedTier.after !== undefined && inheritedEffective.has(tier))
+        return [];
+      if (reviewedTier.ownershipBefore === "deleted" && reviewedTier.before === undefined && reviewedTier.after === undefined)
+        return [`  ${tier}: remains deleted`];
+      if (reviewedTier.ownershipBefore === "user" && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after))
+        return [`  ${tier}: custom pool retained`, ...initPoolReviewLines("    Model", reviewedTier.before)];
+      return [
+        `  ${tier}${reviewedTier.ownershipBefore !== reviewedTier.ownershipAfter && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after) ? " (reset to Bifrost defaults)" : ""}`,
+        ...initPoolReviewLines("    Before", reviewedTier.before),
+        ...initPoolReviewLines("    After", reviewedTier.after),
+      ];
+    }
+    const additions = added.filter((change) => change.tier === tier).map((change) => change.modelKey);
+    const removals = removed.filter((change) => change.tier === tier).map((change) => change.modelKey);
+    return [
+      `  ${tier}:`,
+      ...(additions.length ? ["    Added:", ...additions.map((key, index) => `      ${index + 1}. ${key}`)] : ["    No additions"]),
+      ...(removals.length ? ["    Removed:", ...removals.map((key, index) => `      ${index + 1}. ${key}`)] : []),
+    ];
+  });
+  const inheritedOverrideLines = initInheritanceReviewLines({
+    source: selectedSource,
+    sourceModels,
+    inherited: inheritedEffective,
+    generated: generatedPools,
+    tiers: plannedTierReview,
+  });
 
-    uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
-    unverifiedSavedCount ? `${unverifiedSavedCount} saved model membership(s) were not probe-verified; handwritten entries are preserved.` : "",
-  ].filter(Boolean));
+  const savedConfigForPreview = JSON.parse(
+    Buffer.from(transaction.nextConfigBytes).toString("utf8"),
+  ) as Record<string, unknown>;
+  const addedSettings = Object.keys(proposal).filter(
+    (key) => key !== "$schema" && key !== "models" && !inheritedFields.has(key) && sourceConfig[key] === undefined,
+  );
+  const settingsReviewLines = addedSettings.flatMap((key) =>
+    initReviewSettingLines(key, savedConfigForPreview[key]),
+  );
+  const previewLines = [
+    "◆ Bifrost · Setup preview",
+    "",
+    probeLoaded
+      ? `  ✓ ${workingModels.length} working models (${probeAge})`
+      : `  ${available.length} catalog models (not tested)`,
+    "",
+    `  Models      +${added.length} / -${removed.length}`,
+    ...(hasConfiguredTiers ? ["  Unlisted tiers remain unchanged."] : []),
+    ...poolLines,
+    ...(inheritedOverrideLines.length
+      ? ["  Project-only overrides (global/workspace files unchanged):", ...inheritedOverrideLines]
+      : []),
+    `  Classifier  ${effectiveClassifierSummary}`,
+    `  Save to     ${initSourceLabel(source)}`,
+    ...(settingsAdded ? ["  Settings added:", ...settingsReviewLines] : []),
+    ...(uncategorized.length ? [`  ! ${uncategorized.length} uncategorized models excluded`] : []),
+    ...(unverifiedSavedCount
+      ? [` ⚠️ ${unverifiedSavedCount} unverified models kept`]
+      : []),
+  ];
+
+  if (!writeWithoutPrompt && !actionSelectionApproved) {
+    if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
+    const needsApproval = !hasConfiguredTiers || settingsAdded;
+    if (ctx.mode === "tui" && ctx.hasUI && needsApproval) {
+      try {
+        const result = await showInitReview(ctx, previewLines.slice(0, 12), previewLines, ["Approve and save", "Cancel"]);
+        if (result !== "Approve and save") {
+          clearBifrostWidgets(ctx);
+          reportInitOutcome(ctx, "declined", "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.", "Run /bifrost init again to review and save.", "info");
+          return;
+        }
+        actionSelectionApproved = true;
+      } catch {
+        if (!await renderInitPreview(ctx, previewLines)) {
+          clearBifrostWidgets(ctx);
+          reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+          return;
+        }
+      }
+    } else if (!await renderInitPreview(ctx, previewLines)) {
+      clearBifrostWidgets(ctx);
+      reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+      return;
+    }
+  }
 
   if (uncategorized.length > 0) {
     logImportant(
@@ -2853,7 +3019,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   } catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
-    logInitCommitFailure(ctx, error, {
+    const recoveryCommand = initRecoveryCommand(source.source);
+    const failure = {
       locked,
       receiptOnly,
       configPath: transaction.configPath,
@@ -2862,8 +3029,16 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       nextOwnershipBytes: transaction.nextOwnershipBytes,
       journalPath: transaction.journalPath,
       target: initSourceLabel(source),
-      recoveryCommand: initRecoveryCommand(source.source),
-    });
+      recoveryCommand,
+    };
+    const { message } = classifyInitCommitFailure(failure);
+    reportInitOutcome(
+      ctx,
+      locked ? "blocked" : "failed",
+      message,
+      `Run ${recoveryCommand} before you retry.`,
+      "error",
+    );
     return;
   }
 
@@ -2935,13 +3110,16 @@ export function buildClassifierTestReport(input: {
   const outcome = increasedMetric(after.outcomes, before.outcomes);
   // A rejected judgment still names the tier it proposed. Prefer that over the
   // metrics delta, which is absent whenever metrics are disabled.
-  const attemptedTier = result.classifierAttempt?.backend === backend ? result.classifierAttempt.tier : undefined;
-  const observedTier = judgment?.backend === backend
-    ? judgment.tier
-    : attemptedTier ?? increasedMetric(after.tiers, before.tiers);
+  const attemptedTier =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.tier : undefined;
+  const observedTier =
+    judgment?.backend === backend
+      ? judgment.tier
+      : attemptedTier ?? increasedMetric(after.tiers, before.tiers);
 
   const acceptedConfidence = judgment?.backend === backend ? judgment.confidence : undefined;
-  const attemptedConfidence = result.classifierAttempt?.backend === backend ? result.classifierAttempt.confidence : undefined;
+  const attemptedConfidence =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.confidence : undefined;
   let observedConfidence = increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a";
   if (acceptedConfidence !== undefined) {
     observedConfidence = String(acceptedConfidence);
@@ -2953,14 +3131,17 @@ export function buildClassifierTestReport(input: {
   const configuredModel = Array.isArray(rawPromptModel) ? rawPromptModel.join(", ") : rawPromptModel;
   // A rejected attempt's confidence belongs to the model that produced it, which
   // may be auto-resolved from the catalog and differ from configured values.
-  const attemptedModel = result.classifierAttempt?.backend === backend ? result.classifierAttempt.model : undefined;
-  const model = judgment?.backend === backend
-    ? judgment.model
-    : attemptedModel ?? (backend === CLASSIFIER_BACKEND_IDS.typesafe
-      ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
-      : backend === CLASSIFIER_BACKEND_IDS.piNative
-        ? classifier?.piNative?.model ?? "catalog default"
-        : configuredModel);
+  const attemptedModel =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.model : undefined;
+  const model =
+    judgment?.backend === backend
+      ? judgment.model
+      : attemptedModel ??
+        (backend === CLASSIFIER_BACKEND_IDS.typesafe
+          ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
+          : backend === CLASSIFIER_BACKEND_IDS.piNative
+            ? classifier?.piNative?.model ?? "catalog default"
+            : configuredModel);
   const finalResult = result.kind === "unclassified" ? "unclassified" : result.tier;
   const finalSource = result.kind === "classified" ? result.source : result.kind;
   const accepted = result.kind === "classified" && judgment?.backend === backend;
@@ -3344,7 +3525,10 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
   if (traceAttempt && shouldRenderClassifierAttempt(traceAttempt, trace.classification.classifier)) {
     lines.push(...classifierAttemptLines(traceAttempt));
   }
-  const renderPool = (label: string, pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"]) => {
+  const renderPool = (
+    label: string,
+    pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"],
+  ) => {
     if (!pool) return;
     lines.push(`${label}: ${pool.tier} (${pool.strategy})`);
     for (const candidate of pool.candidates) {
@@ -3402,11 +3586,13 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     `source:    ${report.source}`,
     // The JSON report omits absent fields; the human view keeps the historical
     // "none" / "n/a" placeholders so the TUI output does not change.
-    ...(report.backend ? [
-      `backend:   ${report.backend}`,
-      `model:     ${report.model ?? "none"}`,
-      `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
-    ] : []),
+    ...(report.backend
+      ? [
+          `backend:   ${report.backend}`,
+          `model:     ${report.model ?? "none"}`,
+          `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
+        ]
+      : []),
     ...(showAttempt && attempt ? classifierAttemptLines(attempt) : []),
     `tier:      ${report.tier}`,
     `strategy:  ${report.strategy}`,
@@ -3420,13 +3606,15 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     report.defaultTier !== report.tier
       ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
       : []),
-    ...(report.fallbackBoundary === "explicit" ? [
-      "fallback boundary: explicit",
-      ...(report.attemptedTiers ?? []).flatMap((attemptedTier, index) => [
-        `attempt ${index + 1} (${attemptedTier.tier}, ${attemptedTier.strategy}):`,
-        ...attemptedTier.candidates.map((candidate) => `  ${candidate}`),
-      ]),
-    ] : []),
+    ...(report.fallbackBoundary === "explicit"
+      ? [
+          "fallback boundary: explicit",
+          ...(report.attemptedTiers ?? []).flatMap((attempt, index) => [
+            `attempt ${index + 1} (${attempt.tier}, ${attempt.strategy}):`,
+            ...attempt.candidates.map((candidate) => `  ${candidate}`),
+          ]),
+        ]
+      : []),
     `selected:  ${report.selected ?? PREVIEW_NONE}`,
     "---------------",
   ];
@@ -3439,6 +3627,7 @@ function renderPreviewFailureReport(report: BifrostPreviewFailure): string[] {
     `prompt:    ${report.prompt}`,
     "source:    unclassified",
     ...(attempt ? classifierAttemptLines(attempt) : []),
+    ...(report.error === "unclassified" ? ["reason: no tier matched"] : []),
     `result:    ${report.error}`,
     "selected:  none",
     "---------------",
@@ -3550,7 +3739,12 @@ async function handlePreview(
     } else if (classification.classifierAttempt) {
       await uiResult(ctx, "Bifrost preview", renderPreviewFailureReport(failure));
     }
-    log(ctx, "no tier matched", "warning");
+    logImportant(
+      ctx,
+      "No route matched",
+      "No configured tier matched the prompt (no tier matched).",
+      "warning",
+    );
     return;
   }
 
@@ -4389,35 +4583,46 @@ async function handleDiagnosticsCommand(
   }
   const affinityEvidence = command === "inspect" ? inspectAffinity(state, ctx) : undefined;
   const classifierRuntime = classifierEnablementFor(state, ctx);
-  const report = command === "validate"
-    ? validateDiagnostics({
-      config: state.config,
-      registry: ctx.modelRegistry,
-      effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
-      classifierEnabled: classifierRuntime.enabled,
-      classifierEnablementSource: classifierRuntime.source,
-      ...(classifierRuntime.legacyConflict ? { classifierConflict: classifierRuntime.legacyConflict } : {}),
-      ...(classifierRuntime.runtimeStateIssue ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue } : {}),
-    })
-    : {
-      ...inspectDiagnostics({
-      config: state.config,
-      registry: ctx.modelRegistry,
-      reliabilityState,
-      reliabilityConfig: state.config.reliability,
-      lastRegistryRefreshAt: state.lastRegistryRefreshAt,
-      forceRegistryRefresh: state.forceRegistryRefresh === true,
-      classifierEnabled: classifierRuntime.enabled,
-      classifierEnablementSource: classifierRuntime.source,
-      effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
-      ...(classifierRuntime.legacyConflict ? { classifierConflict: classifierRuntime.legacyConflict } : {}),
-      ...(classifierRuntime.runtimeStateIssue ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue } : {}),
-      }),
-      economics: inspectEconomicEvidence(state),
-      ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
-      ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
-      modelPoolSource: state.bootstrapModelsInMemory ? "session_catalog_in_memory" : "configured",
-    };
+  const report =
+    command === "validate"
+      ? validateDiagnostics({
+          config: state.config,
+          registry: ctx.modelRegistry,
+          effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
+          classifierEnabled: classifierRuntime.enabled,
+          classifierEnablementSource: classifierRuntime.source,
+          ...(classifierRuntime.legacyConflict
+            ? { classifierConflict: classifierRuntime.legacyConflict }
+            : {}),
+          ...(classifierRuntime.runtimeStateIssue
+            ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue }
+            : {}),
+        })
+      : {
+          ...inspectDiagnostics({
+            config: state.config,
+            registry: ctx.modelRegistry,
+            reliabilityState,
+            reliabilityConfig: state.config.reliability,
+            lastRegistryRefreshAt: state.lastRegistryRefreshAt,
+            forceRegistryRefresh: state.forceRegistryRefresh === true,
+            classifierEnabled: classifierRuntime.enabled,
+            classifierEnablementSource: classifierRuntime.source,
+            effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
+            ...(classifierRuntime.legacyConflict
+              ? { classifierConflict: classifierRuntime.legacyConflict }
+              : {}),
+            ...(classifierRuntime.runtimeStateIssue
+              ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue }
+              : {}),
+          }),
+          economics: inspectEconomicEvidence(state),
+          ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
+          ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
+          modelPoolSource: state.bootstrapModelsInMemory
+            ? "session_catalog_in_memory"
+            : "configured",
+        };
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
     return;

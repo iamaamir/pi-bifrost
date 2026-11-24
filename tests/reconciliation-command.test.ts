@@ -100,10 +100,20 @@ describe("config reconciliation command boundary", () => {
       ["add", "quick", "openai/quick"],
     ]);
     assert.deepEqual(validated?.unrelated, { retained: true });
-    assert.deepEqual((validated?.models as Record<string, unknown> | undefined)?.general, ["manual/model", "openai/new"]);
-    assert.deepEqual((validated?.models as Record<string, unknown> | undefined)?.quick, ["openai/quick"]);
-    const receipt = JSON.parse(Buffer.from(plan.transaction!.nextOwnershipBytes).toString("utf8"));
-    assert.equal(Object.values(receipt.sources).length, 2);
+    assert.deepEqual((validated?.models as Record<string, unknown>).general, ["manual/model", "openai/new"]);
+    assert.deepEqual((validated?.models as Record<string, unknown>).quick, ["openai/quick"]);
+    assert.deepEqual((validated?.models as Record<string, unknown>).frontier, ["openai/old"]);
+    // Only the unchanged generated tier and genuinely new tier can refresh.
+    const nextReceipt = JSON.parse(Buffer.from(plan.transaction!.nextOwnershipBytes).toString("utf8"));
+    assert.deepEqual(nextReceipt, {
+      version: 2,
+      scope: "project",
+      tiers: {
+        general: { state: "generated", models: ["manual/model", "openai/new"] },
+        frontier: { state: "user" },
+        quick: { state: "generated", models: ["openai/quick"] },
+      },
+    });
   });
 
   it("creates only the discovered tier in workspace scope without copying unrelated fields", () => {

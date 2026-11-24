@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Refresh Pi's model catalog. Bifrost reuses probe results from the last hour only when they cover the current catalog. If no recent results exist, or the catalog changed, it probes the models before it proposes pools. Then it asks one time before it saves. Pass `-f` to force new probes. Pass `--write` to save without the question |
+| `/bifrost init` | Refresh Pi's model catalog and reuse recent probe results when they cover the current catalog. Review model-pool choices before saving. Pass `-f` to force new probes, or `--write` to use **Keep my models** without review or confirmation |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the route without generating; leading `--offline` uses only local cache, rules and the default tier; `--json` keeps the existing report, and `--trace` adds a content-free summary. Without `--offline`, an enabled classifier may receive the prompt. A tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
@@ -15,7 +15,7 @@
 | `/bifrost reload` | Reload merged configuration |
 | `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
 | `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing, classifying, or probing |
-| `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
+| `/bifrost config reconcile` | Preview exact generated model entries for one selected config source, tier, and provider; apply only with the reviewed digest |
 | `/bifrost config migrate` | Preview schema-version migration for one config source; apply only with the reviewed digest and exact backup |
 | `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
 | `/bifrost reliability` | Show active provider pauses and recovery trials |
@@ -39,35 +39,49 @@
 
 On a relevant routing or input event, Bifrost checks Pi's model catalog if its local snapshot is older than 30 seconds. This is a freshness threshold, not a periodic timer. If a newly added model is missing or the catalog looks stale, request a fresh check with `/bifrost init` or `/bifrost config reconcile --refresh`. `/bifrost inspect` shows the threshold, the age of the last local refresh, and whether a refresh is needed; `/bifrost debug` shows the threshold too.
 
-On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership receipt. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
+On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership file. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
 
 Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
 
 `/bifrost cost` reads Pi's session entries on demand. In the interactive view, use **Tab** to switch between Requests and Models for the current branch, **Up/Down** to move, **Enter** to expand or collapse a group, and **Esc** to close. Requests are derived from user-message boundaries; they are not a routing trace. The separate all-retained total may include copied fork history and alternate branches. The report shows assistant responses by reported model and auxiliary usage when Pi records it, including compaction. Unknown costs remain unknown; a known-cost subtotal does not include them. The report does not display or store prompt or tool content, and historical routing reasons are unavailable. Costs are Pi-reported estimates, not billing records; zero does not confirm free usage. Classifier and probe overhead may be outside the session or unknown. The report has no baseline and makes no savings claim. When an interactive TUI is unavailable, the command prints a plain-text report.
 
-Init remains available to refresh the catalog or reconcile model lists. It reuses recent saved probe results for the current catalog when possible, and probes when it cannot. When it reuses saved results, init shows their approximate age. Pass `-f` to force a fresh check. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
+Init remains available to refresh the catalog or reconcile model lists. It reuses probe results from the last hour only when they cover the current catalog, unless you pass `-f`. Review presents **Keep my models** (default), **Merge new models**, and **Bifrost defaults** when choices differ. The choice changes model pools in the displayed save target. Init may also add missing settings there. Init preserves settings and handwritten model entries in the file it edits. Other configuration files and unlisted tiers remain unchanged. The review shows inherited pools that a proposed project pool would override. A project-only override requires review and leaves global and workspace files unchanged. Init does not copy private classifier templates or inherited settings into the edited file. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
 
 Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`. Global init does not change reliability state from probe results.
 
-### Run init without a confirmation prompt
-
-Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. `--write` saves to the target that init shows.
-
-A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session that gives Bifrost no UI cannot ask. Without `--write`, that session refreshes the catalog and shows the proposal, then stops before it writes and logs `run in TUI or use --write to persist`.
-
-If you also want new probes or the global target, use the flags together:
+Every init run ends on one line: `init: <outcome>. <what changed>. <one next step>`. In a TUI that line is an `init` notice card and it is the last thing the run renders. Headless prints it on stderr with the `[bifrost]` prefix every Bifrost diagnostic carries. For example:
 
 ```text
-/bifrost init --write
-/bifrost init -f --write
-/bifrost init --write -g
+[bifrost] init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is active with 3 tiers. Send a prompt to try it.
+[bifrost] init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is configured with 3 tiers, but routing is off. Run /bifrost on to route prompts.
+[bifrost] init: declined. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init again to review and save.
+[bifrost] init: failed — no working models. Nothing was saved. Check API keys, credits, and network, then retry.
 ```
 
-`--write` removes only the question. The other guards stay in effect. Init does not write a proposal that shadows a handwritten inherited pool. A canceled catalog refresh writes nothing.
+Saving does not switch routing on. If `/bifrost off` is in effect, the saved line says routing is off and names `/bifrost on` as the next step.
 
-A failure before the commit keeps the files. A failure after Bifrost replaces the configuration file can leave a pending reconciliation journal. Recover the source that init wrote. For the default project target, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the matching command before you retry.
+Every outcome init can report:
 
-If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace --tier general --provider openai`; use `-g` when you intend to update the global source.
+| Outcome | When it appears |
+|---------|-----------------|
+| `saved` | The update was written and reloaded. The line says whether routing is on. |
+| `unchanged` | The pools already match what init would write, so nothing was written. |
+| `declined` | You answered no to the save confirmation. |
+| `cancelled` | The catalog refresh or the probe was cancelled, or the turn was aborted after the confirmation. |
+| `stopped before saving` | The host could not ask the save question and `--write` was not passed. |
+| `paused` | The model inventory is incomplete or stale, so model-pool changes were not planned. `-f` refreshes it. |
+| `stale review` | The model inventory, the inherited config, or the save destination changed while the confirmation was open. |
+| `blocked` | Init refused to write: the config or selected source could not be read or parsed, the proposal was invalid or too large, or a saved ownership file exists without its config. |
+| `blocked by a lock` | Another Bifrost writer holds the lock. |
+| `failed — no working models` | The probe found no usable model. |
+| `failed` | The write could not be confirmed on disk, or the written config was rejected on reload. |
+| `not started` | The arguments were not recognised; nothing was read or written. |
+
+If the host cannot ask the save question, init stops before catalog refresh or probing. Pass `--write` to skip the confirmation in any mode. Automatic first-use setup runs independently.
+
+For project init, a generated pool that differs from an inherited global or workspace pool is shown as a project-only override in the review. Confirming a choice that includes that override writes only project `.pi/bifrost.json`; inherited source files remain unchanged. Init blocks the replacement when the inherited provider inventory is unknown, unsigned-in, or stale. Use `-g` when you intend to update the global source.
+
+A failed save can leave a reconciliation journal. For a project save, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the matching command before you retry.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 

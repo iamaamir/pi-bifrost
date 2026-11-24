@@ -673,40 +673,6 @@ function applyModelChanges(
   return candidate;
 }
 
-function applyOwnershipChanges(
-  snapshot: ReconciliationOwnershipSnapshot | undefined,
-  sourceId: string,
-  changes: ReconciliationProposal["ownershipChanges"],
-): ReconciliationOwnershipSnapshot | undefined {
-  if (changes.length === 0) return snapshot;
-  const sources: Record<string, unknown> = { ...snapshot?.sources };
-  const rawSource = sources[sourceId];
-  const source = isPlainRecord(rawSource) ? { ...rawSource } : { generated: {}, tombstones: {} };
-  const generated = isPlainRecord(source.generated) ? { ...source.generated } : {};
-  const tombstones = isPlainRecord(source.tombstones) ? { ...source.tombstones } : {};
-  const membership = (target: Record<string, unknown>, tier: string): string[] => {
-    const current = target[tier];
-    return Array.isArray(current) ? current.filter((entry): entry is string => typeof entry === "string") : [];
-  };
-  for (const change of changes) {
-    const generatedTier = membership(generated, change.tier);
-    const tombstoneTier = membership(tombstones, change.tier);
-    if (change.kind === "claim") {
-      if (!generatedTier.includes(change.modelKey)) generatedTier.push(change.modelKey);
-      setOwn(generated, change.tier, generatedTier.sort());
-    } else if (change.kind === "unclaim") {
-      setOwn(generated, change.tier, generatedTier.filter((key) => key !== change.modelKey));
-    } else {
-      if (!tombstoneTier.includes(change.modelKey)) tombstoneTier.push(change.modelKey);
-      setOwn(tombstones, change.tier, tombstoneTier.sort());
-    }
-  }
-  setOwn(source, "generated", generated);
-  setOwn(source, "tombstones", tombstones);
-  setOwn(sources, sourceId, source);
-  return { version: 1, sources: sources as ReconciliationOwnershipSnapshot["sources"] };
-}
-
 function stableProposalDigest(input: {
   source: ReconciliationConfigSource;
   provider: string;
