@@ -2508,7 +2508,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const planSignature = (candidate: (typeof keepPlan)) =>
       `${candidate.status}:${candidate.reason ?? ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextConfigBytes).toString("base64") : ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextOwnershipBytes).toString("base64") : ""}`;
     const keepSignature = planSignature(keepPlan);
-    const actionHasCompleteRemovalInventory = (candidate: (typeof keepPlan), inventory = inventories) =>
+    const actionHasCompleteAffectedInventory = (candidate: (typeof keepPlan), inventory = inventories) =>
       candidate.tiers.every(({ tier, before, after }) => {
         const inherited = inheritedEffective.get(tier)?.pool;
         const effectiveBefore = before ?? inherited ?? [];
@@ -2517,7 +2517,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           ...(before ?? []).filter((model) => !(after ?? []).includes(model))];
         const newlyShadowed = before === undefined && after !== undefined && inherited !== undefined
           && JSON.stringify(after) !== JSON.stringify(inherited) ? inherited : [];
-        const changedPool = JSON.stringify(effectiveBefore) !== JSON.stringify(effectiveAfter) ? effectiveBefore : [];
+        const changedPool = JSON.stringify(effectiveBefore) !== JSON.stringify(effectiveAfter) ? [...effectiveBefore, ...effectiveAfter] : [];
         const affected = [...removed, ...newlyShadowed, ...changedPool];
         return affected.every((model) =>
           inventory.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
@@ -2525,7 +2525,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const availableActions = (["keep", "merge", "defaults"] as const).filter((action) => {
       const candidate = actionPlans.get(action)!;
       return (
-        actionHasCompleteRemovalInventory(candidate) && (
+        actionHasCompleteAffectedInventory(candidate) && (
         (candidate.status === "ready" && candidate.transaction !== undefined) ||
         (candidate.status === "blocked" && candidate.reason === "no_changes")
       ) && (action === "keep" || planSignature(candidate) !== keepSignature));
@@ -2710,7 +2710,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         }
     };
     const plan = actionPlans.get(selectedAction)!;
-    inventoryStillSafe = () => actionHasCompleteRemovalInventory(plan, buildInitInventories(
+    inventoryStillSafe = () => actionHasCompleteAffectedInventory(plan, buildInitInventories(
       available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
       initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), initRefreshReceipt, authFailedProbeProviders,
     ));
