@@ -502,56 +502,60 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
   }
   registerInheritedPoolTests();
 
-  for (const args of ["--source workspace", "--source user", "--unknown"]) {
-    it(`rejects invalid init arguments ${args} before probing or writing`, async () => {
-      requests = [];
-      const env = fixture(port, ["healthy"]);
-      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-      const original = Buffer.from('{"classifier":{"enabled":false}}\n');
-      writeFileSync(globalPath, original);
-      try {
-        const result = await runInit({ ...env, args });
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.violations, "");
-        assert.match(result.stdout + result.stderr, /usage: \/bifrost init/i);
-        assert.deepEqual(requests, []);
-        assert.deepEqual(readFileSync(globalPath), original);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false);
-      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-    });
-  }
+  function registerHeadlessArgumentTests() {
+    for (const args of ["--source workspace", "--source user", "--unknown"]) {
+      it(`rejects invalid init arguments ${args} before probing or writing`, async () => {
+        requests = [];
+        const env = fixture(port, ["healthy"]);
+        const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+        const original = Buffer.from('{"classifier":{"enabled":false}}\n');
+        writeFileSync(globalPath, original);
+        try {
+          const result = await runInit({ ...env, args });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.match(result.stdout + result.stderr, /usage: \/bifrost init/i);
+          assert.deepEqual(requests, []);
+          assert.deepEqual(readFileSync(globalPath), original);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
 
-  for (const args of ["", "-f", "-g", "-g -f"]) {
-    it(`stops headless init ${args || "(default)"} before provider requests or writes`, async () => {
-      requests = [];
-      const env = fixture(port, ["healthy", "credits-exhausted"]);
-      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-      const globalBytes = Buffer.from('{"classifier":{"enabled":false}}\n');
-      const projectPath = join(env.work, ".pi", "bifrost.json");
-      const projectReceiptPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
-      const globalReceiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
-      const projectBytes = Buffer.from('{"models":{"quick":["manual/project"]}}\n');
-      const projectReceipt = Buffer.from(ownership(["manual/project"]));
-      const globalReceipt = Buffer.from(ownership([], "user"));
-      writeFileSync(globalPath, globalBytes);
-      writeFileSync(projectPath, projectBytes);
-      writeFileSync(projectReceiptPath, projectReceipt);
-      writeFileSync(globalReceiptPath, globalReceipt);
-      try {
-        const result = await runInit({ ...env, args });
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.violations, "");
-        assert.match(result.stdout + result.stderr, /init: stopped before saving.*--write/i);
-        assert.deepEqual(requests, []);
-        assert.deepEqual(readFileSync(globalPath), globalBytes);
-        assert.deepEqual(readFileSync(globalReceiptPath), globalReceipt);
-        assert.deepEqual(readFileSync(projectPath), projectBytes);
-        assert.deepEqual(readFileSync(projectReceiptPath), projectReceipt);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false);
-      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-    });
+    for (const args of ["", "-f", "-g", "-g -f"]) {
+      it(`stops headless init ${args || "(default)"} before provider requests or writes`, async () => {
+        requests = [];
+        const env = fixture(port, ["healthy", "credits-exhausted"]);
+        const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+        const globalBytes = Buffer.from('{"classifier":{"enabled":false}}\n');
+        const projectPath = join(env.work, ".pi", "bifrost.json");
+        const projectReceiptPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+        const globalReceiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
+        const projectBytes = Buffer.from('{"models":{"quick":["manual/project"]}}\n');
+        const projectReceipt = Buffer.from(ownership(["manual/project"]));
+        const globalReceipt = Buffer.from(ownership([], "user"));
+        writeFileSync(globalPath, globalBytes);
+        writeFileSync(projectPath, projectBytes);
+        writeFileSync(projectReceiptPath, projectReceipt);
+        writeFileSync(globalReceiptPath, globalReceipt);
+        try {
+          const result = await runInit({ ...env, args });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.match(result.stdout + result.stderr, /init: stopped before saving.*--write/i);
+          assert.deepEqual(requests, []);
+          assert.deepEqual(readFileSync(globalPath), globalBytes);
+          assert.deepEqual(readFileSync(globalReceiptPath), globalReceipt);
+          assert.deepEqual(readFileSync(projectPath), projectBytes);
+          assert.deepEqual(readFileSync(projectReceiptPath), projectReceipt);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
+
   }
+  registerHeadlessArgumentTests();
 
   it("rejects an invalid project config before provider probing", async () => {
     requests = [];
@@ -570,58 +574,62 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
-  for (const confirm of [true, false]) {
-    it(`interactive fresh init blocks unknown inherited pool replacement${confirm ? "" : " regardless of confirmation"}`, async () => {
+  function registerInteractiveConfirmationTests() {
+    for (const confirm of [true, false]) {
+      it(`interactive fresh init blocks unknown inherited pool replacement${confirm ? "" : " regardless of confirmation"}`, async () => {
+        requests = [];
+        const env = fixture(port, ["healthy"]);
+        const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+        const globalBytes = Buffer.from('{"models":{"quick":["manual/inherited"],"frontier":["manual/frontier"]},"classifier":{"enabled":false}}\n');
+        writeFileSync(globalPath, globalBytes);
+        const projectPath = join(env.work, ".pi", "bifrost.json");
+        const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+        try {
+          const result = await runInteractiveInit({ ...env, confirm });
+          assert.equal(result.settled, true, JSON.stringify(result));
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.deepEqual(readFileSync(globalPath), globalBytes);
+          assert.deepEqual([...new Set(requests)], ["healthy"]);
+          assert.equal(requests.length, 1);
+          if (confirm) {
+            assert.equal(existsSync(projectPath), false);
+            assert.equal(existsSync(ownershipPath), false);
+            assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was saved; inherited quick pool cannot be safely replaced/i);
+            assert.match(result.stdout + result.stderr, /Sign in to each inherited provider and refresh its model catalog/i);
+          } else {
+            assert.equal(existsSync(projectPath), false);
+            assert.equal(existsSync(ownershipPath), false);
+            assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was saved/i);
+          }
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
+
+    it("interactive fresh init reviews and saves a differing inherited pool with fresh authenticated inventory", async () => {
       requests = [];
       const env = fixture(port, ["healthy"]);
       const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-      const globalBytes = Buffer.from('{"models":{"quick":["manual/inherited"],"frontier":["manual/frontier"]},"classifier":{"enabled":false}}\n');
+      const globalBytes = Buffer.from('{"models":{"quick":["fake/credits-exhausted"]},"classifier":{"enabled":false}}\n');
       writeFileSync(globalPath, globalBytes);
       const projectPath = join(env.work, ".pi", "bifrost.json");
       const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
       try {
-        const result = await runInteractiveInit({ ...env, confirm });
-        assert.equal(result.settled, true, JSON.stringify(result));
+        const result = await runInteractiveInit({ ...env, confirm: true });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
+        assert.match(result.stdout + result.stderr, /quick: project override[\s\S]*Inherited:[\s\S]*1\. fake\/credits-exhausted[\s\S]*Project:[\s\S]*1\. fake\/healthy/u);
         assert.deepEqual(readFileSync(globalPath), globalBytes);
-        assert.deepEqual([...new Set(requests)], ["healthy"]);
-        assert.equal(requests.length, 1);
-        if (confirm) {
-          assert.equal(existsSync(projectPath), false);
-          assert.equal(existsSync(ownershipPath), false);
-          assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was saved; inherited quick pool cannot be safely replaced/i);
-          assert.match(result.stdout + result.stderr, /Sign in to each inherited provider and refresh its model catalog/i);
-        } else {
-          assert.equal(existsSync(projectPath), false);
-          assert.equal(existsSync(ownershipPath), false);
-          assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was saved/i);
-        }
+        assert.deepEqual(JSON.parse(readFileSync(projectPath, "utf8")).models, { quick: ["fake/healthy"] });
+        assert.deepEqual(JSON.parse(readFileSync(ownershipPath, "utf8")), {
+          version: 2, scope: "project", tiers: { quick: { state: "generated", models: ["fake/healthy"] } },
+        });
+        assert.deepEqual(loadConfigForReload(env.work, ROOT).config.models?.quick, ["fake/healthy"]);
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
-  }
 
-  it("interactive fresh init reviews and saves a differing inherited pool with fresh authenticated inventory", async () => {
-    requests = [];
-    const env = fixture(port, ["healthy"]);
-    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-    const globalBytes = Buffer.from('{"models":{"quick":["fake/credits-exhausted"]},"classifier":{"enabled":false}}\n');
-    writeFileSync(globalPath, globalBytes);
-    const projectPath = join(env.work, ".pi", "bifrost.json");
-    const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
-    try {
-      const result = await runInteractiveInit({ ...env, confirm: true });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.match(result.stdout + result.stderr, /quick: project override[\s\S]*Inherited:[\s\S]*1\. fake\/credits-exhausted[\s\S]*Project:[\s\S]*1\. fake\/healthy/u);
-      assert.deepEqual(readFileSync(globalPath), globalBytes);
-      assert.deepEqual(JSON.parse(readFileSync(projectPath, "utf8")).models, { quick: ["fake/healthy"] });
-      assert.deepEqual(JSON.parse(readFileSync(ownershipPath, "utf8")), {
-        version: 2, scope: "project", tiers: { quick: { state: "generated", models: ["fake/healthy"] } },
-      });
-      assert.deepEqual(loadConfigForReload(env.work, ROOT).config.models?.quick, ["fake/healthy"]);
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
+  }
+  registerInteractiveConfirmationTests();
 
   for (const mode of ["interactive", "write"]) {
     for (const inherited of ["different", "identical"]) {
