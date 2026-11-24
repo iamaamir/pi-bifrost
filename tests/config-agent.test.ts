@@ -751,8 +751,8 @@ describe("provider sign-in state", () => {
       assert.equal(harness.probeCalls().length, 0);
       assert.match(declined.notes.join("\n"), /Live probe was declined; nothing was sent\./);
       const [question] = harness.probeConfirmations();
-      assert.match(question?.message ?? "", /one primary probe per target, without session fallback, for 2 model\(s\): alpha\/strong, beta\/code/);
-      assert.ok(question?.message.includes(PROBE_RESOURCE_DISCLOSURE));
+      assert.match(question?.message ?? "", /one primary probe per model, with no session fallback, for 2 model\(s\): alpha\/strong, beta\/code/);
+      assert.ok(question?.message.includes(PROBE_RESOURCE_DISCLOSURE), "the dialog carries the cost disclosure");
     } finally {
       harness.cleanup();
     }
@@ -790,7 +790,8 @@ describe("provider sign-in state", () => {
       }));
       assert.deepEqual(delegated.probeCalls(), [["alpha/strong"]]);
       assert.match(ran.notes.join("\n"), /delegated consent: this host has no approval dialog/);
-      assert.ok(ran.notes.join("\n").includes(PROBE_RESOURCE_DISCLOSURE));
+      assert.equal(ran.notes.join("\n").includes(PROBE_RESOURCE_DISCLOSURE), false,
+        "the report carries the disclosure once, not once per note");
     } finally {
       delegated.cleanup();
     }
@@ -811,7 +812,8 @@ describe("provider sign-in state", () => {
       const details = detailsOf<ConfigAgentCheckResult>(checked);
       assert.deepEqual(approved.probeCalls(), [["alpha/strong"]]);
       assert.match(details.notes.join("\n"), /ran with dialog approval/);
-      assert.ok(details.notes.join("\n").includes(PROBE_RESOURCE_DISCLOSURE));
+      assert.equal(details.notes.join("\n").includes(PROBE_RESOURCE_DISCLOSURE), false,
+        "the report carries the disclosure once, not once per note");
       const applied = detailsOf<ConfigAgentApplyResult>(await approved.run({
         ...applyParams(details, { candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } } }),
         probe: true,
@@ -869,7 +871,7 @@ describe("provider sign-in state", () => {
     try {
       assert.match(PROBE_RESOURCE_DISCLOSURE, new RegExp(`Requests ${PROBE_MAX_TOKENS} output tokens`));
       assert.match(PROBE_RESOURCE_DISCLOSURE, /may raise or omit this limit/);
-      assert.match(PROBE_RESOURCE_DISCLOSURE, /may send additional requests/);
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /transport may retry, so more than one request can be sent/);
       assert.match(PROBE_RESOURCE_DISCLOSURE, /Charges may apply/);
       assert.ok(JSON.stringify(harness.tool.parameters).includes(PROBE_RESOURCE_DISCLOSURE));
       const checked = await harness.run({
@@ -878,6 +880,28 @@ describe("provider sign-in state", () => {
       });
       assert.ok(contentOf(checked).includes(PROBE_RESOURCE_DISCLOSURE));
       assert.equal(harness.probeCalls().length, 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("states the resource disclosure once in a probed report", async () => {
+    // The consent dialog already shows the cost. Repeating it in the approval
+    // note and again in the report tail would say the same thing twice, so the
+    // notes stay terse and the report carries the single disclosure line.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: true,
+    });
+    try {
+      const checked = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      });
+      const occurrences = contentOf(checked).split(PROBE_RESOURCE_DISCLOSURE).length - 1;
+      assert.equal(occurrences, 1, "the report states the disclosure exactly once");
     } finally {
       harness.cleanup();
     }

@@ -73,8 +73,10 @@ goal needs something Bifrost does not do, say so.
    a tier really answers before you apply it, the check can run a live probe:
    one primary probe per model the candidate can select, without session
    fallback. Show the requested token budget and resource caveats from the
-   check report: the host may raise or omit the limit, native transport may
-   send additional requests, and charges may apply. Plain check never probes;
+   check report: the host may raise or omit the limit, transport may retry,
+   and charges may apply. When the host shows its own confirmation dialog, do
+   not repeat those caveats in conversation; state the plan in one line.
+   Plain check never probes;
    it reports `probePlan` with the exact
    models and count a probe would cover, plus `probeSkipped` for models the
    host leaves out of this session. Show that plan to the user, and only

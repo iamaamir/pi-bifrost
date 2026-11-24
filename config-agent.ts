@@ -966,7 +966,7 @@ function probeConsentText(models: readonly string[]): string {
   // Every model the request will reach is named. A count plus a truncated
   // prefix asks the user to approve targets they cannot see, and the plan is
   // exactly what the caller was told to show.
-  return `Run one primary probe per target, without session fallback, for ${models.length} model(s): ${models.join(", ")}. ${PROBE_RESOURCE_DISCLOSURE} A result describes this provider now; a pass is not a promise for later.`;
+  return `Run one primary probe per model, with no session fallback, for ${models.length} model(s): ${models.join(", ")}. ${PROBE_RESOURCE_DISCLOSURE} A result describes this provider now; a pass is not a promise for later.`;
 }
 
 /** How a live probe was authorized. */
@@ -1050,8 +1050,8 @@ async function applyLiveProbe(
     notes: [...result.notes, cancelled
       ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
       : consent === "ui"
-        ? `Live probe ran with dialog approval: ${models.length} model(s) targeted, no session fallback. ${PROBE_RESOURCE_DISCLOSURE}`
-        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} model(s) targeted, no session fallback. ${PROBE_RESOURCE_DISCLOSURE}`,
+        ? `Live probe ran with dialog approval: ${models.length} model(s), no session fallback.`
+        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} model(s), no session fallback.`,
     ...(plan.skipped.length > 0
       ? [`${plan.skipped.length} model(s) were not probed because their provider's sign-in does not resolve for this session; skipped is not a probe failure.`]
       : [])],
