@@ -27,6 +27,12 @@ function withCwd<T>(run: (directory: string) => Promise<T>): Promise<T> {
   });
 }
 
+function inheritedExpiryPool(scenario: string): string[] {
+  if (scenario === "inherited override") return ["openai/old-model"];
+  if (scenario === "reorder only") return ["openai/second", "openai/first"];
+  return ["openai/first"];
+}
+
 function noChangeConfig(): Buffer {
   return Buffer.from(JSON.stringify({
     ...BUNDLED_PUBLIC_INIT_DEFAULTS,
@@ -284,6 +290,32 @@ function registerInitialConfigCases3() {
 }
 
 describe("config reconciliation command router", () => {
+  it("revalidates ownership changed during live probe", async () => {
+    for (const replacement of ['{', JSON.stringify(buildInitOwnershipReceipt("user", {})), JSON.stringify({ version: 1, sources: {} }), JSON.stringify(buildInitOwnershipReceipt("project", {}))]) {
+      await withCwd(async (cwd) => {
+        const dir = join(cwd, ".pi");
+        fs.mkdirSync(dir, { recursive: true });
+        const configPath = join(dir, "bifrost.json");
+        const receiptPath = join(dir, "bifrost-reconcile-ownership.json");
+        const config = Buffer.from("{}\n");
+        fs.writeFileSync(configPath, config);
+        fs.writeFileSync(receiptPath, JSON.stringify(buildInitOwnershipReceipt("project", {})));
+        const h = makeHarness({});
+        Object.assign(h.registry, { streamSimple: () => ({ result: async () => {
+          fs.writeFileSync(receiptPath, replacement);
+          return { role: "assistant", content: [{ type: "text", text: "2" }], stopReason: "stop", usage: { totalTokens: 2 } };
+        } }) });
+        await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+        if (replacement === "{" || replacement.includes('"scope":"user"')) {
+          assert.deepEqual(fs.readFileSync(configPath), config);
+          assert.equal(fs.readFileSync(receiptPath, "utf8"), replacement);
+        } else {
+          assert.notDeepEqual(fs.readFileSync(configPath), config);
+        }
+      });
+    }
+  });
+
   it("is listed in command options and previews offline, then applies only the exact reviewed source proposal", async () => {
     assert.ok(BIFROST_COMMAND_OPTIONS.some((item) => item.value === "config reconcile"));
     await withCwd(async (cwd) => {
@@ -778,8 +810,7 @@ describe("config reconciliation command router", () => {
           Date.now = () => now;
           const agentDir = process.env.PI_CODING_AGENT_DIR!;
           fs.mkdirSync(agentDir, { recursive: true });
-          const inherited = scenario === "inherited override" ? ["openai/old-model"]
-            : scenario === "reorder only" ? ["openai/second", "openai/first"] : ["openai/first"];
+          const inherited = inheritedExpiryPool(scenario);
           fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ default: "general", models: { general: inherited } }));
           const dir = join(cwd, ".pi");
           fs.mkdirSync(dir, { recursive: true });

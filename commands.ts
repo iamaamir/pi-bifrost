@@ -1729,6 +1729,14 @@ function initReviewSettingLines(key: string, value: unknown): string[] {
   return [`    ${key}:`, ...serialized.map((line) => `      ${line}`)];
 }
 
+function validatedInitOwnership(source: ReconciliationSourceSnapshot): ReturnType<typeof parseOwnershipSnapshot> | undefined {
+  if (source.ownershipBytes === null) return undefined;
+  assertOwnershipPayload(source.ownershipBytes);
+  const receipt = parseOwnershipSnapshot(JSON.parse(Buffer.from(source.ownershipBytes).toString("utf8")));
+  if (receipt && receipt.scope !== source.source) throw new Error("invalid target ownership scope");
+  return receipt;
+}
+
 function validateInitSources(selectedSource: ReconciliationConfigSource): void {
   const preflight = readReconciliationSource(selectedSource);
   if (preflight.configBytes !== null) {
@@ -1744,11 +1752,7 @@ function validateInitSources(selectedSource: ReconciliationConfigSource): void {
       }
     }
   }
-  if (preflight.ownershipBytes !== null) {
-    assertOwnershipPayload(preflight.ownershipBytes);
-    const receipt = parseOwnershipSnapshot(JSON.parse(Buffer.from(preflight.ownershipBytes).toString("utf8")));
-    if (receipt && receipt.scope !== selectedSource) throw new Error("invalid target ownership scope");
-  }
+  validatedInitOwnership(preflight);
   if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
 }
 
@@ -2452,9 +2456,13 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ? (sourceConfig.models as Record<string, unknown>)
       : {};
   const hasConfiguredTiers = Object.keys(sourceModels).length > 0;
-  const ownership = source.ownershipBytes === null
-    ? undefined
-    : parseOwnershipSnapshot(JSON.parse(Buffer.from(source.ownershipBytes).toString("utf8")));
+  let ownership: ReturnType<typeof parseOwnershipSnapshot> | undefined;
+  try {
+    ownership = validatedInitOwnership(source);
+  } catch {
+    reportInitOutcome(ctx, "blocked", "Nothing was saved; the ownership receipt could not be read safely.", "Fix the ownership receipt, then retry.", "error");
+    return;
+  }
   const hasDeletedTierIntent = ownership?.scope === source.source
     && Object.keys(ownership.tiers).some((tier) => !(tier in sourceModels));
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
