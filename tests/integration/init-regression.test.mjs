@@ -912,6 +912,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
           const result = await runInit({ ...env, args: "--write" });
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
+          assert.deepEqual(requests.toSorted(), ["credits-exhausted", "healthy"], `run ${run}: restart must reuse probe cache`);
           assert.deepEqual(readFileSync(configPath), original, "ownership-only init must preserve exact config bytes");
           assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).models, models);
           assert.deepEqual(JSON.parse(readFileSync(receiptPath, "utf8")).tiers.quick,
