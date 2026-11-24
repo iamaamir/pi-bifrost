@@ -28,7 +28,7 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 
 Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
 
-An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. Text that clearly says a subscription is required or expired also means billing was denied, including a matching HTTP 403 response. A generic HTTP 403 does not prove a billing denial. These results describe the failed request; the account balance stays with the provider. By default, they pause every model with the same configured Pi provider ID. This rule applies to Auto and physical routing.
+An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. Text that clearly says a subscription is required or expired also means billing was denied, including a matching HTTP 403 response. A generic HTTP 403 does not prove a billing denial. These results describe the failed request; the account balance stays with the provider. By default, they pause every model with the same configured Pi provider ID. Bifrost groups by that ID; billing-account identity stays outside Bifrost. This rule applies to Auto and physical routing.
 
 Set `reliability.allowanceCooldownScope` to `model` to limit usage and billing pauses to the reported model.
 
@@ -64,7 +64,7 @@ Set `reliability.enabled: false` to stop reliability checks and provider pause e
 
 ## Provider pauses are not account checks
 
-A provider pause groups models by the provider ID in Pi configuration and uses request errors Pi already recorded. Treat it as a routing signal, not authoritative quota data.
+A provider pause groups models by the provider ID in Pi configuration and uses request errors Pi already recorded. Bifrost does not fetch live usage limits. Treat the pause as a routing signal, not authoritative quota data.
 
 Current safeguards for quota-sensitive models:
 
@@ -149,7 +149,7 @@ The event stream can show request reason, selection or no-route, reliability adm
 
 The default file is `.pi/bifrost-debug.jsonl` under the current working directory. A configured relative path is resolved from that directory, and an absolute path is used as given. For a leading `~`, Bifrost substitutes the value of `HOME` (or `/tmp` when `HOME` is unset) and appends the rest of the path as written; it does not perform shell-style `~user` expansion. `/bifrost debug` prints the resolved `debugLog` path and its rotation target, rendering control characters in a configured path as escapes instead of writing them to the terminal. Debug logging is off by default.
 
-Bifrost keeps the current log and one rotated `.old.jsonl` file; the next rotation replaces the previous one. Close the session normally to flush buffered events; an abrupt termination can lose them. Review the file before sharing it, because other enabled diagnostics may add detail.
+Bifrost creates a new log file with mode `0600`; an existing file keeps its permissions. It rotates when the file is already larger than 10 MiB, keeps the current log and one rotated `.old.jsonl` file, and replaces the previous rotation on the next one. Close the session normally to flush buffered events; an abrupt termination can lose them. Review the file before sharing it, because other enabled diagnostics may add detail.
 
 For a useful capture, enable debug before starting a fresh Pi process, note the Pi version and start time, reproduce one issue, then close the session normally so the bounded flush runs. Keep the matching Pi transcript and relevant provider/tool outcome separately; do not include prompts, responses, credentials, or raw provider errors when sharing logs.
 

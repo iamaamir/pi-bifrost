@@ -54,11 +54,11 @@ By default, an unavailable or unhealthy tier can still fall back to the configur
 
 For `frontier`, Bifrost tries `frontier`, then `general`, then `quick`; it stops at the first tier with an eligible model. The empty list makes `quick` a singleton boundary. A tier without a `tierPolicies` entry keeps the legacy default-tier fallback, including when `schemaVersion` is `2`. Version 2 alone preserves legacy fallback. References must name configured tiers, and duplicate, self, or cyclic fallback references are rejected. Invalid version-2 policy configuration blocks physical and Auto routing until corrected. Startup checks each source before merging. An invalid source, unsupported version, or invalid strict policy stops routing and preview classification. A higher layer cannot hide the invalid source. Reload keeps the last valid configuration and session-local pin if a source fails these checks. Fix that source and reload to resume.
 
-Bifrost reads configuration from regular files and rejects an oversized source instead of truncating it.
+Configuration sources must be regular files of at most 10,000,000 bytes. Read-only symlinks to regular files work. Bifrost rejects an oversized source instead of truncating it.
 
 ### Structural contract and inline descriptions
 
-The `schema.json` shipped with Bifrost is the structural contract: it defines supported fields, types, allowed values, and constraints. Bifrost validates every configuration source on load, reload, and prospective apply. Diagnostics name the offending path. A source with an unsupported `schemaVersion` or an invalid reserved `description` key stops routing until it is fixed. Other structural findings load as warnings; semantic validators decide the safe outcome for their namespace. Cross-field rules — tier references, fallback cycles, classifier constraints, economic and reliability invariants — run on the merged effective policy.
+The `schema.json` shipped with Bifrost is the structural contract: it defines supported fields, types, allowed values, and constraints. Bifrost validates every configuration source on load, reload, and prospective apply. A source nested more than 128 levels is rejected before validation. Unknown fields, invalid enum values, and wrong types are reported with the offending path, so no key becomes active silently. A source with an unsupported `schemaVersion` or an invalid reserved `description` key stops routing until it is fixed. Other structural findings load as warnings; semantic validators decide the safe outcome for their namespace. Cross-field rules — tier references, fallback cycles, classifier constraints, economic and reliability invariants — run on the merged effective policy.
 
 You can annotate any object-valued section with an optional `description` string. Descriptions are metadata for readers; routing ignores them. Bifrost strips them at the load boundary and preserves them in the files you author. The same structural findings appear in `/bifrost validate` and its JSON output, as warnings alongside the semantic ones.
 
@@ -127,7 +127,7 @@ A configured tier can name a provider whose stored credential has stopped workin
 
 ### Economic observations and billing preference (schema version 2)
 
-The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`, so billing facts stay under your control. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.
+The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`; Bifrost reads these facts from config and leaves provider billing APIs outside the route. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.
 
 `mode: "policy"` applies configured reserve rules before strategy selection. Each rule sets `unknown` to `block` or `ignore`, which controls candidates without a fresh allowance fact. A policy-mode no-route is handled by physical routing and does not fall through to Auto's last dispatched model. Manual pin and off controls remain in charge. Existing tool continuations and retries keep Pi's established model.
 
@@ -286,7 +286,7 @@ Full configuration file, `.pi/bifrost.json`:
 
 ## Usage and rate-limit pauses
 
-`reliability.allowanceCooldownScope` defaults to `provider`, so a usage or billing rejection pauses every model with the same Pi provider ID. Set it to `model` to pause only the reported model. Generic HTTP 429 rate limits remain provider-scoped.
+`reliability.allowanceCooldownScope` defaults to `provider`, so a usage or billing rejection pauses every model with the same Pi provider ID. Bifrost groups by that ID; billing-account identity stays outside Bifrost. Set it to `model` to pause only the reported model. Generic HTTP 429 rate limits remain provider-scoped.
 
 `reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. Set `reliability.retryOnAllowanceExhausted` to `true` to opt in to the one bounded Auto retry while keeping the pause. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) for the boundary, status, and reset commands.
 

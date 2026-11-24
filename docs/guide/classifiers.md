@@ -64,7 +64,7 @@ Jev judges the prompt against those criteria. Bifrost's provider model pool stay
 
 Confidence measures how concentrated Jev's returned distribution is. It is not a correctness guarantee. Exploratory Pi-Bifrost evaluation found stable judgments for clear, bounded prompts, but current criteria also produced high-confidence under-routing for some mechanically small, high-consequence tasks. Treat tier criteria as versioned policy: keep fallback enabled, pin the evaluated Jev version, and test criteria against representative locked cases before relying on thresholds.
 
-TypeSafe/Jev uses a fixed hosted endpoint. Choose a different backend for local or OpenRouter-compatible classification.
+TypeSafe/Jev uses a fixed hosted endpoint. For a local, self-hosted, or OpenRouter-compatible OpenAI endpoint, use the prompt backend with `classifier.endpoint` and set `classifier.model` to that endpoint's model ID.
 
 Choose TypeSafe in Pi:
 
@@ -155,7 +155,7 @@ TypeSafe transport is pinned to its supported model and official endpoint, so re
 
 `test` makes a fresh request. `status` shows the active backend, model, fallback, and safe metrics without exposing keys. The direct TypeSafe backend also shows the credential source. Pi-native shows the catalog model or the configured `classifier.piNative.model`.
 
-Low confidence, missing credentials, network failure, timeout, invalid response, rate limit, or open classifier circuit follows configured fallback. Classifier fallback stays within classification; the user turn runs once. The separate bounded generation recovery for explicit allowance failures is documented in [reliability](reliability-and-cache.md#reliability-circuits).
+Low confidence, missing credentials, network failure, timeout, invalid response, rate limit, or open classifier circuit follows configured fallback. Classifier fallback stays within classification and does not replay the user prompt. The separate bounded generation recovery for explicit allowance failures is documented in [reliability](reliability-and-cache.md#reliability-circuits).
 
 When a direct classifier misses during normal routing, Bifrost warns once for that classifier state and names the fallback that actually produced the tier. If its model-only circuit opens, the warning includes the local cooldown expiry. Repeated requests during the same open circuit stay quiet; a successful classifier call after recovery clears the notice and reports recovery. If no tier is selected, the warning says so. These notices leave routing unchanged and add no classifier calls.
 
