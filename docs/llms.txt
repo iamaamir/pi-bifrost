@@ -8,9 +8,14 @@
 - Source and README: https://github.com/iamaamir/pi-bifrost
 - Guide: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md
 - Installation: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md
+- Auto routing: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/auto-routing.md
 - Routing controls: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md
+- Configuration: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md
+- Commands: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/commands.md
+- Common workflows: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/workflows.md
 - Classifier backends: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/classifiers.md
 - Prompt caching: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/prompt-caching.md
+- Reliability and local cache: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md
 - Troubleshooting: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/troubleshooting.md
 - npm: https://www.npmjs.com/package/pi-bifrost
 
