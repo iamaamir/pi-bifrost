@@ -1964,7 +1964,7 @@ async function probeInitModels(
     duration_ms: number;
   }[] = [];
   let probeLoaded = false;
-  let ranProbe = false;
+  let ranProbe: number | undefined;
   let probeAge = "";
   const authFailedProbeProviders = new Set<string>();
 
@@ -1988,7 +1988,6 @@ async function probeInitModels(
   }
 
   if (!probeLoaded) {
-    ranProbe = true;
     const availableCount = available.length;
     log(ctx, `Probing ${availableCount} models to find working ones...`);
     let okCount = 0;
@@ -2026,6 +2025,7 @@ async function probeInitModels(
       );
       return undefined;
     }
+    ranProbe = Date.now();
     const { results } = probeRun;
     for (const result of results) {
       if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
@@ -2145,13 +2145,13 @@ function buildInitInventories(
 }
 
 function initRefreshRemainsCurrent(
-  ranProbe: boolean,
+  ranProbe: number | undefined,
   initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
   ctx: ExtensionContext,
   state: BifrostState,
 ): boolean {
   let refreshRemainsCurrent = false;
-  if (ranProbe && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
+  if (ranProbe !== undefined && Date.now() >= ranProbe && Date.now() - ranProbe < REGISTRY_REFRESH_TTL_MS && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
     try {
       const currentKeys = ctx.modelRegistry
         .getAll()
@@ -2828,6 +2828,12 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       changes = plan.changes;
     }
   } else {
+    inventoryStillSafe = () => [...inheritedEffective].every(([tier, inherited]) => {
+      const generated = models[tier];
+      return !generated || JSON.stringify(generated) === JSON.stringify(inherited.pool) ||
+        initPoolHasCompleteInventory(inherited.pool, available, state, ctx,
+          initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), authFailedProbeProviders, initRefreshReceipt);
+    });
     if (source.ownershipBytes !== null) {
       reportInitOutcome(
         ctx,

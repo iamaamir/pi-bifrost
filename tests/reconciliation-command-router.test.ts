@@ -10,6 +10,7 @@ import { loadConfigForReload, loadRules } from "../config-load.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_RULES } from "../config.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { makeModel } from "./helpers.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "../registry-refresh.ts";
 
 function withCwd<T>(run: (directory: string) => Promise<T>): Promise<T> {
   const prior = process.cwd();
@@ -707,6 +708,93 @@ describe("config reconciliation command router", () => {
       assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
       assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["missing-provider/old-model"]);
     });
+  });
+
+  it("rechecks cached-probe inventory TTL after confirmation with a fault control", async () => {
+    const source = fs.readFileSync(new URL("../commands.ts", import.meta.url), "utf8");
+    const guard = "    !inventoryStillSafe() ||";
+    assert.equal(source.split(guard).length - 1, 1);
+    const scratch = createCommandSourceCopy("ttl-control");
+    const originalNow = Date.now;
+    const run = async (router: typeof createCommandRouter) => withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ default: "general", models: { general: ["openai/old-model"] } }));
+      const dir = join(cwd, ".pi");
+      fs.mkdirSync(dir, { recursive: true });
+      const configPath = join(dir, "bifrost.json");
+      const before = Buffer.from("{}\n");
+      fs.writeFileSync(configPath, before);
+      writeRecentProbeCache(join(dir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      let now = originalNow();
+      Date.now = () => now;
+      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+      const ctx = h.ctx as unknown as { hasUI: boolean; ui: { confirm: () => Promise<boolean>; notify: () => void } };
+      ctx.hasUI = true;
+      let confirmations = 0;
+      ctx.ui = { confirm: async () => { confirmations++; now += REGISTRY_REFRESH_TTL_MS; return true; }, notify: () => {} };
+      await captureStderr(() => router(h.state)("init", h.ctx));
+      assert.equal(confirmations, 1);
+      return fs.readFileSync(configPath).equals(before);
+    });
+    try {
+      fs.writeFileSync(scratch.target, source.replace(guard, ""));
+      const mutant = await loadCommandRouterCopy(scratch.target, "ttl-mutant");
+      assert.equal(await run(mutant), false, "fault must allow expired inventory to save");
+      Date.now = originalNow;
+      assert.equal(await run(createCommandRouter), true, "expired inventory must not save");
+    } finally {
+      Date.now = originalNow;
+      fs.rmSync(scratch.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds live-probe receipt after completion while allowing a long probe", async () => {
+    const source = fs.readFileSync(new URL("../commands.ts", import.meta.url), "utf8");
+    const guard = "    !inventoryStillSafe() ||";
+    const scratch = createCommandSourceCopy("live-ttl-control");
+    const originalNow = Date.now;
+    const run = async (router: typeof createCommandRouter, expireReview: boolean) => withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ default: "general", models: { general: ["openai/old-model"] } }));
+      const dir = join(cwd, ".pi");
+      fs.mkdirSync(dir, { recursive: true });
+      const configPath = join(dir, "bifrost.json");
+      const before = Buffer.from("{}\n");
+      fs.writeFileSync(configPath, before);
+      let now = originalNow();
+      Date.now = () => now;
+      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+      Object.assign(h.registry, { streamSimple: () => ({ result: async () => {
+        now += REGISTRY_REFRESH_TTL_MS;
+        return { role: "assistant", content: [{ type: "text", text: "2" }], stopReason: "stop", usage: { totalTokens: 2 } };
+      } }) });
+      const ctx = h.ctx as unknown as { hasUI: boolean; ui: { confirm: () => Promise<boolean>; notify: () => void; setWidget: () => void; setStatus: () => void } };
+      ctx.hasUI = true;
+      let confirmations = 0;
+      ctx.ui = { confirm: async () => { confirmations++; if (expireReview) now += REGISTRY_REFRESH_TTL_MS; return true; }, notify: () => {}, setWidget: () => {}, setStatus: () => {} };
+      const output = await captureStderr(() => router(h.state)("init", h.ctx));
+      assert.equal(confirmations, 1, output.join("\n"));
+      const unchanged = fs.readFileSync(configPath).equals(before);
+      if (unchanged) assert.equal(fs.existsSync(join(dir, "bifrost-reconcile-ownership.json")), false);
+      return unchanged;
+    });
+    try {
+      assert.equal(source.split(guard).length - 1, 1);
+      fs.writeFileSync(scratch.target, source.replace(guard, ""));
+      const mutant = await loadCommandRouterCopy(scratch.target, "live-ttl-mutant");
+      assert.equal(await run(mutant, true), false, "fault must save after review expiry");
+      Date.now = originalNow;
+      assert.equal(await run(createCommandRouter, true), true, "expired review must not write");
+      Date.now = originalNow;
+      assert.equal(await run(createCommandRouter, false), false, "long probe remains eligible");
+    } finally {
+      Date.now = originalNow;
+      fs.rmSync(scratch.directory, { recursive: true, force: true });
+    }
   });
 
   it("lets interactive fresh init confirm a differing inherited pool override", async () => {
