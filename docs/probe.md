@@ -13,7 +13,7 @@ The probe sends a minimal prompt (`1+1=`) to every available model in the regist
 3. **Probing Process (`probeOne`)**:
    - **Authentication**: Retrieves provider and authentication details for the model.
    - **Primary Attempt**: Uses `provider.streamSimple()` (a stream request without a session) for a lightweight check.
-     - Constraints: `maxTokens` of 5, the probe timeout, and `cacheRetention: "none"`. The probe does not set `temperature`.
+     - Constraints: a requested `maxTokens` of 5 (a budget, not an enforced cap: the host may raise or omit it), the probe timeout, and `cacheRetention: "none"`. The probe does not set `temperature`.
    - **Fallback Attempt**: If the primary attempt returns no text, the probe attempts one `promptWithMinimalSession()` call (full session transport). A stream error does not start the fallback. It reports `status: "error"`.
 4. **Result Recording**: For each model, the following metrics are captured:
    - `status`: `ok`, `error`, `timeout`, or `skipped`.

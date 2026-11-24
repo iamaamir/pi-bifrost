@@ -349,7 +349,7 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       // The opt-in probe ran on real Pi against the local fixture: one request
       // for the one routed model, reported as answered, and kept out of the
       // init cache that `/bifrost init` reuses for an hour.
-      assert.match(lastCheckReport ?? "", /live probe \(one tiny prompt per model\): 1\/1 answered/);
+      assert.match(lastCheckReport ?? "", /live probe \(one primary probe per model\): 1\/1 answered/);
       assert.equal(probeRequests, 1, "the check must send exactly one probe request");
       assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false,
         "a candidate probe must not replace the init cache");

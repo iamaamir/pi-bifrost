@@ -194,7 +194,7 @@ On first use, Bifrost loads provisional pools from Pi's available chat-model cat
 /bifrost debug
 ```
 
-Probe sends `1+1=` to every model available in Pi's registry. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
+Probe sends `1+1=` to every model available in Pi's registry. The primary transport requests 5 output tokens -- a requested budget, not an enforced cap, since the host may raise or omit it and native transport may send additional requests. An empty response may trigger one minimal-session fallback. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
 
 ## Persistence summary
 

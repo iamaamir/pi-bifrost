@@ -98,7 +98,7 @@ Bifrost does not ship maintainer-specific provider/model IDs as routing defaults
 
 ### Probe usage warning
 
-When you run `/bifrost init` without recent probe results, run `/bifrost init -f`, or run `/bifrost probe`, Bifrost sends `1+1=` to available chat models. The primary transport caps output at 5 tokens. An empty response can trigger one minimal-session fallback request. Manual probes default to concurrency 50. First-use background probes default to concurrency 3. The default timeout is 10 seconds per model. The `probe.concurrency` and `probe.timeoutMs` settings apply to both paths. Requests can use provider credits or trigger rate limits.
+When you run `/bifrost init` without recent probe results, run `/bifrost init -f`, or run `/bifrost probe`, Bifrost sends `1+1=` to available chat models. The primary transport requests 5 output tokens -- a requested budget, not an enforced cap, because the host may raise or omit it and native transport may send additional requests. An empty response can trigger one minimal-session fallback request. Manual probes default to concurrency 50. First-use background probes default to concurrency 3. The default timeout is 10 seconds per model. The `probe.concurrency` and `probe.timeoutMs` settings apply to both paths. Requests can use provider credits or trigger rate limits.
 
 For tight provider limits, add probe settings to your existing configuration before running `/bifrost probe` or `/bifrost init`. The first-use background check also uses these settings.
 
