@@ -2495,10 +2495,15 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const keepSignature = planSignature(keepPlan);
     const actionHasCompleteRemovalInventory = (candidate: (typeof keepPlan)) =>
       candidate.tiers.every(({ tier, before, after }) => {
-        const retained = new Set(after ?? []);
         const inherited = inheritedEffective.get(tier)?.pool;
-        const changedInherited = inherited !== undefined && JSON.stringify(after) !== JSON.stringify(inherited);
-        const affected = changedInherited ? inherited : (before ?? []).filter((model) => !retained.has(model));
+        const effectiveBefore = before ?? inherited ?? [];
+        const effectiveAfter = after ?? inherited ?? [];
+        const removed = [...effectiveBefore.filter((model) => !effectiveAfter.includes(model)),
+          ...(before ?? []).filter((model) => !(after ?? []).includes(model))];
+        const newlyShadowed = before === undefined && after !== undefined && inherited !== undefined
+          && JSON.stringify(after) !== JSON.stringify(inherited) ? inherited : [];
+        const changedPool = JSON.stringify(effectiveBefore) !== JSON.stringify(effectiveAfter) ? effectiveBefore : [];
+        const affected = [...removed, ...newlyShadowed, ...changedPool];
         return affected.every((model) =>
           inventories.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
       });

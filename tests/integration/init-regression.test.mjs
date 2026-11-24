@@ -663,6 +663,21 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
     }
   }
 
+  it("keeps an unchanged local pool despite an unknown shadowed inherited pool", async () => {
+    const env = fixture(port, ["healthy"]);
+    const projectPath = join(env.work, ".pi", "bifrost.json");
+    const original = Buffer.from(JSON.stringify({ default: "quick", classifier: { enabled: false }, models: { quick: ["manual/local"] } }));
+    writeFileSync(projectPath, original);
+    writeFileSync(join(env.home, ".pi", "agent", "bifrost.json"), JSON.stringify({ models: { quick: ["unknown/inherited"] } }));
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.doesNotMatch(result.stdout + result.stderr, /no model update is safe/);
+      assert.deepEqual(JSON.parse(readFileSync(projectPath, "utf8")).models.quick, ["manual/local"]);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   for (const action of ["keep", "defaults"]) {
     it(`deleted intent ${action} preview matches saved config`, async () => {
       requests = [];
