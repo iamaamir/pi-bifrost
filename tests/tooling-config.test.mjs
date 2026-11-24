@@ -313,6 +313,9 @@ test("the Knip scope audit reports dead globs, undeclared ignores, and stale exc
   "a stale exception must be removed, not left behind");
   assert.equal(problemsFor((copy) => { copy.ignoreBinaries = ["hyperfine", "stryker"]; return copy; })
     .includes("documented ignoreBinaries exception bun is not configured"), true);
+  assert.equal(problemsFor((copy) => { copy.ignoreBinaries = copy.ignoreBinaries.filter((name) => name !== "vale"); return copy; })
+    .includes("documented ignoreBinaries exception vale is not configured"), true,
+  "the Vale exception must stay narrow and declared");
 });
 
 test("Renovate pins action digests and requires approval for major upgrades", () => {

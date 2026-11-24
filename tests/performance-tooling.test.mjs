@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -228,8 +228,8 @@ const CI_EQUIVALENTS = {
     evidence: /semgrep scan --config semgrep\//u,
   },
   "check:docs-style": {
-    why: "static-analysis.yml runs pinned Vale directly in report-only mode so style findings do not fail the job",
-    evidence: /vale --config=\.vale\.ini --output=line docs\/guide/u,
+    why: "static-analysis.yml runs the pinned Vale report helper so style findings do not fail the job",
+    evidence: /bash scripts\/vale-report\.sh/u,
   },
   "check:secrets": {
     why: "static-analysis.yml runs the Gitleaks action and the pull-request history scanner with .gitleaks.toml",
@@ -347,6 +347,66 @@ test("fault control: the gate inventory reports an unregistered gate, stale evid
   );
   assert.equal(executableYaml('  - run: echo "# npm run check:ast"\n').includes("npm run check:ast"), true,
     "a quoted # must not truncate the command");
+});
+
+function runValeReport(status) {
+  const directory = mkdtempSync(join(tmpdir(), "bifrost-vale-report-"));
+  const bin = join(directory, "bin");
+  mkdirSync(bin);
+  const summary = join(directory, "summary.md");
+  const fake = status === 0
+    ? "#!/usr/bin/env bash\nexit 0\n"
+    : `#!/usr/bin/env bash
+for i in $(seq 1 205); do echo "warning $i"; done
+exit ${status}
+`;
+  const executable = join(bin, "vale");
+  writeFileSync(executable, fake);
+  chmodSync(executable, 0o755);
+  const result = spawnSync("bash", [join(root, "scripts", "vale-report.sh")], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_STEP_SUMMARY: summary },
+  });
+  return { directory, result, summary: readFileSync(summary, "utf8") };
+}
+
+test("Vale report keeps findings advisory, publishes all of them, and fails runtime errors", () => {
+  const clean = runValeReport(0);
+  try {
+    assert.equal(clean.result.status, 0, clean.result.stderr);
+    assert.match(clean.summary, /Findings: 0/u);
+  } finally {
+    rmSync(clean.directory, { recursive: true, force: true });
+  }
+
+  const findings = runValeReport(1);
+  try {
+    assert.equal(findings.result.status, 0, "exit 1 findings must not fail the job");
+    assert.match(findings.summary, /Findings: 205/u);
+    assert.match(findings.summary, /warning 205/u, "the summary must not truncate findings");
+    assert.match(findings.result.stdout, /warning 205/u, "the job log must keep the full report");
+  } finally {
+    rmSync(findings.directory, { recursive: true, force: true });
+  }
+
+  const failure = runValeReport(2);
+  try {
+    assert.equal(failure.result.status, 2, "a Vale runtime error must fail the job");
+    assert.match(failure.summary, /Vale failed with exit status 2/u);
+    assert.match(failure.result.stderr, /Vale failed with exit status 2/u);
+  } finally {
+    rmSync(failure.directory, { recursive: true, force: true });
+  }
+});
+
+test("Vale packages are pinned and the CI job runs the tested report helper", () => {
+  const config = readFileSync(join(root, ".vale.ini"), "utf8");
+  assert.match(config, /github\.com\/vale-cli\/Google\/releases\/download\/v0\.7\.2\/Google\.zip/u);
+  assert.match(config, /github\.com\/vale-cli\/Microsoft\/releases\/download\/v0\.14\.2\/Microsoft\.zip/u);
+  assert.match(workflowSources, /^\s*- name: Sync Vale style packages\n\s*run: vale sync$/mu);
+  assert.match(workflowSources, /^\s*- name: Vale \(report-only\)\n\s*run: bash scripts\/vale-report\.sh$/mu);
+  assert.doesNotMatch(workflowSources, /head -200/u);
 });
 
 test("package scripts expose on-demand performance entry points", () => {

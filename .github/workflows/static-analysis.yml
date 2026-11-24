@@ -145,33 +145,7 @@ jobs:
       - name: Sync Vale style packages
         run: vale sync
       - name: Vale (report-only)
-        run: |
-          set -uo pipefail
-          findings_file="$RUNNER_TEMP/vale-findings.txt"
-          status=0
-          vale --config=.vale.ini --output=line docs/guide > "$findings_file" 2>&1 || status=$?
-          findings=0
-          if [ -s "$findings_file" ]; then findings="$(wc -l < "$findings_file" | tr -d ' ')"; fi
-          {
-            echo "## Vale (report-only)"
-            echo ""
-            echo "Findings: $findings"
-            if [ "$status" -gt 1 ]; then
-              echo ""
-              echo "Vale failed with exit status $status:"
-            fi
-            if [ "$findings" -gt 0 ] || [ "$status" -gt 1 ]; then
-              echo ""
-              echo '```text'
-              head -200 "$findings_file"
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$status" -gt 1 ]; then
-            cat "$findings_file"
-            exit "$status"
-          fi
-          echo "Vale reported $findings finding(s). Report-only; this job does not gate the PR."
+        run: bash scripts/vale-report.sh
 
   workflow-lint:
     runs-on: ubuntu-latest
