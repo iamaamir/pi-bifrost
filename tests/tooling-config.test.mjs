@@ -207,6 +207,7 @@ const KNIP_DEPENDENCY_EXCEPTIONS = {
 
 const KNIP_BINARY_EXCEPTIONS = {
   hyperfine: "optional host benchmark tool documented in docs/dev-tooling.md",
+  vale: "host prose linter installed by the docs-style CI job and documented in docs/dev-tooling.md",
   stryker: "binary provided by @stryker-mutator/core, which the mutation runner invokes",
   bun: "host test runner for the default mutation runner, documented in docs/mutation-testing.md",
 };
