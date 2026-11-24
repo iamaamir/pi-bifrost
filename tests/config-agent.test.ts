@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionSelectorComponent, initTheme, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import {
   BIFROST_CONFIG_TOOL_NAME,
   buildConfigAgentCatalog,
@@ -241,6 +241,19 @@ function detailsOf<T>(result: { details: unknown }): T {
 
 function contentOf(result: { content: readonly { type: string; text?: string }[] }): string {
   return result.content.map((part) => part.text ?? "").join("\n");
+}
+
+/**
+ * Rows the shipped consent dialog actually renders for a given title and body,
+ * measured with Pi's own dialog component rather than an estimate. Pi keeps the
+ * bottom of an overflowing dialog, so an over-budget body scrolls the title and
+ * the leading model ids off the top while the choice stays visible.
+ */
+function probeConsentDialogRows(title: string, message: string, width: number): number {
+  // Pi's components read the theme proxy, which throws until a theme is loaded.
+  initTheme("dark");
+  const dialog = new ExtensionSelectorComponent(`${title}\n${message}`, ["Yes", "No"], () => {}, () => {}, {});
+  return dialog.render(width).length;
 }
 
 function keysUnder(value: unknown, found = new Set<string>()): Set<string> {
@@ -751,7 +764,7 @@ describe("provider sign-in state", () => {
       assert.equal(harness.probeCalls().length, 0);
       assert.match(declined.notes.join("\n"), /Live probe was declined; nothing was sent\./);
       const [question] = harness.probeConfirmations();
-      assert.match(question?.message ?? "", /one primary probe per model, with no session fallback, for 2 model\(s\): alpha\/strong, beta\/code/);
+      assert.match(question?.message ?? "", /2 probes, one each, no fallback: alpha\/strong, beta\/code/);
       assert.ok(question?.message.includes(PROBE_RESOURCE_DISCLOSURE), "the dialog carries the cost disclosure");
     } finally {
       harness.cleanup();
@@ -869,10 +882,10 @@ describe("provider sign-in state", () => {
       available: [makeModel("alpha", "strong", 5, 15, 200_000)],
     });
     try {
-      assert.match(PROBE_RESOURCE_DISCLOSURE, new RegExp(`Requests ${PROBE_MAX_TOKENS} output tokens`));
-      assert.match(PROBE_RESOURCE_DISCLOSURE, /may raise or omit this limit/);
-      assert.match(PROBE_RESOURCE_DISCLOSURE, /transport may retry, so more than one request can be sent/);
-      assert.match(PROBE_RESOURCE_DISCLOSURE, /Charges may apply/);
+      assert.match(PROBE_RESOURCE_DISCLOSURE, new RegExp(`${PROBE_MAX_TOKENS} output tokens each`));
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /may raise\/omit/);
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /retries may add/);
+      assert.match(PROBE_RESOURCE_DISCLOSURE, /charges may apply/);
       assert.ok(JSON.stringify(harness.tool.parameters).includes(PROBE_RESOURCE_DISCLOSURE));
       const checked = await harness.run({
         operation: "check",
@@ -1404,6 +1417,42 @@ describe("provider sign-in state", () => {
       const [question] = harness.probeConfirmations();
       for (const key of pool) assert.match(question?.message ?? "", new RegExp(key.replace("/", "\\/")), `dialog must name ${key}`);
       assert.doesNotMatch(question?.message ?? "", /more\. A result/, "the dialog must not hide targets behind a count");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("fits a realistic 20-model consent dialog in a small terminal", async () => {
+    // The dialog body renders above every model id, and Pi keeps only the bottom
+    // of an overflowing dialog, so extra prose scrolls the title and the leading
+    // ids off the top. This pins the height budget at the narrowest supported
+    // width rather than trusting the wording to stay short.
+    const ids = [
+      "anthropic/claude-sonnet-4-5",
+      "openai/gpt-5.1-codex-mini",
+      "google/gemini-2.5-pro",
+      "deepseek/deepseek-v3.2",
+      "moonshot/kimi-k2-0905",
+    ];
+    const available = Array.from({ length: 20 }, (_, index) => makeModel("p", `${ids[index % ids.length]!.split("/")[1]}-${index}`, 1));
+    const harness = freshHarness({
+      available,
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: false,
+    });
+    try {
+      const pool = available.map((model) => `${model.provider}/${model.id}`);
+      await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: pool } },
+        probe: true,
+      });
+      const [question] = harness.probeConfirmations();
+      const rows = probeConsentDialogRows(question?.title ?? "", question?.message ?? "", 60);
+      // 24 rows is the smallest terminal the smoke suite drives. The dialog needs
+      // a title, the model list, the choice and the key hints to stay readable.
+      assert.ok(rows <= 24, `consent dialog must fit a 24-row terminal, measured ${rows} rows at 60 columns`);
+      for (const key of pool) assert.ok(question?.message.includes(key), `dialog must still name ${key}`);
     } finally {
       harness.cleanup();
     }

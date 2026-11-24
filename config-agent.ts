@@ -961,12 +961,18 @@ function probeTargets(
 /**
  * What a live probe will do, in the terms a user needs to agree to it: the exact
  * models, the authorized workload, and the limits of its guarantees.
+ *
+ * Deliberately terse. This body is rendered above a list of every model the probe
+ * will reach, and Pi shares the terminal with the transcript, so each extra line
+ * of prose pushes the dialog title and the leading model ids off a small screen.
+ * The probe's own guarantee ("a result describes this provider now") is stated in
+ * the check report instead, where it does not compete with the model list.
  */
 function probeConsentText(models: readonly string[]): string {
   // Every model the request will reach is named. A count plus a truncated
   // prefix asks the user to approve targets they cannot see, and the plan is
   // exactly what the caller was told to show.
-  return `Run one primary probe per model, with no session fallback, for ${models.length} model(s): ${models.join(", ")}. ${PROBE_RESOURCE_DISCLOSURE} A result describes this provider now; a pass is not a promise for later.`;
+  return `${models.length} probes, one each, no fallback: ${models.join(", ")}. ${PROBE_RESOURCE_DISCLOSURE}`;
 }
 
 /** How a live probe was authorized. */

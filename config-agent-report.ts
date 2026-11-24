@@ -153,6 +153,10 @@ function probeLines(result: ConfigAgentCheckResult): string[] {
     const planned = result.liveProbe ? "live probe targets" : "live probe not run";
     lines.push(`${planned}: ${result.probePlan.length} model(s), one primary probe each, no session fallback -- ${result.probePlan.join(", ")}`);
     lines.push(`  ${PROBE_RESOURCE_DISCLOSURE}`);
+    // The consent dialog cannot afford this sentence: it renders above the model
+    // list, where every extra line pushes real content off a small terminal. The
+    // report has its own bounded budget, so the guarantee lives here.
+    lines.push("  a pass describes this provider now; it is not a promise for later");
     if (!result.liveProbe) lines.push("  run it only with probe: true after the user agrees; a plain check sends nothing");
   }
   // A skipped model was never asked, so it is neither a pass nor a failure.
