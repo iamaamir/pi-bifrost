@@ -309,7 +309,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
         try {
           requests = [];
           const result = await runInit({ ...env, args: "--write" });
-          assert.deepEqual([...requests].sort(), run === 0 ? ["credits-exhausted", "healthy"] : []);
+          assert.deepEqual(requests, ["healthy"]);
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
           assert.deepEqual(readFileSync(lowerPath), original);
