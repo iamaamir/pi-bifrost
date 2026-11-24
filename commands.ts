@@ -1747,46 +1747,7 @@ function validateInitSources(selectedSource: ReconciliationConfigSource): void {
   if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
 }
 
-async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
-  const tokens = args.trim().split(/\s+/).slice(1);
-  const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
-  if (unknownArgument) {
-    reportInitOutcome(
-      ctx,
-      "not started",
-      "Nothing was read or written.",
-      `Unknown argument: ${unknownArgument}. Usage: /bifrost init [-f] [--write] [-g].`,
-      "warning",
-    );
-    return;
-  }
-  const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
-  const writeWithoutPrompt = tokens.includes("--write");
-  if (!ctx.hasUI && !writeWithoutPrompt) {
-    reportInitOutcome(
-      ctx,
-      "stopped before saving",
-      "Nothing was probed or saved.",
-      "Run /bifrost init in a host with confirmation, or pass --write to save without confirmation.",
-      "warning",
-    );
-    return;
-  }
-  try {
-    validateInitSources(selectedSource);
-  } catch {
-    reportInitOutcome(
-      ctx,
-      "blocked",
-      "Nothing was probed or saved; a config file could not be read safely.",
-      "Check your selected and inherited config files, then retry.",
-      "error",
-    );
-    return;
-  }
-  const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
-  const initConfig = bootstrapOriginalConfig ?? state.config;
-  clearBifrostWidgets(ctx);
+async function refreshInitCatalog(ctx: ExtensionContext, state: BifrostState) {
   let initRefreshReceipt: { catalogKeys: string[]; evidence: Map<string, object> } | undefined;
   let refreshedCatalogKeys: string[] | undefined;
   let refreshedProviders: string[] = [];
@@ -1836,14 +1797,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       if (outcome === "aborted") {
         state.forceRegistryRefresh = true;
-        reportInitOutcome(
-          ctx,
-          "cancelled",
-          "Nothing was saved.",
-          "Run /bifrost init again to refresh the catalog.",
-          "info",
-        );
-        return;
+        return { cancelled: true as const };
       }
       state.forceRegistryRefresh = false;
       if (refreshedCatalogKeys) {
@@ -1869,6 +1823,120 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       uiDone(ctx);
     }
   }
+  return { cancelled: false as const, initRefreshReceipt };
+}
+
+function resolveInitClassifier(
+  state: BifrostState, ctx: ExtensionContext, initConfig: BifrostState["config"],
+  available: ReturnType<ExtensionContext["modelRegistry"]["getAvailable"]>,
+  probeLoaded: boolean, workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[],
+) {
+  const detectedClassifier = state.effectiveClassifierBackend(initConfig, ctx);
+  const classifierEnabled = classifierEnablementFor(state, ctx, initConfig).enabled;
+  const needsDetectedPromptModel =
+    classifierEnabled &&
+    detectedClassifier.backend === CLASSIFIER_BACKEND_IDS.prompt &&
+    initConfig.classifier?.model === undefined;
+  let classifierModel: string | undefined;
+  if (needsDetectedPromptModel) {
+    const reliability = state.reliabilityStore.getState();
+    const eligible = [...available]
+      .filter((model) => !isBifrostAuto(model))
+      .sort((left, right) => modelKey(left).localeCompare(modelKey(right)))
+      .filter((model) => {
+        const key = modelKey(model);
+        const circuit = getCircuitState(reliability, key, Date.now(), initConfig.reliability);
+        return !circuit.open && !hasActiveAllowanceCooldown(reliability, key, Date.now());
+      });
+    const eligibleKeys = new Set(eligible.map(modelKey));
+    const probeChoices = probeLoaded
+      ? workingModels
+          .filter(
+            (model) =>
+              eligibleKeys.has(`${model.provider}/${model.model}`) &&
+              model.cost.input + model.cost.output < 2,
+          )
+          .sort((left, right) => left.duration_ms - right.duration_ms)
+      : [];
+    classifierModel = probeChoices[0]
+      ? `${probeChoices[0].provider}/${probeChoices[0].model}`
+      : !probeLoaded && eligible[0]
+        ? modelKey(eligible[0])
+        : undefined;
+    if (!classifierModel) {
+      logImportant(
+        ctx,
+        "Classifier model unavailable",
+        "Init will omit classifier.model; regex fallback remains available.",
+        "warning",
+      );
+    }
+  }
+  const effectiveClassifierSummary = !classifierEnabled
+    ? "off"
+    : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
+      ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
+      : initConfig.classifier?.model
+        ? `prompt (${initConfig.classifier.model}, configured)`
+        : classifierModel
+          ? `prompt (${classifierModel}, detected default)`
+          : "prompt (no eligible model; regex fallback)";
+
+  return { classifierModel, effectiveClassifierSummary };
+}
+
+async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const tokens = args.trim().split(/\s+/).slice(1);
+  const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
+  if (unknownArgument) {
+    reportInitOutcome(
+      ctx,
+      "not started",
+      "Nothing was read or written.",
+      `Unknown argument: ${unknownArgument}. Usage: /bifrost init [-f] [--write] [-g].`,
+      "warning",
+    );
+    return;
+  }
+  const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
+  const writeWithoutPrompt = tokens.includes("--write");
+  if (!ctx.hasUI && !writeWithoutPrompt) {
+    reportInitOutcome(
+      ctx,
+      "stopped before saving",
+      "Nothing was probed or saved.",
+      "Run /bifrost init in a host with confirmation, or pass --write to save without confirmation.",
+      "warning",
+    );
+    return;
+  }
+  try {
+    validateInitSources(selectedSource);
+  } catch {
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was probed or saved; a config file could not be read safely.",
+      "Check your selected and inherited config files, then retry.",
+      "error",
+    );
+    return;
+  }
+  const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
+  const initConfig = bootstrapOriginalConfig ?? state.config;
+  clearBifrostWidgets(ctx);
+  const refresh = await refreshInitCatalog(ctx, state);
+  if (refresh.cancelled) {
+    reportInitOutcome(
+      ctx,
+      "cancelled",
+      "Nothing was saved.",
+      "Run /bifrost init again to refresh the catalog.",
+      "info",
+    );
+    return;
+  }
+  const { initRefreshReceipt } = refresh;
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
   const initStateDirectory = selectedSource === "user" ? getAgentDir() : join(process.cwd(), CONFIG_DIR_NAME);
   const probePath = join(initStateDirectory, "bifrost-probe.json");
@@ -2176,56 +2244,9 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           .flatMap(({ fields }) => fields)
       : [],
   );
-  const detectedClassifier = state.effectiveClassifierBackend(initConfig, ctx);
-  const classifierEnabled = classifierEnablementFor(state, ctx, initConfig).enabled;
-  const needsDetectedPromptModel =
-    classifierEnabled &&
-    detectedClassifier.backend === CLASSIFIER_BACKEND_IDS.prompt &&
-    initConfig.classifier?.model === undefined;
-  let classifierModel: string | undefined;
-  if (needsDetectedPromptModel) {
-    const reliability = state.reliabilityStore.getState();
-    const eligible = [...available]
-      .filter((model) => !isBifrostAuto(model))
-      .sort((left, right) => modelKey(left).localeCompare(modelKey(right)))
-      .filter((model) => {
-        const key = modelKey(model);
-        const circuit = getCircuitState(reliability, key, Date.now(), initConfig.reliability);
-        return !circuit.open && !hasActiveAllowanceCooldown(reliability, key, Date.now());
-      });
-    const eligibleKeys = new Set(eligible.map(modelKey));
-    const probeChoices = probeLoaded
-      ? workingModels
-          .filter(
-            (model) =>
-              eligibleKeys.has(`${model.provider}/${model.model}`) &&
-              model.cost.input + model.cost.output < 2,
-          )
-          .sort((left, right) => left.duration_ms - right.duration_ms)
-      : [];
-    classifierModel = probeChoices[0]
-      ? `${probeChoices[0].provider}/${probeChoices[0].model}`
-      : !probeLoaded && eligible[0]
-        ? modelKey(eligible[0])
-        : undefined;
-    if (!classifierModel) {
-      logImportant(
-        ctx,
-        "Classifier model unavailable",
-        "Init will omit classifier.model; regex fallback remains available.",
-        "warning",
-      );
-    }
-  }
-  const effectiveClassifierSummary = !classifierEnabled
-    ? "off"
-    : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
-      ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
-      : initConfig.classifier?.model
-        ? `prompt (${initConfig.classifier.model}, configured)`
-        : classifierModel
-          ? `prompt (${classifierModel}, detected default)`
-          : "prompt (no eligible model; regex fallback)";
+  const { classifierModel, effectiveClassifierSummary } = resolveInitClassifier(
+    state, ctx, initConfig, available, probeLoaded, workingModels,
+  );
 
   const proposal = buildInitProposal(
     models,
