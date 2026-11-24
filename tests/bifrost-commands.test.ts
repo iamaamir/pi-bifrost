@@ -538,6 +538,35 @@ function writeRecentProbeCache(path: string, results: unknown): void {
   utimesSync(path, recent, recent);
 }
 
+function redactReviewSetting(value: unknown, key: string): unknown {
+  if (/api.?key|secret|password|credential|system.?prompt|endpoint|(?:access|auth|refresh|bearer|session).?token|^token$/iu.test(key)) return "[redacted]";
+  if (Array.isArray(value)) return value.map((item) => redactReviewSetting(item, ""));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([nestedKey, nested]) => [nestedKey, redactReviewSetting(nested, nestedKey)]));
+  }
+  return value;
+}
+
+
+function assertReviewSetting(value: unknown, key: string, review: string): void {
+  const rendered = JSON.stringify(redactReviewSetting(value, key), null, 2).split("\n");
+  const settingLines = rendered.length === 1
+    ? [`    ${key}  ${rendered[0]}`]
+    : [`    ${key}:`, ...rendered.map((line) => `      ${line}`)];
+  for (const settingLine of settingLines) {
+    for (const wrappedLine of wrapResultLines([settingLine], 78)) {
+      assert.ok(review.includes(wrappedLine), `preview omitted saved setting ${key}: ${wrappedLine}`);
+    }
+  }
+}
+
+function assertSavedSettingsInReview(saved: Record<string, unknown>, review: string): void {
+  for (const [key, value] of Object.entries(saved)) {
+    if (key === "models" || key === "$schema") continue;
+    assertReviewSetting(value, key, review);
+  }
+}
+
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
   selectOverride?: (title: string, options: string[]) => string | undefined,
@@ -2539,26 +2568,7 @@ describe("bifrost command ui", () => {
       const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
       assert.deepEqual(saved.models.quick, ["fixture/old", "fixture/chat"]);
       const review = calls.filter((call) => call.kind === "preview").flatMap((call) => call.lines ?? []).join("\n");
-      const redact = (value: unknown, key: string): unknown => {
-        if (/api.?key|secret|password|credential|system.?prompt|endpoint|(?:access|auth|refresh|bearer|session).?token|^token$/iu.test(key)) return "[redacted]";
-        if (Array.isArray(value)) return value.map((item) => redact(item, ""));
-        if (value && typeof value === "object") {
-          return Object.fromEntries(Object.entries(value).map(([nestedKey, nested]) => [nestedKey, redact(nested, nestedKey)]));
-        }
-        return value;
-      };
-      for (const [key, value] of Object.entries(saved)) {
-        if (key === "models" || key === "$schema") continue;
-        const rendered = JSON.stringify(redact(value, key), null, 2).split("\n");
-        const settingLines = rendered.length === 1
-          ? [`    ${key}  ${rendered[0]}`]
-          : [`    ${key}:`, ...rendered.map((line) => `      ${line}`)];
-        for (const settingLine of settingLines) {
-          for (const wrappedLine of wrapResultLines([settingLine], 78)) {
-            assert.ok(review.includes(wrappedLine), `preview omitted saved setting ${key}: ${wrappedLine}`);
-          }
-        }
-      }
+      assertSavedSettingsInReview(saved, review);
       const picker = calls.find((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?");
       assert.ok(picker);
       assert.deepEqual(picker.options, ["Keep my models (default)", "Merge new models"]);

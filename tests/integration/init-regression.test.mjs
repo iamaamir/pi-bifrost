@@ -276,223 +276,231 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
   before(async () => { port = await startFakeProvider(); });
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
-  for (const layer of ["user", "workspace"]) {
-    for (const conflict of [false, true]) {
-      it(`rejects a linked ${layer} config ${conflict ? "with an inherited pool" : "without an inherited pool"} before probing`, async () => {
-        requests = [];
+  function registerInheritedLayerTests() {
+    for (const layer of ["user", "workspace"]) {
+      for (const conflict of [false, true]) {
+        it(`rejects a linked ${layer} config ${conflict ? "with an inherited pool" : "without an inherited pool"} before probing`, async () => {
+          requests = [];
+          const env = fixture(port, ["healthy"]);
+          const link = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
+          const target = join(env.home, "linked-config.json");
+          const original = Buffer.from(JSON.stringify({ classifier: { enabled: false }, ...(conflict ? { models: { quick: ["manual/keep"] } } : {}) }) + "\n");
+          writeFileSync(target, original);
+          symlinkSync(target, link);
+          try {
+            const result = await runInit({ ...env, args: "--write" });
+            assert.equal(result.code, 0, result.stderr);
+            assert.equal(result.violations, "");
+            assert.deepEqual(readFileSync(target), original);
+            assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+            assert.deepEqual(requests, []);
+            assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was probed or saved/i);
+          } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+        });
+      }
+    }
+
+    for (const layer of ["user", "workspace"]) {
+      it(`keeps unreviewed init from overriding an inherited ${layer} manual pool`, async () => {
         const env = fixture(port, ["healthy"]);
-        const link = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
-        const target = join(env.home, "linked-config.json");
-        const original = Buffer.from(JSON.stringify({ classifier: { enabled: false }, ...(conflict ? { models: { quick: ["manual/keep"] } } : {}) }) + "\n");
-        writeFileSync(target, original);
-        symlinkSync(target, link);
+        const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
+        const original = Buffer.from(JSON.stringify({ models: { quick: ["manual/keep"] }, classifier: { enabled: false } }) + "\n");
+        writeFileSync(lowerPath, original);
         try {
           const result = await runInit({ ...env, args: "--write" });
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
-          assert.deepEqual(readFileSync(target), original);
-          assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
-          assert.deepEqual(requests, []);
-          assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was probed or saved/i);
+          assert.deepEqual(readFileSync(lowerPath), original);
+          const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+          assert.equal(Object.hasOwn(saved.models, "quick"), false);
+          assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+
+      it(`keeps unreviewed init from replacing an inherited ${layer} empty pool`, async () => {
+        const env = fixture(port, ["healthy"]);
+        const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
+        const original = Buffer.from(JSON.stringify({ models: { quick: [] }, classifier: { enabled: false } }) + "\n");
+        writeFileSync(lowerPath, original);
+        try {
+          const result = await runInit({ ...env, args: "--write" });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.deepEqual(readFileSync(lowerPath), original);
+          const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+          assert.equal(Object.hasOwn(saved.models, "quick"), false);
+          assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
         } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
       });
     }
-  }
 
-  for (const layer of ["user", "workspace"]) {
-    it(`keeps unreviewed init from overriding an inherited ${layer} manual pool`, async () => {
+    it("keeps unreviewed project pools out of inherited tiers without changing global config", async () => {
       const env = fixture(port, ["healthy"]);
-      const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
-      const original = Buffer.from(JSON.stringify({ models: { quick: ["manual/keep"] }, classifier: { enabled: false } }) + "\n");
-      writeFileSync(lowerPath, original);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const original = Buffer.from(JSON.stringify({ models: { quick: ["anthropic/claude-sonnet-4-20250514"], frontier: ["manual/global-frontier"] } }) + "\n");
+      writeFileSync(globalPath, original);
       try {
         const result = await runInit({ ...env, args: "--write" });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
-        assert.deepEqual(readFileSync(lowerPath), original);
-        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-        assert.equal(Object.hasOwn(saved.models, "quick"), false);
-        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
-      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-    });
-
-    it(`keeps unreviewed init from replacing an inherited ${layer} empty pool`, async () => {
-      const env = fixture(port, ["healthy"]);
-      const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
-      const original = Buffer.from(JSON.stringify({ models: { quick: [] }, classifier: { enabled: false } }) + "\n");
-      writeFileSync(lowerPath, original);
-      try {
-        const result = await runInit({ ...env, args: "--write" });
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.violations, "");
-        assert.deepEqual(readFileSync(lowerPath), original);
-        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-        assert.equal(Object.hasOwn(saved.models, "quick"), false);
-        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
-      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-    });
-  }
-
-  it("keeps unreviewed project pools out of inherited tiers without changing global config", async () => {
-    const env = fixture(port, ["healthy"]);
-    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-    const original = Buffer.from(JSON.stringify({ models: { quick: ["anthropic/claude-sonnet-4-20250514"], frontier: ["manual/global-frontier"] } }) + "\n");
-    writeFileSync(globalPath, original);
-    try {
-      const result = await runInit({ ...env, args: "--write" });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.deepEqual(readFileSync(globalPath), original);
-      const projectPath = join(env.work, ".pi", "bifrost.json");
-      const saved = JSON.parse(readFileSync(projectPath, "utf8"));
-      assert.equal(Object.hasOwn(saved.models, "quick"), false);
-      assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
-
-  for (const inheritedPool of [["manual/inherited"], []]) {
-    for (const targetKind of ["absent", "empty"]) {
-      it(`keeps ${targetKind} project target from overriding inherited ${inheritedPool.length ? "nonempty" : "empty"} pools`, async () => {
-        const env = fixture(port, ["healthy"]);
-        const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+        assert.deepEqual(readFileSync(globalPath), original);
         const projectPath = join(env.work, ".pi", "bifrost.json");
-        const original = Buffer.from(JSON.stringify({ models: { quick: inheritedPool } }) + "\n");
-        const targetBytes = Buffer.from("{}\n");
-        writeFileSync(globalPath, original);
-        if (targetKind === "empty") writeFileSync(projectPath, targetBytes);
-        const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-        process.env.PI_CODING_AGENT_DIR = join(env.home, ".pi", "agent");
+        const saved = JSON.parse(readFileSync(projectPath, "utf8"));
+        assert.equal(Object.hasOwn(saved.models, "quick"), false);
+        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+
+  }
+  registerInheritedLayerTests();
+
+  function registerInheritedPoolTests() {
+    for (const inheritedPool of [["manual/inherited"], []]) {
+      for (const targetKind of ["absent", "empty"]) {
+        it(`keeps ${targetKind} project target from overriding inherited ${inheritedPool.length ? "nonempty" : "empty"} pools`, async () => {
+          const env = fixture(port, ["healthy"]);
+          const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+          const projectPath = join(env.work, ".pi", "bifrost.json");
+          const original = Buffer.from(JSON.stringify({ models: { quick: inheritedPool } }) + "\n");
+          const targetBytes = Buffer.from("{}\n");
+          writeFileSync(globalPath, original);
+          if (targetKind === "empty") writeFileSync(projectPath, targetBytes);
+          const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+          process.env.PI_CODING_AGENT_DIR = join(env.home, ".pi", "agent");
+          try {
+            const result = await runInit({ ...env, args: "--write" });
+            assert.equal(result.code, 0, result.stderr);
+            assert.equal(result.violations, "");
+            assert.deepEqual(readFileSync(globalPath), original);
+            const saved = JSON.parse(readFileSync(projectPath, "utf8"));
+            assert.equal(Object.hasOwn(saved.models ?? {}, "quick"), false);
+            assert.deepEqual(loadConfigForReload(env.work, ROOT).config.models?.quick, inheritedPool);
+          } finally {
+            if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+            else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+            rmSync(env.home, { recursive: true, force: true });
+            rmSync(env.work, { recursive: true, force: true });
+          }
+        });
+      }
+    }
+
+    it("creates a project pool when inherited tiers do not overlap", async () => {
+      const env = fixture(port, ["healthy"]);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const original = Buffer.from('{"models":{"custom":["manual/keep"]},"classifier":{"enabled":false}}\n');
+      writeFileSync(globalPath, original);
+      try {
+        const result = await runInit({ ...env, args: "--write" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.deepEqual(readFileSync(globalPath), original);
+        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+        assert.ok(saved.models.quick.includes("fake/healthy"));
+        assert.equal(Object.hasOwn(saved.models, "custom"), false);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+
+    it("does not create a local override when generated and inherited pools are identical", async () => {
+      const env = fixture(port, ["healthy"]);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy"], general: [], frontier: [] } }) + "\n");
+      writeFileSync(globalPath, original);
+      try {
+        const result = await runInit({ ...env, args: "--write" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.deepEqual(readFileSync(globalPath), original);
+        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+        assert.equal(Object.hasOwn(saved.models, "quick"), false);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+
+    it("keeps an unreviewed missing target from overriding an inherited generated pool", async () => {
+      const env = fixture(port, ["healthy", "credits-exhausted"]);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
+      const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy", "fake/credits-exhausted"] } }) + "\n");
+      writeFileSync(globalPath, original);
+      writeFileSync(receiptPath, ownership(["fake/healthy", "fake/credits-exhausted"], "user"));
+      try {
+        const result = await runInit({ ...env, args: "--write" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.deepEqual(readFileSync(globalPath), original);
+        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+        assert.equal(Object.hasOwn(saved.models, "quick"), false);
+        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+
+    it("keeps an unreviewed missing target without trusting inherited ownership receipt", async () => {
+      const env = fixture(port, ["healthy"]);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
+      const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/credits-exhausted"] } }) + "\n");
+      writeFileSync(globalPath, original);
+      // Missing tombstones makes the whole receipt invalid; its coverage claim must not count.
+      writeFileSync(receiptPath, JSON.stringify({ version: 1, sources: { "pi-models-v1-fake": { generated: { quick: ["fake/credits-exhausted"] } } } }));
+      try {
+        const result = await runInit({ ...env, args: "--write" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.deepEqual(readFileSync(globalPath), original);
+        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+        assert.equal(Object.hasOwn(saved.models, "quick"), false);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+
+    it("saves a project config when an inherited receipt is unreadable but the config has no pools", async () => {
+      const env = fixture(port, ["healthy"]);
+      writeFileSync(join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json"), Buffer.from([0xff, 0xfe]));
+      try {
+        const result = await runInit({ ...env, args: "--write" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.doesNotMatch(result.stdout + result.stderr, /could not safely read inherited config/i);
+        assert.ok(existsSync(join(env.work, ".pi", "bifrost.json")));
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+
+    for (const selected of ["default", "default-global-only", "global"]) {
+      it(`saves init to the ${selected} source without changing other layers`, async () => {
+        requests = [];
+        const env = fixture(port, ["healthy"]);
+        const paths = {
+          project: join(env.work, ".pi", "bifrost.json"),
+          workspace: join(env.work, "bifrost.json"),
+          user: join(env.home, ".pi", "agent", "bifrost.json"),
+        };
+        const original = Buffer.from('{"cache":{"enabled":false},"classifier":{"enabled":false}}\n');
+        writeFileSync(paths.user, original);
+        if (selected !== "default-global-only") writeFileSync(paths.workspace, original);
         try {
-          const result = await runInit({ ...env, args: "--write" });
+          const args = `--write${selected === "global" ? " -g" : ""}`;
+          const result = await runInit({ ...env, args });
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
-          assert.deepEqual(readFileSync(globalPath), original);
-          const saved = JSON.parse(readFileSync(projectPath, "utf8"));
-          assert.equal(Object.hasOwn(saved.models ?? {}, "quick"), false);
-          assert.deepEqual(loadConfigForReload(env.work, ROOT).config.models?.quick, inheritedPool);
-        } finally {
-          if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-          else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-          rmSync(env.home, { recursive: true, force: true });
-          rmSync(env.work, { recursive: true, force: true });
-        }
+          const target = selected === "global" ? "user" : "project";
+          assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update (?:project|global) model pools/);
+          assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
+          for (const layer of ["workspace", "user"]) {
+            if (layer === "workspace" && selected === "default-global-only") {
+              assert.equal(existsSync(paths.workspace), false);
+            } else if (layer !== target) assert.deepEqual(readFileSync(paths[layer]), original);
+          }
+          if (target !== "project") assert.equal(existsSync(paths.project), false);
+          if (target === "project") {
+            const saved = JSON.parse(readFileSync(paths.project, "utf8"));
+            assert.equal(Object.hasOwn(saved, "cache"), false);
+            assert.equal(Object.hasOwn(saved, "classifier"), false);
+          }
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
       });
     }
+
   }
-
-  it("creates a project pool when inherited tiers do not overlap", async () => {
-    const env = fixture(port, ["healthy"]);
-    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-    const original = Buffer.from('{"models":{"custom":["manual/keep"]},"classifier":{"enabled":false}}\n');
-    writeFileSync(globalPath, original);
-    try {
-      const result = await runInit({ ...env, args: "--write" });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.deepEqual(readFileSync(globalPath), original);
-      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.ok(saved.models.quick.includes("fake/healthy"));
-      assert.equal(Object.hasOwn(saved.models, "custom"), false);
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
-
-  it("does not create a local override when generated and inherited pools are identical", async () => {
-    const env = fixture(port, ["healthy"]);
-    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-    const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy"], general: [], frontier: [] } }) + "\n");
-    writeFileSync(globalPath, original);
-    try {
-      const result = await runInit({ ...env, args: "--write" });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.deepEqual(readFileSync(globalPath), original);
-      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.equal(Object.hasOwn(saved.models, "quick"), false);
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
-
-  it("keeps an unreviewed missing target from overriding an inherited generated pool", async () => {
-    const env = fixture(port, ["healthy", "credits-exhausted"]);
-    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-    const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
-    const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy", "fake/credits-exhausted"] } }) + "\n");
-    writeFileSync(globalPath, original);
-    writeFileSync(receiptPath, ownership(["fake/healthy", "fake/credits-exhausted"], "user"));
-    try {
-      const result = await runInit({ ...env, args: "--write" });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.deepEqual(readFileSync(globalPath), original);
-      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.equal(Object.hasOwn(saved.models, "quick"), false);
-      assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
-
-  it("keeps an unreviewed missing target without trusting inherited ownership receipt", async () => {
-    const env = fixture(port, ["healthy"]);
-    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-    const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
-    const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/credits-exhausted"] } }) + "\n");
-    writeFileSync(globalPath, original);
-    // Missing tombstones makes the whole receipt invalid; its coverage claim must not count.
-    writeFileSync(receiptPath, JSON.stringify({ version: 1, sources: { "pi-models-v1-fake": { generated: { quick: ["fake/credits-exhausted"] } } } }));
-    try {
-      const result = await runInit({ ...env, args: "--write" });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.deepEqual(readFileSync(globalPath), original);
-      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.equal(Object.hasOwn(saved.models, "quick"), false);
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
-
-  it("saves a project config when an inherited receipt is unreadable but the config has no pools", async () => {
-    const env = fixture(port, ["healthy"]);
-    writeFileSync(join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json"), Buffer.from([0xff, 0xfe]));
-    try {
-      const result = await runInit({ ...env, args: "--write" });
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(result.violations, "");
-      assert.doesNotMatch(result.stdout + result.stderr, /could not safely read inherited config/i);
-      assert.ok(existsSync(join(env.work, ".pi", "bifrost.json")));
-    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-  });
-
-  for (const selected of ["default", "default-global-only", "global"]) {
-    it(`saves init to the ${selected} source without changing other layers`, async () => {
-      requests = [];
-      const env = fixture(port, ["healthy"]);
-      const paths = {
-        project: join(env.work, ".pi", "bifrost.json"),
-        workspace: join(env.work, "bifrost.json"),
-        user: join(env.home, ".pi", "agent", "bifrost.json"),
-      };
-      const original = Buffer.from('{"cache":{"enabled":false},"classifier":{"enabled":false}}\n');
-      writeFileSync(paths.user, original);
-      if (selected !== "default-global-only") writeFileSync(paths.workspace, original);
-      try {
-        const args = `--write${selected === "global" ? " -g" : ""}`;
-        const result = await runInit({ ...env, args });
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.violations, "");
-        const target = selected === "global" ? "user" : "project";
-        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update (?:project|global) model pools/);
-        assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
-        for (const layer of ["workspace", "user"]) {
-          if (layer === "workspace" && selected === "default-global-only") {
-            assert.equal(existsSync(paths.workspace), false);
-          } else if (layer !== target) assert.deepEqual(readFileSync(paths[layer]), original);
-        }
-        if (target !== "project") assert.equal(existsSync(paths.project), false);
-        if (target === "project") {
-          const saved = JSON.parse(readFileSync(paths.project, "utf8"));
-          assert.equal(Object.hasOwn(saved, "cache"), false);
-          assert.equal(Object.hasOwn(saved, "classifier"), false);
-        }
-      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-    });
-  }
+  registerInheritedPoolTests();
 
   for (const args of ["--source workspace", "--source user", "--unknown"]) {
     it(`rejects invalid init arguments ${args} before probing or writing`, async () => {
