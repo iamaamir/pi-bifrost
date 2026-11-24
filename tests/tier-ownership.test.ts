@@ -62,6 +62,25 @@ describe("ordered whole-tier ownership", () => {
     assert.deepEqual(ownershipBytes, ownershipBefore);
   });
 
+  it("retains the first deletion marker when replacing one of 100 active tiers", () => {
+    const active = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`tier${i}`, [`p/m${i}`]]));
+    const previous = buildInitOwnershipReceipt("project", active)!;
+    const models: Record<string, string[]> = { ...active, replacement: ["p/new"] };
+    delete models.tier0;
+    const configBytes = Buffer.from(JSON.stringify({ models }));
+    const result = buildInitMembershipPlan({
+      source: "project", configPath: "/fixture/config", ownershipPath: "/fixture/ownership", journalPath: "/fixture/journal",
+      configBytes, ownershipBytes: Buffer.from(JSON.stringify(previous)),
+    }, [], () => true);
+    assert.ok(result.transaction);
+    assert.deepEqual(result.transaction.nextConfigBytes, configBytes);
+    const saved = parseOwnershipSnapshot(JSON.parse(Buffer.from(result.transaction.nextOwnershipBytes).toString()));
+    assert.ok(saved);
+    assert.deepEqual(saved.tiers.tier0, { state: "deleted" });
+    assert.deepEqual(saved.tiers.replacement, { state: "user" });
+    assert.equal(Object.keys(saved.tiers).length, 101);
+  });
+
   it("never trusts missing, legacy, corrupt, or wrong-scope ownership", () => {
     const configBytes = Buffer.from(JSON.stringify({ models: { quick: generated } }));
     const legacy = { version: 1, sources: { catalog: { generated: { quick: generated }, tombstones: {} } } };

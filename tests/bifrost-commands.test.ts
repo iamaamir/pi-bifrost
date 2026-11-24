@@ -2973,9 +2973,17 @@ describe("bifrost command ui", () => {
         mkdirSync(piDir);
         mkdirSync(process.env.PI_CODING_AGENT_DIR);
         const configPath = join(piDir, "bifrost.json");
-        writeFileSync(configPath, JSON.stringify({ models: { quick: ["manual/unavailable", "manual/second"] } }));
-        const models = [makeModel("fixture", "chat", 0.2, 0.2)];
-        if (incompleteCandidate) models.push(makeModel("manual", "unavailable", 0.2, 0.2), makeModel("manual", "second", 0.2, 0.2), makeModel("partial", "chat", 0.2, 0.2));
+        const inheritedPath = join(process.env.PI_CODING_AGENT_DIR, "bifrost.json");
+        const inherited = { models: { quick: ["inherited/old"] }, customSetting: { preserve: true } };
+        if (incompleteCandidate) writeFileSync(inheritedPath, JSON.stringify(inherited));
+        const cases = [
+          { models: { quick: ["manual/unavailable", "manual/second"] }, cost: 0.2, saved: { quick: ["manual/unavailable", "manual/second", "fixture/chat"] } },
+          { models: { general: ["manual/old"] }, cost: 1, saved: { general: ["manual/old", "fixture/chat"] } },
+        ];
+        const fixture = cases[Number(incompleteCandidate)]!;
+        writeFileSync(configPath, JSON.stringify({ models: fixture.models }));
+        const models = [makeModel("fixture", "chat", fixture.cost, fixture.cost)];
+        if (incompleteCandidate) models.push(makeModel("manual", "old", 1, 1), makeModel("partial", "chat", 0.2, 0.2));
         writeRecentProbeCache(join(piDir, "bifrost-probe.json"), models.map((model) => ({
           provider: model.provider, model: model.id, status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10,
         })));
@@ -2990,7 +2998,8 @@ describe("bifrost command ui", () => {
 
         assert.ok(calls.some((call) => call.kind === "select" && call.options?.includes("Merge new models")), "Merge choice must be offered");
         const saved = JSON.parse(readFileSync(configPath, "utf8"));
-        assert.deepEqual(saved.models.quick, ["manual/unavailable", "manual/second", "fixture/chat"]);
+        assert.deepEqual(saved.models, fixture.saved);
+        if (incompleteCandidate) assert.deepEqual(JSON.parse(readFileSync(inheritedPath, "utf8")), inherited);
       } finally {
         process.chdir(previousCwd);
         if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
