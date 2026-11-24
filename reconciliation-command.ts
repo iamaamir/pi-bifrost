@@ -536,6 +536,23 @@ function applyGeneratedTiers(
   }
 }
 
+function affectedPoolsHaveCompleteInventories(
+  inventories: readonly InitMembershipInventory[], before: Record<string, ConfiguredTierPool>, after: Record<string, ConfiguredTierPool>,
+  inheritedTiers: ReadonlySet<string>, inheritedPools?: ReadonlyMap<string, readonly string[]>,
+): boolean {
+  const completeProviders = new Set(inventories.filter((entry) => entry.status === "complete").map((entry) => entry.provider));
+  const incompleteProviders = new Set(inventories.filter((entry) => entry.status !== "complete").map((entry) => entry.provider));
+  for (const tier of new Set([...Object.keys(before), ...Object.keys(after), ...inheritedTiers])) {
+    const old = normalizePool(before[tier]) ?? inheritedPools?.get(tier) ?? [];
+    const next = normalizePool(after[tier]) ?? inheritedPools?.get(tier) ?? [];
+    for (const key of [...old.filter((key) => !next.includes(key)), ...next.filter((key) => !old.includes(key))]) {
+      const provider = key.slice(0, key.indexOf("/"));
+      if (!completeProviders.has(provider) || incompleteProviders.has(provider)) return false;
+    }
+  }
+  return true;
+}
+
 /** Plans one explicit init action against the exact selected-layer snapshot. */
 export function buildInitActionPlan(input: {
   readonly action: "keep" | "merge" | "defaults";
@@ -564,7 +581,6 @@ export function buildInitActionPlan(input: {
     source.configBytes.byteLength > MAX_CONFIG_BYTES ||
     inventories.length === 0 ||
     inventories.length > MAX_INIT_INVENTORIES ||
-    inventories.some((entry) => entry.status !== "complete") ||
     !isPlainRecord(generated) ||
     Object.keys(generated).length > 100 ||
     !Object.values(generated).some((pool) => Array.isArray(pool) && pool.length > 0)
@@ -595,7 +611,8 @@ export function buildInitActionPlan(input: {
   }
   const generatedTiers = Object.entries(generated);
   const probedByTier = collectProbedModels(input.inventories);
-  if (!probedByTier || !generatedModelsAreProbed(generatedTiers, probedByTier)) return blocked("source_invalid");
+  const completeProbed = collectProbedModels(inventories.filter((entry) => entry.status === "complete"));
+  if (!probedByTier || !completeProbed || !generatedModelsAreProbed(generatedTiers, completeProbed)) return blocked("source_invalid");
   const uniqueGeneratedTiers = generatedTiers.map(([tier, keys]) => [tier, [...new Set(keys)]] as const);
   let candidate: Record<string, unknown> = original;
   let warnings: readonly ReconciliationWarningCode[] = [];
@@ -628,6 +645,7 @@ export function buildInitActionPlan(input: {
     if (!validTier(tier) || !normalizePool(pool)) return blocked("source_invalid");
     setOwn(after, tier, pool);
   }
+  if (!affectedPoolsHaveCompleteInventories(inventories, before, after, input.inheritedTiers, input.inheritedPools)) return blocked("source_invalid");
   const ownership = deriveOwnershipSnapshot({ scope: source.source, previous, before, after, managedTiers });
   const changed = JSON.stringify(original) !== JSON.stringify(candidate);
   const configBytes = changed ? serialize(candidate) : Buffer.from(source.configBytes);

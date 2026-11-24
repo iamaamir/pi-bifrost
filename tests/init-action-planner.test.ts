@@ -8,7 +8,7 @@ const source = (models: Record<string, unknown>, receipt: unknown = null) => ({
   configBytes: bytes({ models, custom: { keep: true } }), ownershipBytes: receipt ? bytes(receipt) : null,
 });
 const baseline = { quick: ["p/new", "p/old"], general: ["p/g"] };
-const inventory = [{ provider: "p", status: "complete" as const, modelsByTier: baseline }];
+const inventory = [{ provider: "p", status: "complete" as const, modelsByTier: baseline }, { provider: "manual", status: "complete" as const, modelsByTier: {} }];
 const plan = (action: "keep" | "merge" | "defaults", input: ReturnType<typeof source>, inherited: string[] = [], inheritedPools = new Map<string, readonly string[]>()) =>
   buildInitActionPlan({ action, source: input, inventories: inventory, generated: baseline, inheritedTiers: new Set(inherited), inheritedPools, validateMergedConfig: () => true });
 const config = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.transaction!.nextConfigBytes).toString());
@@ -59,6 +59,28 @@ describe("init action planner", () => {
     assert.deepEqual(config(value).models.quick, ["p/old", "p/new"]);
     assert.deepEqual(receipt(value).tiers.quick, { state: "generated", models: ["p/old", "p/new"] });
   });
+  it("allows safe Keep with an unrelated stale provider", () => {
+    const value = buildInitActionPlan({
+      action: "keep", source: source({ quick: ["manual/custom"] }),
+      inventories: [...inventory, { provider: "unrelated", status: "stale", modelsByTier: {} }],
+      generated: baseline, inheritedTiers: new Set(), validateMergedConfig: () => true,
+    });
+    assert.equal(value.status, "ready");
+    assert.deepEqual(config(value).models.quick, ["manual/custom"]);
+  });
+  it("blocks removed local and inherited members without complete provider evidence", () => {
+    for (const inherited of [false, true]) {
+      const input = {
+        action: "defaults" as const, source: source(inherited ? {} : { quick: ["other/old"] }),
+        inventories: inventory, generated: baseline, inheritedTiers: new Set(inherited ? ["quick"] : []),
+        inheritedPools: new Map(inherited ? [["quick", ["other/old"]]] : []), validateMergedConfig: () => true,
+      };
+      const blocked = buildInitActionPlan(input);
+      assert.equal(blocked.status, "blocked");
+      assert.equal(blocked.transaction, undefined);
+      assert.equal(buildInitActionPlan({ ...input, inventories: [...inventory, { provider: "other", status: "complete", modelsByTier: {} }] }).status, "ready");
+    }
+  });
   it("blocks incomplete inventories and zero successful probes", () => {
     const input = source({ quick: ["p/old"] });
     for (const inventories of [
@@ -78,12 +100,12 @@ describe("init action planner", () => {
 
   it("keeps legacy tiers user-owned and preserves exact config bytes for ownership-only reset", () => {
     const exact = Buffer.from('{\n  "models": { "quick": ["p/new", "p/old"] },\n  "setting": true\n}\n\n');
-    const legacy = buildInitActionPlan({ action: "keep", source: { ...source({}), configBytes: exact }, inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }], generated: { quick: ["p/new", "p/old"] }, inheritedTiers: new Set(), validateMergedConfig: () => true });
+    const legacy = buildInitActionPlan({ action: "keep", source: { ...source({}), configBytes: exact }, inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }, { provider: "manual", status: "complete", modelsByTier: {} }], generated: { quick: ["p/new", "p/old"] }, inheritedTiers: new Set(), validateMergedConfig: () => true });
     assert.equal(legacy.status, "ready");
     assert.deepEqual(legacy.transaction!.nextConfigBytes, exact);
     assert.deepEqual(receipt(legacy).tiers.quick, { state: "user" });
 
-    const owned = buildInitActionPlan({ action: "defaults", source: { ...source({}), configBytes: exact }, inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }], generated: { quick: ["p/new", "p/old"] }, inheritedTiers: new Set(), validateMergedConfig: () => true });
+    const owned = buildInitActionPlan({ action: "defaults", source: { ...source({}), configBytes: exact }, inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }, { provider: "manual", status: "complete", modelsByTier: {} }], generated: { quick: ["p/new", "p/old"] }, inheritedTiers: new Set(), validateMergedConfig: () => true });
     assert.equal(owned.status, "ready");
     assert.deepEqual(owned.changes, []);
     assert.deepEqual(owned.transaction!.nextConfigBytes, exact);
@@ -94,7 +116,7 @@ describe("init action planner", () => {
     const input = source({ quick: ["p/old", "manual/x"] });
     const value = buildInitActionPlan({
       action: "merge", source: input,
-      inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }],
+      inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }, { provider: "manual", status: "complete", modelsByTier: {} }],
       generated: { quick: ["p/new", "p/old", "p/new"] },
       inheritedTiers: new Set(["frontier"]), validateMergedConfig: () => true,
     });
@@ -106,7 +128,7 @@ describe("init action planner", () => {
     });
     const defaults = buildInitActionPlan({
       action: "defaults", source: input,
-      inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }],
+      inventories: [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new", "p/old"] } }, { provider: "manual", status: "complete", modelsByTier: {} }],
       generated: { quick: ["p/new", "p/old", "p/new"] }, inheritedTiers: new Set(), validateMergedConfig: () => true,
     });
     assert.deepEqual(config(defaults).models.quick, ["p/new", "p/old"]);
