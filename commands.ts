@@ -1947,58 +1947,13 @@ function initPoolHasCompleteInventory(
   });
 }
 
-async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
-  const tokens = args.trim().split(/\s+/).slice(1);
-  const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
-  if (unknownArgument) {
-    reportInitOutcome(
-      ctx,
-      "not started",
-      "Nothing was read or written.",
-      `Unknown argument: ${unknownArgument}. Usage: /bifrost init [-f] [--write] [-g].`,
-      "warning",
-    );
-    return;
-  }
-  const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
-  const writeWithoutPrompt = tokens.includes("--write");
-  if (!ctx.hasUI && !writeWithoutPrompt) {
-    reportInitOutcome(
-      ctx,
-      "stopped before saving",
-      "Nothing was probed or saved.",
-      "Run /bifrost init in a host with confirmation, or pass --write to save without confirmation.",
-      "warning",
-    );
-    return;
-  }
-  try {
-    validateInitSources(selectedSource);
-  } catch {
-    reportInitOutcome(
-      ctx,
-      "blocked",
-      "Nothing was probed or saved; a config file could not be read safely.",
-      "Check your selected and inherited config files, then retry.",
-      "error",
-    );
-    return;
-  }
-  const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
-  const initConfig = bootstrapOriginalConfig ?? state.config;
-  clearBifrostWidgets(ctx);
-  const refresh = await refreshInitCatalog(ctx, state);
-  if (refresh.cancelled) {
-    reportInitOutcome(
-      ctx,
-      "cancelled",
-      "Nothing was saved.",
-      "Run /bifrost init again to refresh the catalog.",
-      "info",
-    );
-    return;
-  }
-  const { initRefreshReceipt } = refresh;
+async function probeInitModels(
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+  selectedSource: ReconciliationConfigSource,
+  initConfig: BifrostState["config"],
+) {
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
   const initStateDirectory = selectedSource === "user" ? getAgentDir() : join(process.cwd(), CONFIG_DIR_NAME);
   const probePath = join(initStateDirectory, "bifrost-probe.json");
@@ -2070,7 +2025,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         "Probe results from this run were discarded; run /bifrost init again to retry.",
         "info",
       );
-      return;
+      return undefined;
     }
     const { results } = probeRun;
     for (const result of results) {
@@ -2109,6 +2064,142 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const skipped = results.filter((r) => r.status === "skipped").length;
     log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   }
+  return { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders };
+}
+
+function buildInitInventories(
+  available: ReturnType<ExtensionContext["modelRegistry"]["getAvailable"]>,
+  probeVerified: ReadonlySet<string>,
+  inheritedEffective: ReadonlyMap<string, InheritedTierPool>,
+  models: Record<string, string[]>,
+  ownership: ReturnType<typeof parseOwnershipSnapshot> | undefined,
+  sourceModels: Record<string, unknown>,
+  state: BifrostState,
+  ctx: ExtensionContext,
+  refreshRemainsCurrent: boolean,
+  initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
+  authFailedProbeProviders: ReadonlySet<string>,
+) {
+  const byProvider = new Map<string, Record<string, string[]>>();
+  for (const model of available) {
+    if (isBifrostAuto(model)) continue;
+    const tier = guessTier(model);
+    const key = modelKey(model);
+    const byTier = byProvider.get(model.provider) ?? {};
+    byProvider.set(model.provider, byTier);
+    if (!tier) continue;
+    if (!probeVerified.has(key)) continue;
+    byTier[tier] = [...(byTier[tier] ?? []), key];
+  }
+  const inventoryProviders = new Set(byProvider.keys());
+  const availableProviders = new Set(available.map((model) => model.provider));
+  const affectedPoolProviders = new Set<string>();
+  const addPoolProviders = (pool: readonly string[] | undefined) => {
+    for (const key of pool ?? []) {
+      const separator = key.indexOf("/");
+      if (separator > 0 && separator < key.length - 1 && !key.slice(0, separator).includes("/")) {
+        affectedPoolProviders.add(key.slice(0, separator));
+      }
+    }
+  };
+  for (const [tier, inherited] of inheritedEffective) {
+    if (models[tier] && (models[tier].length !== inherited.pool.length ||
+      models[tier].some((key, index) => key !== inherited.pool[index]))) {
+      addPoolProviders(inherited.pool);
+    }
+  }
+  for (const tier of Object.keys(ownership?.tiers ?? {})) {
+    const pool = sourceModels[tier];
+    if (models[tier] && (typeof pool === "string" || (Array.isArray(pool) && pool.every((key) => typeof key === "string"))) &&
+      tierOwnership(ownership, tier, pool) === "managed") {
+      addPoolProviders(typeof pool === "string" ? [pool] : pool);
+    }
+  }
+  for (const provider of affectedPoolProviders) {
+    if (!availableProviders.has(provider)) inventoryProviders.add(provider);
+  }
+  const inventories = [...inventoryProviders].map((provider) => {
+    const modelsByTier = byProvider.get(provider) ?? {};
+    const evidence = state.registryInventoryEvidence?.[provider];
+    let authConfigured: boolean | undefined;
+    try {
+      authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
+    } catch {
+      authConfigured = undefined;
+    }
+    const now = Date.now();
+    const fresh =
+      evidence?.status === "complete" &&
+      now >= evidence.refreshedAt &&
+      (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
+        (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
+    const status = state.forceRegistryRefresh || !availableProviders.has(provider)
+      ? ("stale" as const)
+      : authConfigured === false || authFailedProbeProviders.has(provider)
+        ? ("auth_failed" as const)
+        : fresh && authConfigured === true
+          ? ("complete" as const)
+          : ("stale" as const);
+    return { provider, status, modelsByTier };
+  });
+  return inventories;
+}
+
+async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const tokens = args.trim().split(/\s+/).slice(1);
+  const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
+  if (unknownArgument) {
+    reportInitOutcome(
+      ctx,
+      "not started",
+      "Nothing was read or written.",
+      `Unknown argument: ${unknownArgument}. Usage: /bifrost init [-f] [--write] [-g].`,
+      "warning",
+    );
+    return;
+  }
+  const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
+  const writeWithoutPrompt = tokens.includes("--write");
+  if (!ctx.hasUI && !writeWithoutPrompt) {
+    reportInitOutcome(
+      ctx,
+      "stopped before saving",
+      "Nothing was probed or saved.",
+      "Run /bifrost init in a host with confirmation, or pass --write to save without confirmation.",
+      "warning",
+    );
+    return;
+  }
+  try {
+    validateInitSources(selectedSource);
+  } catch {
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was probed or saved; a config file could not be read safely.",
+      "Check your selected and inherited config files, then retry.",
+      "error",
+    );
+    return;
+  }
+  const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
+  const initConfig = bootstrapOriginalConfig ?? state.config;
+  clearBifrostWidgets(ctx);
+  const refresh = await refreshInitCatalog(ctx, state);
+  if (refresh.cancelled) {
+    reportInitOutcome(
+      ctx,
+      "cancelled",
+      "Nothing was saved.",
+      "Run /bifrost init again to refresh the catalog.",
+      "info",
+    );
+    return;
+  }
+  const { initRefreshReceipt } = refresh;
+  const probe = await probeInitModels(args, ctx, state, selectedSource, initConfig);
+  if (!probe) return;
+  const { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders } = probe;
   if (probeLoaded && workingModels.length === 0) {
     reportInitOutcome(
       ctx,
@@ -2337,68 +2428,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   let settingsAdded = false;
   let actionSelectionApproved = false;
   if (source.configBytes !== null && (hasConfiguredTiers || hasDeletedTierIntent)) {
-    const byProvider = new Map<string, Record<string, string[]>>();
-    for (const model of available) {
-      if (isBifrostAuto(model)) continue;
-      const tier = guessTier(model);
-      const key = modelKey(model);
-      const byTier = byProvider.get(model.provider) ?? {};
-      byProvider.set(model.provider, byTier);
-      if (!tier) continue;
-      if (!probeVerified.has(key)) continue;
-      byTier[tier] = [...(byTier[tier] ?? []), key];
-    }
-    const inventoryProviders = new Set(byProvider.keys());
-    const availableProviders = new Set(available.map((model) => model.provider));
-    const affectedPoolProviders = new Set<string>();
-    const addPoolProviders = (pool: readonly string[] | undefined) => {
-      for (const key of pool ?? []) {
-        const separator = key.indexOf("/");
-        if (separator > 0 && separator < key.length - 1 && !key.slice(0, separator).includes("/")) {
-          affectedPoolProviders.add(key.slice(0, separator));
-        }
-      }
-    };
-    for (const [tier, inherited] of inheritedEffective) {
-      if (models[tier] && (models[tier].length !== inherited.pool.length ||
-        models[tier].some((key, index) => key !== inherited.pool[index]))) {
-        addPoolProviders(inherited.pool);
-      }
-    }
-    for (const tier of Object.keys(ownership?.tiers ?? {})) {
-      const pool = sourceModels[tier];
-      if (models[tier] && (typeof pool === "string" || (Array.isArray(pool) && pool.every((key) => typeof key === "string"))) &&
-        tierOwnership(ownership, tier, pool) === "managed") {
-        addPoolProviders(typeof pool === "string" ? [pool] : pool);
-      }
-    }
-    for (const provider of affectedPoolProviders) {
-      if (!availableProviders.has(provider)) inventoryProviders.add(provider);
-    }
-    const inventories = [...inventoryProviders].map((provider) => {
-      const modelsByTier = byProvider.get(provider) ?? {};
-      const evidence = state.registryInventoryEvidence?.[provider];
-      let authConfigured: boolean | undefined;
-      try {
-        authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
-      } catch {
-        authConfigured = undefined;
-      }
-      const now = Date.now();
-      const fresh =
-        evidence?.status === "complete" &&
-        now >= evidence.refreshedAt &&
-        (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
-          (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
-      const status = state.forceRegistryRefresh || !availableProviders.has(provider)
-        ? ("stale" as const)
-        : authConfigured === false || authFailedProbeProviders.has(provider)
-          ? ("auth_failed" as const)
-          : fresh && authConfigured === true
-            ? ("complete" as const)
-            : ("stale" as const);
-      return { provider, status, modelsByTier };
-    });
+    const inventories = buildInitInventories(
+      available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
+      refreshRemainsCurrent, initRefreshReceipt, authFailedProbeProviders,
+    );
     const validateMergedConfig = (selected: ReconciliationConfigSource, bytes: Uint8Array) =>
       prospectiveConfigInstallable(selected, bytes, state);
     const actionPlans = new Map(
