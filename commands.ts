@@ -1738,10 +1738,9 @@ function validatedInitOwnership(source: ReconciliationSourceSnapshot): ReturnTyp
   return receipt;
 }
 
-function validateInitSources(selectedSource: ReconciliationConfigSource): void {
-  const preflight = readReconciliationSource(selectedSource);
-  if (preflight.configBytes !== null) {
-    const targetConfig = parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
+function validateInitConfig(source: ReconciliationSourceSnapshot): void {
+  if (source.configBytes !== null) {
+    const targetConfig = parseInheritedConfig(Buffer.from(source.configBytes).toString("utf8"));
     if (targetConfig.models !== undefined) {
       if (!targetConfig.models || typeof targetConfig.models !== "object" || Array.isArray(targetConfig.models)) {
         throw new Error("invalid target model pools");
@@ -1753,6 +1752,11 @@ function validateInitSources(selectedSource: ReconciliationConfigSource): void {
       }
     }
   }
+}
+
+function validateInitSources(selectedSource: ReconciliationConfigSource): void {
+  const preflight = readReconciliationSource(selectedSource);
+  validateInitConfig(preflight);
   validatedInitOwnership(preflight);
   if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
 }
@@ -2435,6 +2439,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   let sourceConfig: Record<string, unknown> = {};
   if (source.configBytes !== null) {
     try {
+      validateInitConfig(source);
       const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
         throw new Error("invalid config root");
@@ -5014,6 +5019,7 @@ function persistBootstrapConfig(
   let current: Record<string, unknown> = {};
   if (source.configBytes !== null) {
     try {
+      validateInitConfig(source);
       const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
       if (
         !parsed ||

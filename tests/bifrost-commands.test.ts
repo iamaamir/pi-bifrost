@@ -4710,6 +4710,44 @@ describe("command aliases", () => {
     }
   });
 
+  it("blocks selected pool shape changes during discovery without writing", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-pool-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(process.env.PI_CODING_AGENT_DIR);
+      const config = join(tempDir, ".pi", "bifrost.json");
+      const receipt = join(tempDir, ".pi", "bifrost-reconcile-ownership.json");
+      const receiptBytes = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", { quick: ["fixture/old"] })));
+      const probe = join(tempDir, ".pi", "bifrost-probe.json");
+      writeRecentProbeCache(probe, [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      for (const invalid of ['{"models":[]}\n', '{"models":{"quick":[42]}}\n']) {
+        writeFileSync(config, '{"models":{"quick":["fixture/old"]}}\n');
+        writeFileSync(receipt, receiptBytes);
+        const model = makeModel("fixture", "chat", 0.2, 0.2);
+        const { ctx, calls } = makeCtx([model as never]);
+        const registry = (ctx as any).modelRegistry;
+        registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+        registry.refresh = async () => { writeFileSync(config, invalid); return { aborted: false, errors: new Map() }; };
+        registry.streamSimple = () => { throw new Error("cached probe expected"); };
+        await createCommandRouter(makeState() as never)("init --write", ctx as never);
+        assert.ok(calls.some((call) => String(call.value).includes("the selected config could not be parsed")), JSON.stringify(calls));
+        assert.equal(readFileSync(config, "utf8"), invalid);
+        assert.deepEqual(readFileSync(receipt), receiptBytes);
+      }
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid selected and inherited sources before discovery", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-preflight-"));
     const previousCwd = process.cwd();
