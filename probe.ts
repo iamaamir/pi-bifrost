@@ -13,7 +13,6 @@ import { writeJsonFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { debug } from "./debug.ts";
 import { PROBE_MAX_TOKENS } from "./probe-workload.ts";
-export { PROBE_MAX_TOKENS } from "./probe-workload.ts";
 
 export interface ProbeResult {
   provider: string;

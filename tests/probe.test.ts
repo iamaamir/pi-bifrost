@@ -144,6 +144,64 @@ describe("probe transport", () => {
     });
   }
 
+  for (const scenario of ["success", "error", "timeout"] as const) {
+    it(`measures elapsed duration for a ${scenario} primary attempt`, async (t) => {
+      let now = 0;
+      t.mock.method(performance, "now", () => now);
+      const model = { provider: "fixture", id: "primary-duration", api: "openai-completions" };
+      let fallbackCalls = 0;
+      const ctx = {
+        modelRegistry: {
+          getAvailable: () => [model],
+          streamSimple: (_model: unknown, _context: unknown, options: { signal: AbortSignal }) => ({
+            result: () =>
+              scenario === "timeout"
+                // Registered before the race adds its own listener, so the clock
+                // is advanced before the abort settles the attempt.
+                ? new Promise((_resolve, reject) => {
+                  options.signal.addEventListener("abort", () => {
+                    now = 70;
+                    reject(new DOMException("Aborted", "AbortError"));
+                  }, { once: true });
+                })
+                : Promise.resolve().then(() => {
+                  now = 70;
+                  return scenario === "error"
+                    ? { stopReason: "error", errorMessage: "HTTP 500: fixture", content: [], usage: { totalTokens: 1 } }
+                    : { stopReason: "stop", content: [{ type: "text", text: "2" }], usage: { totalTokens: 2 } };
+                }),
+          }),
+        },
+      } as never;
+      const result = await runProbe(ctx, {
+        persist: false,
+        timeoutMs: scenario === "timeout" ? 20 : 2_000,
+        promptWithSession: async () => { fallbackCalls++; return "2"; },
+      });
+      const expected = { success: "ok", error: "error", timeout: "timeout" } as const;
+      assert.equal(result.results[0]?.status, expected[scenario]);
+      assert.equal(result.results[0]?.duration_ms, 70, "the primary attempt's elapsed time is reported");
+      assert.equal(fallbackCalls, 0);
+    });
+  }
+
+  it("skips dispatch entirely when the signal is already aborted", async () => {
+    const model = { provider: "fixture", id: "pre-aborted", api: "openai-completions" };
+    const controller = new AbortController();
+    controller.abort();
+    let dispatched = 0;
+    const ctx = {
+      modelRegistry: {
+        getAvailable: () => [model],
+        streamSimple: () => { dispatched++; throw new Error("must not dispatch"); },
+      },
+    } as never;
+    const result = await runProbe(ctx, { persist: false, signal: controller.signal });
+    assert.equal(dispatched, 0, "an aborted signal must not dispatch a primary attempt");
+    assert.equal(result.cancelled, true);
+    assert.equal(result.results.length, 0);
+  });
+
   it("sends exactly one primary invocation when the caller disables the session fallback", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-single-"));
     const model = { provider: "fixture", id: "quiet", api: "openai-completions", cost: { input: 0, output: 0 } };

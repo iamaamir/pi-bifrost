@@ -23,8 +23,7 @@ import {
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
-import { PROBE_MAX_TOKENS } from "../probe.ts";
-import { PROBE_RESOURCE_DISCLOSURE } from "../probe-workload.ts";
+import { PROBE_MAX_TOKENS, PROBE_RESOURCE_DISCLOSURE } from "../probe-workload.ts";
 import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
@@ -718,7 +717,7 @@ describe("provider sign-in state", () => {
       assert.match(warning?.message ?? "", /beta\/code failed/);
       assert.equal(probed.status, "ok");
       assert.equal(probed.writeEligible, true);
-      assert.match(contentOf(checked), /live probe \(one tiny prompt per model\):/);
+      assert.match(contentOf(checked), /live probe \(one primary probe per model\):/);
 
       // Without the flag nothing is sent, so a plain check keeps costing nothing.
       const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
@@ -898,7 +897,7 @@ describe("provider sign-in state", () => {
         probe: true,
       });
       const content = contentOf(checked);
-      assert.match(content, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 without a reported outcome/);
+      assert.match(content, /live probe \(one primary probe per model\): 1\/2 answered, 1 without a reported outcome/);
       assert.match(content, /treat them as unverified, not as passing/);
     } finally {
       harness.cleanup();
@@ -1228,7 +1227,7 @@ describe("provider sign-in state", () => {
         probe: true,
       });
       const text = contentOf(result);
-      assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered/);
+      assert.match(text, /live probe \(one primary probe per model\): 1\/2 answered/);
       assert.match(text, /beta\/code: error/);
       assert.doesNotMatch(text, /alpha\/strong: ok/);
     } finally {
@@ -1254,7 +1253,7 @@ describe("provider sign-in state", () => {
         probe: true,
       });
       const text = contentOf(result);
-      assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 skipped/);
+      assert.match(text, /live probe \(one primary probe per model\): 1\/2 answered, 1 skipped/);
       assert.match(text, /1 model skipped: the check was cancelled, or the model was not asked; a cancelled request may already have been sent and charged/);
       assert.doesNotMatch(text, /2\/2 answered/);
     } finally {

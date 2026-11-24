@@ -254,7 +254,7 @@ it was opened.
   initiative to satisfy a goal: those operations can send provider requests and
   spend credits. Work with the inventory `inspect` reports, including its
   provider sign-in state. The one exception is the tool's own live probe, which
-  stays opt-in: ask first, say that it sends one tiny prompt per model, and pass
+  stays opt-in: ask first, say that it runs one primary probe per model, and pass
   `"probe":true` only after the user agrees.
 - Do not retry `apply` after a `stale` result with the same digests. Re-inspect,
   re-check, and re-confirm with the user. A project with no configuration yet

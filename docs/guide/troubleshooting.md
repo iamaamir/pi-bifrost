@@ -43,7 +43,7 @@ It shows effective routing and reliability state after configuration layers merg
 }
 ```
 
-The primary probe transport uses `1+1=` and caps output at 5 tokens. An empty response may trigger one minimal-session fallback request. Probes can use provider credits or reach rate limits. First-use routes can use provisional catalog pools while those checks run. If all checks fail, Bifrost does not save a configuration.
+The primary probe transport uses `1+1=` and requests 5 output tokens; that is a requested budget, not an enforced cap, because the host may raise or omit it and native transport may send additional requests. An empty response may trigger one minimal-session fallback request. Probes can use provider credits or reach rate limits. First-use routes can use provisional catalog pools while those checks run. If all checks fail, Bifrost does not save a configuration.
 
 ## Understand preview output
 
