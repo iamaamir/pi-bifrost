@@ -19,29 +19,46 @@ function guidePages(files) {
     .sort();
 }
 
-/** Guide pages linked from the `## Links` section, or null when it is absent. */
+const GUIDE_URL_PREFIX = "https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/";
+
+/**
+ * Guide pages linked from the `## Links` section, plus non-canonical URLs, or
+ * null when the section is absent. A filename match alone would accept a link
+ * to another host, repository, or branch, so the destination is part of the
+ * contract.
+ */
 function linkedPages(markdown) {
   const lines = markdown.split(/\r?\n/u);
   const start = lines.findIndex((line) => /^## Links\s*$/u.test(line));
   if (start === -1) return null;
   const pages = [];
+  const problems = [];
   for (const line of lines.slice(start + 1)) {
     if (/^##\s/u.test(line)) break;
     const entry = /^\s*-\s+[^:]+:\s+(\S+)\s*$/u.exec(line);
     if (!entry) continue;
-    const target = /\/docs\/guide\/([^/?#\s]+\.md)(?:[?#]\S*)?$/u.exec(entry[1]);
-    if (target) pages.push(`${GUIDE}/${target[1]}`);
+    const target = entry[1];
+    // The Links section also names the project site, repository, and package.
+    // Only a guide destination has to be canonical.
+    if (!target.includes("/docs/guide/")) continue;
+    if (!target.startsWith(GUIDE_URL_PREFIX)) {
+      problems.push(`${LLMS}: ${target} is not a canonical guide URL`);
+      continue;
+    }
+    const page = /^([^/?#\s]+\.md)(?:[?#]\S*)?$/u.exec(target.slice(GUIDE_URL_PREFIX.length));
+    if (page) pages.push(`${GUIDE}/${page[1]}`);
+    else problems.push(`${LLMS}: ${target} is not a canonical guide URL`);
   }
-  return pages;
+  return { pages, problems };
 }
 
 /** Every disagreement between the guide pages and the llms.txt Links section. */
 function parityProblems({ pages, markdown }) {
   const linked = linkedPages(markdown);
   if (linked === null) return [`${LLMS}: missing "## Links"`];
-  const problems = [];
+  const problems = [...linked.problems];
   const seen = new Set();
-  for (const page of linked) {
+  for (const page of linked.pages) {
     if (!pages.includes(page)) {
       problems.push(`${LLMS}: links to ${page}, which is not a guide page`);
     }
@@ -74,8 +91,8 @@ test("fault control: a missing page, a duplicate, an unknown page, and a missing
     "",
     "## Links",
     "",
-    "- Guide: https://github.com/example/project/blob/main/docs/guide/index.md",
-    "- Task: https://github.com/example/project/blob/main/docs/guide/task.md",
+    "- Guide: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md",
+    "- Task: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md",
     "",
     "## Other",
     "",
@@ -83,7 +100,7 @@ test("fault control: a missing page, a duplicate, an unknown page, and a missing
   assert.deepEqual(parityProblems({ pages, markdown }), []);
 
   assert.deepEqual(
-    parityProblems({ pages, markdown: markdown.replace("- Task: https://github.com/example/project/blob/main/docs/guide/task.md\n", "") }),
+    parityProblems({ pages, markdown: markdown.replace("- Task: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md\n", "") }),
     [`${LLMS}: task.md is missing from Links`],
   );
   assert.deepEqual(
@@ -92,7 +109,7 @@ test("fault control: a missing page, a duplicate, an unknown page, and a missing
   );
   const duplicate = markdown.replace(
     "\n## Other",
-    "\n- Task again: https://github.com/example/project/blob/main/docs/guide/task.md\n\n## Other",
+    "\n- Task again: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md\n\n## Other",
   );
   assert.deepEqual(
     parityProblems({ pages, markdown: duplicate }),
@@ -100,11 +117,26 @@ test("fault control: a missing page, a duplicate, an unknown page, and a missing
   );
   const unknown = markdown.replace(
     "\n## Other",
-    "\n- Gone: https://github.com/example/project/blob/main/docs/guide/gone.md\n\n## Other",
+    "\n- Gone: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/gone.md\n\n## Other",
   );
   assert.deepEqual(
     parityProblems({ pages, markdown: unknown }),
     [`${LLMS}: links to ${GUIDE}/gone.md, which is not a guide page`],
   );
+  for (const hostile of [
+    "https://example.invalid/docs/guide/task.md",
+    "https://github.com/someone/pi-bifrost/blob/main/docs/guide/task.md",
+    "https://github.com/iamaamir/pi-bifrost/blob/next/docs/guide/task.md",
+  ]) {
+    const problems = parityProblems({
+      pages,
+      markdown: markdown.replace("https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md", hostile),
+    });
+    assert.equal(
+      problems.includes(`${LLMS}: ${hostile} is not a canonical guide URL`),
+      true,
+      "a filename match must not accept another host, repository, or branch",
+    );
+  }
   assert.deepEqual(parityProblems({ pages, markdown: "# Docs\n" }), [`${LLMS}: missing "## Links"`]);
 });
