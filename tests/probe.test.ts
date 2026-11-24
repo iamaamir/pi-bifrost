@@ -104,7 +104,47 @@ describe("probe transport", () => {
     }
   });
 
-  it("sends exactly one request when the caller disables the session fallback", async () => {
+  for (const scenario of ["success", "empty", "error", "timeout", "cancelled"] as const) {
+    it(`measures full elapsed duration for a ${scenario} fallback`, async (t) => {
+      let now = 0;
+      t.mock.method(performance, "now", () => now);
+      const model = { provider: "fixture", id: "duration", api: "openai-completions" };
+      const controller = new AbortController();
+      const ctx = {
+        modelRegistry: {
+          getAvailable: () => [model],
+          streamSimple: () => ({
+            result: async () => {
+              now = 10;
+              return { stopReason: "stop", content: [], usage: { totalTokens: 1 } };
+            },
+          }),
+        },
+      } as never;
+      const result = await runProbe(ctx, {
+        persist: false,
+        signal: controller.signal,
+        timeoutMs: scenario === "timeout" ? 20 : 2_000,
+        promptWithSession: async (_model, _prompt, { signal }) => {
+          if (scenario === "timeout") {
+            await new Promise<void>((resolve) => {
+              if (signal?.aborted) resolve();
+              else signal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+          }
+          now = 80;
+          if (scenario === "cancelled") controller.abort();
+          if (scenario === "error") throw new Error("fixture fallback failed");
+          return scenario === "empty" ? undefined : "2";
+        },
+      });
+      const expected = { success: "ok", empty: "error", error: "error", timeout: "timeout", cancelled: "skipped" } as const;
+      assert.equal(result.results[0]?.status, expected[scenario]);
+      assert.equal(result.results[0]?.duration_ms, 80);
+    });
+  }
+
+  it("sends exactly one primary invocation when the caller disables the session fallback", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-single-"));
     const model = { provider: "fixture", id: "quiet", api: "openai-completions", cost: { input: 0, output: 0 } };
     const cwdBefore = process.cwd();
@@ -289,6 +329,7 @@ describe("probe transport", () => {
       assert.ok(payload, "native Codex request payload was built");
       assert.equal(result.results[0]?.status, "ok", result.results[0]?.error ?? "probe did not succeed");
       assert.equal(payload?.temperature, undefined);
+      assert.equal(payload?.max_output_tokens, undefined, "Codex does not serialize the requested output limit");
       assert.equal(payload?.model, "gpt-fixture");
       assert.equal(probeOptions?.temperature, undefined);
       assert.equal(probeOptions?.maxTokens, 5);

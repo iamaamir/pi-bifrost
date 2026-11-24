@@ -43,6 +43,7 @@ import { createRouter, type RouterModel, type RouterRegistrySnapshot, type Route
 import { writeTextFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { approveConfig } from "./config-approval.ts";
+import { PROBE_RESOURCE_DISCLOSURE } from "./probe-workload.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
 
@@ -958,23 +959,14 @@ function probeTargets(
 }
 
 /**
- * Output cap per probe request, stated in the terms a user agrees to. The
- * transport enforces it (`probe.ts`); policy owns the wording, and the
- * architecture rule forbids this module from importing the adapter. A test
- * pins the two numbers together so the consent text cannot drift from what is
- * actually sent.
- */
-export const PROBE_OUTPUT_TOKEN_CAP = 5;
-
-/**
  * What a live probe will do, in the terms a user needs to agree to it: the exact
- * models, the request count, and the output bound.
+ * models, the authorized workload, and the limits of its guarantees.
  */
 function probeConsentText(models: readonly string[]): string {
   // Every model the request will reach is named. A count plus a truncated
   // prefix asks the user to approve targets they cannot see, and the plan is
   // exactly what the caller was told to show.
-  return `Send one request of at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens to each of ${models.length} model(s): ${models.join(", ")}. A result describes this provider now; a pass is not a promise for later.`;
+  return `Run one primary probe per target, without session fallback, for ${models.length} model(s): ${models.join(", ")}. ${PROBE_RESOURCE_DISCLOSURE} A result describes this provider now; a pass is not a promise for later.`;
 }
 
 /** How a live probe was authorized. */
@@ -1058,8 +1050,8 @@ async function applyLiveProbe(
     notes: [...result.notes, cancelled
       ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
       : consent === "ui"
-        ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`
-        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`,
+        ? `Live probe ran with dialog approval: ${models.length} model(s) targeted, no session fallback. ${PROBE_RESOURCE_DISCLOSURE}`
+        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} model(s) targeted, no session fallback. ${PROBE_RESOURCE_DISCLOSURE}`,
     ...(plan.skipped.length > 0
       ? [`${plan.skipped.length} model(s) were not probed because their provider's sign-in does not resolve for this session; skipped is not a probe failure.`]
       : [])],
@@ -2422,7 +2414,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
-  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. Targets are the effective pools and direct-model rules; a rule shadowed by an earlier match may still be listed, because the plan is a safe superset of what a prompt can reach. Models whose provider's stored sign-in does not resolve for this session are listed in probeSkipped and are not probed: a skipped model is not a probe failure. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
+  probe: Type.Optional(Type.Boolean({ description: `Live-check the models this check would route to: one primary probe per target, no session fallback. ${PROBE_RESOURCE_DISCLOSURE} Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. Targets are the effective pools and direct-model rules; a rule shadowed by an earlier match may still be listed, because the plan is a safe superset of what a prompt can reach. Models whose provider's stored sign-in does not resolve for this session are listed in probeSkipped and are not probed: a skipped model is not a probe failure. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable.` }))
 });
 
 /**
@@ -2647,7 +2639,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
               ...(plan.skipped.length > 0 ? { probeSkipped: plan.skipped } : {}),
               notes: [...result.notes,
                 ...(plan.models.length > 0
-                  ? [`Live probe would target ${plan.models.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`]
+                  ? [`Live probe would target ${plan.models.length} model(s), one primary probe each, no session fallback. ${PROBE_RESOURCE_DISCLOSURE} It does not run unless the caller opts in with probe: true.`]
                   : []),
                 ...(plan.skipped.length > 0
                   ? [`${plan.skipped.length} model(s) are not probed because their provider's sign-in does not resolve for this session; they are skipped, not failures.`]

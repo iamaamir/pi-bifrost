@@ -12,6 +12,8 @@ import { promptWithMinimalSession } from "./session-fallback.ts";
 import { writeJsonFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { debug } from "./debug.ts";
+import { PROBE_MAX_TOKENS } from "./probe-workload.ts";
+export { PROBE_MAX_TOKENS } from "./probe-workload.ts";
 
 export interface ProbeResult {
   provider: string;
@@ -30,8 +32,6 @@ export const PROBE_PROMPT_TEXT = PROBE_PROMPT;
 export const PROBE_CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_PROBE_CACHE_BYTES = 10_000_000;
 const PROBE_TIMEOUT_MS = 10_000;
-/** Output bound per probe request; exported so consent text states the real cap. */
-export const PROBE_MAX_TOKENS = 5;
 /** Bound provider error text retained by the probe. */
 export const MAX_PROBE_ERROR_CHARS = 200;
 
@@ -62,7 +62,7 @@ export interface RunProbeOptions {
   shouldProbe?: (model: Model<Api>) => boolean;
   promptWithSession?: MinimalSessionPrompt;
   /** Allow a second, session-backed request when the streaming attempt returns
-   * no text. Callers that promise exactly one request per model pass `false`. */
+   * no text. Callers that authorize only the primary probe pass `false`. */
   sessionFallback?: boolean;
   /** Write the results to the `.pi/bifrost-probe.json` cache that `/bifrost init`
    * reads. A one-off candidate check passes `false`: its narrow transport would
@@ -375,7 +375,6 @@ async function probeOne(
         stream.result(),
         new Promise<never>((_, reject) => { removeAbortListener = rejectOnAbort(reject); }),
       ]);
-      base.duration_ms = +(performance.now() - start).toFixed(1);
       if (response.stopReason === "error") {
         base.status = "error";
         base.error = boundProbeError(response.errorMessage ?? "model error");
@@ -415,7 +414,6 @@ async function probeOne(
       signal?.removeEventListener("abort", abort);
     }
   } catch (err) {
-    base.duration_ms = +(performance.now() - start).toFixed(1);
     if (signal?.aborted) {
       base.status = "skipped";
       return base;
@@ -424,6 +422,8 @@ async function probeOne(
       ? "timeout"
       : "error";
     base.error = boundProbeError(err);
+  } finally {
+    base.duration_ms = +(performance.now() - start).toFixed(1);
   }
 
   return base;

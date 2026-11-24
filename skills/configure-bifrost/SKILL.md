@@ -71,8 +71,11 @@ goal needs something Bifrost does not do, say so.
 
    When a provider's sign-in state is `unknown`, or the user asks for proof that
    a tier really answers before you apply it, the check can run a live probe:
-   one request per model the candidate can select, each capped at 5 output
-   tokens. Plain check never probes; it reports `probePlan` with the exact
+   one primary probe per model the candidate can select, without session
+   fallback. Show the requested token budget and resource caveats from the
+   check report: the host may raise or omit the limit, native transport may
+   send additional requests, and charges may apply. Plain check never probes;
+   it reports `probePlan` with the exact
    models and count a probe would cover, plus `probeSkipped` for models the
    host leaves out of this session. Show that plan to the user, and only
    then repeat check with `"probe":true`. In the TUI the host asks for a second,
