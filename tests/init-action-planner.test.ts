@@ -68,6 +68,18 @@ describe("init action planner", () => {
     assert.equal(value.status, "ready");
     assert.deepEqual(config(value).models.quick, ["manual/custom"]);
   });
+  it("keeps inherited pools untouched with unrelated incomplete inventory", () => {
+    for (const status of ["stale", "partial", "auth_failed"] as const) {
+      const value = buildInitActionPlan({
+        action: "keep", source: source({ custom: ["manual/x"] }),
+        inventories: [...inventory, { provider: "unrelated", status, modelsByTier: {} }],
+        generated: baseline, inheritedTiers: new Set(["quick"]),
+        inheritedPools: new Map([["quick", ["p/old"]]]), validateMergedConfig: () => true,
+      });
+      assert.equal(value.status, "ready");
+      assert.deepEqual(config(value).models, { custom: ["manual/x"], general: baseline.general });
+    }
+  });
   it("blocks removed local and inherited members without complete provider evidence", () => {
     for (const inherited of [false, true]) {
       const input = {
