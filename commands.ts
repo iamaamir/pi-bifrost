@@ -2192,6 +2192,20 @@ function initRefreshRemainsCurrent(
   return refreshRemainsCurrent;
 }
 
+function initPlanDefault(
+  bytes: Uint8Array | undefined, sourceConfig: Record<string, unknown>,
+  inherited: ReadonlyMap<string, InheritedTierPool>, extensionDir: string,
+  inheritedFields: Set<string>, currentDefault: string,
+): string {
+  if (sourceConfig.default !== undefined || inheritedFields.has("default")) return currentDefault;
+  const effective: Record<string, string[]> = Object.fromEntries(
+    [...inherited].map(([tier, value]) => [tier, [...value.pool]]),
+  );
+  const config = bytes ? JSON.parse(Buffer.from(bytes).toString("utf8")) : sourceConfig;
+  Object.assign(effective, config.models ?? {});
+  return String(buildInitProposal(effective, undefined, extensionDir).default);
+}
+
 function buildInitConfigProposal(
   models: Record<string, string[]>, inheritedFields: Set<string>, sourceConfig: Record<string, unknown>,
   classifierModel: string | undefined, state: BifrostState, sourceClassifier: Record<string, unknown>,
@@ -2508,6 +2522,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ]),
     );
     const keepPlan = actionPlans.get("keep")!;
+    proposal.default = initPlanDefault(keepPlan.transaction?.nextConfigBytes, sourceConfig, inheritedEffective, state.extensionDir, inheritedFields, String(proposal.default));
     const proposedSettings = Object.keys(proposal).filter(
       (key) => key !== "$schema" && key !== "models" && !inheritedFields.has(key) && sourceConfig[key] === undefined,
     );
@@ -2569,7 +2584,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         "  Unlisted tiers remain unchanged.",
         `  Classifier ${effectiveClassifierSummary}`,
         ...(proposedSettings.length
-          ? ["  Settings added:", ...proposedSettings.flatMap((key) => initReviewSettingLines(key, proposal[key]))]
+          ? ["  Settings added:", ...proposedSettings.filter((key) => key !== "default").flatMap((key) => initReviewSettingLines(key, proposal[key]))]
           : []),
         "",
       ];
@@ -2594,6 +2609,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       for (const action of availableActions) {
         const candidate = actionPlans.get(action)!;
         compareLines.push(`  ${actionLabel(action)}:`);
+        if (proposedSettings.includes("default")) compareLines.push(...initReviewSettingLines("default", initPlanDefault(candidate.transaction?.nextConfigBytes, sourceConfig, inheritedEffective, state.extensionDir, inheritedFields, String(proposal.default))));
         compareLines.push(...candidate.tiers
           .filter(({ before, after, ownershipBefore, ownershipAfter }) =>
             JSON.stringify(before) !== JSON.stringify(after) ||
@@ -2716,6 +2732,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         }
     };
     const plan = actionPlans.get(selectedAction)!;
+    proposal.default = initPlanDefault(plan.transaction?.nextConfigBytes, sourceConfig, inheritedEffective, state.extensionDir, inheritedFields, String(proposal.default));
     inventoryStillSafe = () => actionHasCompleteAffectedInventory(plan, buildInitInventories(
       available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
       initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), initRefreshReceipt, authFailedProbeProviders,

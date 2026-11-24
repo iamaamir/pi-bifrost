@@ -1458,6 +1458,41 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("keeps the effective default valid for layered settings-only init", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-layered-default-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      const globalConfig = join(isolatedAgentDir, "bifrost.json");
+      const projectConfig = join(tempDir, ".pi", "bifrost.json");
+      const receipt = join(tempDir, ".pi", "bifrost-reconcile-ownership.json");
+      const globalBytes = JSON.stringify({ models: { custom: ["fixture/chat"] } });
+      writeFileSync(globalConfig, globalBytes);
+      writeFileSync(projectConfig, JSON.stringify({ debug: { enabled: false } }));
+      writeFileSync(receipt, JSON.stringify(buildInitOwnershipReceipt("project", { quick: ["fixture/old"] })));
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const model = makeModel("fixture", "chat", 0.2, 0.2);
+      const { ctx } = makeCtx([model as never], undefined, async () => "Keep my models (default)");
+      (ctx as any).modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+      await createCommandRouter(state)("init", ctx as never);
+      assert.equal(readFileSync(globalConfig, "utf8"), globalBytes);
+      const saved = JSON.parse(readFileSync(projectConfig, "utf8"));
+      const ownership = existsSync(receipt) ? JSON.parse(readFileSync(receipt, "utf8")) : undefined;
+      const effective = loadConfigForReload(tempDir, state.extensionDir).config;
+      assert.deepEqual(saved.models, undefined);
+      assert.deepEqual(ownership, { version: 2, scope: "project", tiers: { quick: { state: "deleted" } } });
+      assert.ok(Object.hasOwn(effective.models ?? {}, effective.default ?? ""), `default ${effective.default} missing from ${JSON.stringify(effective.models)}; saved=${JSON.stringify(saved)}; receipt=${JSON.stringify(ownership)}`);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses bundled public init defaults without loading extension config", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-extension-ownership-"));
     const previousCwd = process.cwd();
