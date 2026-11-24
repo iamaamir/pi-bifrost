@@ -26,6 +26,8 @@ Prove the boundary with direct contract tests where appropriate, supported impor
 
 **Host-neutral does not mean side-effect-free.** A capability may legitimately own focused I/O, persistence or bounded subprocess safety checks. Pi-only adapters need not pass the host-neutrality test; they should keep those host effects out of reusable policy. Prefer existing interfaces and the smallest meaningful extraction over generic ports or speculative dependency injection.
 
+**Reuse native capabilities before rebuilding them.** Extend where necessary, compose where appropriate, and delegate when the host already provides the required functionality. Check the host's official documentation and relevant implementation before introducing an alternative. Reuse native APIs, types and functions when their contracts meet Bifrost's requirements. Introduce new abstractions only for a distinct responsibility or a meaningful boundary. Keep host-specific dependencies within the appropriate integration boundary; reuse must preserve separation of concerns, replaceability and independent testability.
+
 Internal module contracts are **not automatically public SDK APIs**. Broader SDK exposure and additional host integrations require concrete consumer needs, explicit compatibility decisions and their own evaluation; portability alone does not authorize new packages, extension mechanisms or a proxy-first architecture.
 
 ## Gradual intelligence ladder
