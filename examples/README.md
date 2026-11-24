@@ -18,7 +18,7 @@ Where files live:
 - **Complete example files** in this directory are full config files. Copy one to `.pi/bifrost.json` for a single project, or `~/.pi/agent/bifrost.json` for all projects.
 - **Fragments** shown below are added inside that same `.pi/bifrost.json` file.
 
-Tier keys may use any name you like. To force a tier at the start of a message, type one lowercase alphabetic word, such as `quick`.
+A tier key may use any name you like. Only one lowercase alphabetic word, such as `quick`, can be typed at the start of a message as a prefix.
 
 After any edit, run `/bifrost reload` in Pi.
 
@@ -74,7 +74,7 @@ Copy a recipe to `.pi/bifrost.json`, then reload:
 
 ## Reconcile generated model membership
 
-Preview and apply are separate steps. Preview is offline by default; `--refresh` contacts one provider and creates a proposal.
+Preview and apply are separate steps. Preview is offline by default; `--refresh` contacts one provider and still creates only a proposal.
 
 ```text
 /bifrost config reconcile --source project --tier general --provider openai --json
