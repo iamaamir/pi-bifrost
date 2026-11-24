@@ -122,7 +122,7 @@
           <div class="story-chapters">
             <section id="auto" data-demo-scene="auto" aria-labelledby="auto-title">
               <p class="eyebrow">01 / Pi-native virtual model</p>
-              <h2 id="auto-title">Auto routes inside Pi.</h2>
+              <h2 id="auto-title">Auto routes inside Pi, not through a proxy.</h2>
               <p>Run <code>/model</code> in Pi and select <code>bifrost/auto</code>. For each new user turn, Bifrost chooses from your configured models. Pi dispatches the physical model and records which model answered.</p>
               <p>Tool continuations stay with that physical model. Selecting Auto is deliberate; normal routing sets Pi's active physical model before generation.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#bifrost-auto-virtual-model">How Auto works in Pi</a></p>
@@ -378,8 +378,8 @@
               Pin one exact model when a long session builds on the same context,
               prompt-cache locality matters, or switching would disrupt latency,
               billing, or workflow expectations. Adaptive routing favors per-turn
-              task fit over continuity. Results, cost, latency, and cache savings
-              vary by provider and workload.
+              task fit over continuity. It does not guarantee better results, lower
+              cost, lower latency, or cache savings.
             </p>
           </div>
         </details>
