@@ -2233,6 +2233,39 @@ function buildInitConfigProposal(
   return proposal;
 }
 
+function prepareInitInheritedPools(
+  selectedSource: ReconciliationConfigSource, hasConfiguredTiers: boolean,
+  inheritedEffective: ReadonlyMap<string, InheritedTierPool>, models: Record<string, string[]>,
+  available: Parameters<typeof initPoolHasCompleteInventory>[1], state: BifrostState, ctx: ExtensionContext,
+  refreshRemainsCurrent: boolean, authFailedProbeProviders: ReadonlySet<string>,
+  initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
+  writeWithoutPrompt: boolean, hasDeletedTierIntent: boolean,
+): boolean {
+  if (selectedSource === "project" && !hasConfiguredTiers) {
+    for (const [tier, inherited] of inheritedEffective) {
+      const generated = models[tier];
+      if (!generated) continue;
+      const identical = generated.length === inherited.pool.length &&
+        generated.every((key, index) => key === inherited.pool[index]);
+      const completeInventory = initPoolHasCompleteInventory(
+        inherited.pool, available, state, ctx, refreshRemainsCurrent, authFailedProbeProviders, initRefreshReceipt,
+      );
+      if (!writeWithoutPrompt && !identical && !completeInventory) {
+        reportInitOutcome(
+          ctx,
+          "blocked",
+          `Nothing was saved; inherited ${tier} pool cannot be safely replaced because its provider inventory is unknown, unsigned-in, or stale.`,
+          "Sign in to each inherited provider and refresh its model catalog, then rerun /bifrost init to review the replacement.",
+          "warning",
+        );
+        return false;
+      }
+      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent)) delete models[tier];
+    }
+  }
+  return true;
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -2387,28 +2420,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       return;
     }
   }
-  if (selectedSource === "project" && !hasConfiguredTiers) {
-    for (const [tier, inherited] of inheritedEffective) {
-      const generated = models[tier];
-      if (!generated) continue;
-      const identical = generated.length === inherited.pool.length &&
-        generated.every((key, index) => key === inherited.pool[index]);
-      const completeInventory = initPoolHasCompleteInventory(
-        inherited.pool, available, state, ctx, refreshRemainsCurrent, authFailedProbeProviders, initRefreshReceipt,
-      );
-      if (!writeWithoutPrompt && !identical && !completeInventory) {
-        reportInitOutcome(
-          ctx,
-          "blocked",
-          `Nothing was saved; inherited ${tier} pool cannot be safely replaced because its provider inventory is unknown, unsigned-in, or stale.`,
-          "Sign in to each inherited provider and refresh its model catalog, then rerun /bifrost init to review the replacement.",
-          "warning",
-        );
-        return;
-      }
-      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent)) delete models[tier];
-    }
-  }
+  const inheritedPoolsReady = prepareInitInheritedPools(
+    selectedSource, hasConfiguredTiers, inheritedEffective, models, available, state, ctx,
+    refreshRemainsCurrent, authFailedProbeProviders, initRefreshReceipt, writeWithoutPrompt, hasDeletedTierIntent,
+  );
+  if (!inheritedPoolsReady) return;
   const generatedPools = Object.fromEntries(
     Object.entries(models).map(([tier, pool]) => [tier, [...pool]]),
   );

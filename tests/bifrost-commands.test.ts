@@ -4303,7 +4303,7 @@ describe("command aliases", () => {
     assert.ok(exits.length >= 20, `expected many init exits, found ${exits.length}`);
     assert.match(source.slice(source.indexOf("async function probeInitModels("), start), /reportInitOutcome\([\s\S]*?"cancelled"[\s\S]*?return undefined;/);
     for (const { index, text } of exits) {
-      if (text === "if (!probe) return;") continue;
+      if (text === "if (!probe) return;" || text === "if (!inheritedPoolsReady) return;") continue;
       const preceding = body.slice(Math.max(0, index - 12), index).join("\n");
       assert.ok(
         preceding.includes("reportInitOutcome("),
