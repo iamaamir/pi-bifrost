@@ -5261,10 +5261,8 @@ describe("route dispatch", () => {
         if (typeof value === "function") throw new Error("progress render failed");
       };
       // A progress render that throws rejects runProbe before the widget clear.
-      await assert.rejects(
-        createCommandRouter(makeState() as never)("init", ctx as never),
-        /progress render failed/,
-      );
+      await createCommandRouter(makeState() as never)("init", ctx as never);
+      assert.ok(JSON.stringify(calls).includes("Probe failed; run /bifrost init again to retry."));
       assert.equal(
         probeWidgets[probeWidgets.length - 1],
         "[]",

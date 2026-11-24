@@ -1887,6 +1887,14 @@ function resolveInitClassifier(
   return { classifierModel, effectiveClassifierSummary };
 }
 
+function reportInitProbeFailure(ctx: ExtensionContext): void {
+  if (ctx.signal?.aborted) {
+    reportInitOutcome(ctx, "cancelled", "Nothing was saved.", "Probe results from this run were discarded; run /bifrost init again to retry.", "info");
+  } else {
+    reportInitOutcome(ctx, "blocked", "Nothing was saved.", "Probe failed; run /bifrost init again to retry.", "error");
+  }
+}
+
 function categorizeInitModels(
   available: ReturnType<ExtensionContext["modelRegistry"]["getAvailable"]>,
   workingModels: readonly { provider: string; model: string; duration_ms: number }[],
@@ -2011,6 +2019,9 @@ async function probeInitModels(
           setProbeProgress(ctx, { done, total, okCount, errCount });
         },
       });
+    } catch {
+      reportInitProbeFailure(ctx);
+      return undefined;
     } finally {
       // The probe widget must never outlive the probe: every later exit path
       // renders its feedback in the chat, and a stale progress panel reads as
@@ -5445,7 +5456,7 @@ export function createCommandRouter(
         logImportant(ctx, "Probe cancelled", "Partial results were not saved.", "info");
         return;
       }
-      const { results, path } = probeRun;
+      const { results, path, persisted } = probeRun;
       state.reliabilityStore.applyOutcomes(
         results.map((r) =>
           r.status === "ok"
@@ -5489,7 +5500,7 @@ export function createCommandRouter(
         }
       }
 
-      lines.push("", `full results → ${path}`);
+      lines.push("", persisted ? `full results → ${path}` : "Probe report could not be saved.");
       uiOutput(ctx, lines);
 
       const notWorking = results.length - ok.length;
@@ -5523,7 +5534,7 @@ export function createCommandRouter(
         ...(sortedReasons.length > topReasons.length
           ? [`${sortedReasons.length - topReasons.length} more failure reasons`]
           : []),
-        "full errors: .pi/bifrost-probe.json",
+        ...(persisted ? ["full errors: .pi/bifrost-probe.json"] : ["Probe report could not be saved."]),
       ];
       // Expanded view (ctrl+o): every failure group with its complete model list.
       const expandedDetails = [
@@ -5534,7 +5545,7 @@ export function createCommandRouter(
           `${REASON_LABELS[reason] ?? reason} ×${r.count}`,
           ...r.models.map((m) => `· ${m}`),
         ]),
-        "full errors: .pi/bifrost-probe.json",
+        ...(persisted ? ["full errors: .pi/bifrost-probe.json"] : ["Probe report could not be saved."]),
       ];
       if (ok.length === 0) {
         logImportant(

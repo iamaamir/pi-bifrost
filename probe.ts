@@ -245,7 +245,7 @@ function reportProbeCompletion(
 export async function runProbe(
   ctx: ExtensionContext,
   options: RunProbeOptions = {},
-): Promise<{ results: ProbeResult[]; path: string; cancelled?: true }> {
+): Promise<{ results: ProbeResult[]; path: string; persisted?: true; cancelled?: true }> {
   const runId = randomUUID();
   const outputPath = options.path ?? join(process.cwd(), ".pi", "bifrost-probe.json");
   const catalog = ctx.modelRegistry.getAvailable().filter(isGenerativeModel);
@@ -323,7 +323,7 @@ export async function runProbe(
     return { results, path: outputPath };
   }
   reportProbeCompletion(runId, results, catalog.length, { cache: "written" });
-  return { results, path: outputPath };
+  return { results, path: outputPath, persisted: true };
 }
 
 async function probeOne(

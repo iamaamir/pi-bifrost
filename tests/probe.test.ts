@@ -50,6 +50,7 @@ describe("probe transport", () => {
       const result = await runProbe(ctx, {});
       assert.equal(result.results[0]?.status, "ok");
       assert.equal(result.results[0]?.model, "gpt-5.4-mini");
+      assert.equal(result.persisted, true);
     } finally {
       process.chdir(cwdBefore);
       rmSync(cwd, { recursive: true, force: true });
@@ -809,6 +810,7 @@ describe("probe concurrency and resilience", () => {
       const result = await runProbe(ctx, {});
       assert.equal(result.results.length, 1);
       assert.equal(result.results[0]?.status, "ok");
+      assert.equal(result.persisted, undefined);
       await flushDebug(1_000);
       const terminal = readFileSync(logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).find((row) => row.event === "complete");
       assert.equal(terminal.cache, "error");
