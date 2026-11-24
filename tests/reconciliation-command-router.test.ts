@@ -11,6 +11,7 @@ import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_RULES } from "../config.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { makeModel } from "./helpers.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "../registry-refresh.ts";
+import { PROBE_CACHE_TTL_MS } from "../probe.ts";
 
 function withCwd<T>(run: (directory: string) => Promise<T>): Promise<T> {
   const prior = process.cwd();
@@ -767,6 +768,52 @@ describe("config reconciliation command router", () => {
       fs.rmSync(scratch.directory, { recursive: true, force: true });
     }
   });
+
+  for (const scenario of ["inherited override", "reorder only", "settings only"] as const) {
+    it(`handles cached probe expiry during approval: ${scenario}`, async () => {
+      const originalNow = Date.now;
+      try {
+        await withCwd(async (cwd) => {
+          let now = originalNow();
+          Date.now = () => now;
+          const agentDir = process.env.PI_CODING_AGENT_DIR!;
+          fs.mkdirSync(agentDir, { recursive: true });
+          const inherited = scenario === "inherited override" ? ["openai/old-model"]
+            : scenario === "reorder only" ? ["openai/second", "openai/first"] : ["openai/first"];
+          fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ default: "general", models: { general: inherited } }));
+          const dir = join(cwd, ".pi");
+          fs.mkdirSync(dir, { recursive: true });
+          const configPath = join(dir, "bifrost.json");
+          const receiptPath = join(dir, "bifrost-reconcile-ownership.json");
+          const config = Buffer.from("{}\n");
+          const receipt = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", {})));
+          fs.writeFileSync(configPath, config);
+          fs.writeFileSync(receiptPath, receipt);
+          const models = scenario === "reorder only" ? ["first", "second"] : ["first"];
+          const probePath = join(dir, "bifrost-probe.json");
+          writeRecentProbeCache(probePath, models.map((model) => ({ status: "ok", provider: "openai", model, cost_input: 1, cost_output: 1, duration_ms: 10 })));
+          const nearExpiry = new Date(now - PROBE_CACHE_TTL_MS + 1000);
+          fs.utimesSync(probePath, nearExpiry, nearExpiry);
+          const h = makeHarness({ models: models.map((model) => makeModel("openai", model, 1, 1)) });
+          const ctx = h.ctx as unknown as { hasUI: boolean; ui: { confirm: () => Promise<boolean>; notify: () => void } };
+          ctx.hasUI = true;
+          let confirmations = 0;
+          ctx.ui = { confirm: async () => { confirmations++; now += 2000; return true; }, notify: () => {} };
+          const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+          assert.equal(confirmations, 1, output.join("\n"));
+          if (scenario === "settings only") {
+            assert.notDeepEqual(fs.readFileSync(configPath), config, "settings-only save remains eligible");
+          } else {
+            assert.match(output.join("\n"), /general: project override/);
+            assert.deepEqual(fs.readFileSync(configPath), config, "expired probe must not change config");
+            assert.deepEqual(fs.readFileSync(receiptPath), receipt, "expired probe must not change receipt");
+          }
+        });
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+  }
 
   it("bounds live-probe receipt after completion while allowing a long probe", async () => {
     const source = fs.readFileSync(new URL("../commands.ts", import.meta.url), "utf8");

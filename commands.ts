@@ -1931,6 +1931,18 @@ function categorizeInitModels(
   return { models, uncategorized };
 }
 
+function initEffectivePoolChanged(
+  inherited: ReadonlyMap<string, { pool: readonly string[] }>,
+  before: Record<string, unknown>,
+  after: Record<string, unknown> | undefined,
+): boolean {
+  return [...new Set([...inherited.keys(), ...Object.keys(before), ...Object.keys(after ?? {})])].some((tier) => {
+    const previous = Object.hasOwn(before, tier) ? normalizeModelPool(before[tier]) : inherited.get(tier)?.pool;
+    const next = Object.hasOwn(after ?? {}, tier) ? normalizeModelPool(after![tier]) : inherited.get(tier)?.pool;
+    return JSON.stringify(previous) !== JSON.stringify(next);
+  });
+}
+
 function initPoolHasCompleteInventory(
   pool: readonly string[],
   available: ReturnType<ExtensionContext["modelRegistry"]["getAvailable"]>,
@@ -2957,6 +2969,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         ? pool.filter((key): key is string => typeof key === "string")
         : [],
   );
+  const effectivePoolChanged = initEffectivePoolChanged(inheritedEffective, sourceModels, savedPools);
   const unverifiedSavedCount = probeLoaded
     ? savedModelKeys.filter((key) => !probeVerified.has(key)).length
     : 0;
@@ -3129,7 +3142,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   if (
     refreshReceiptChanged ||
-    (removed.length > 0 && cachedProbeMtime !== undefined &&
+    (effectivePoolChanged && cachedProbeMtime !== undefined &&
       (Date.now() - cachedProbeMtime >= PROBE_CACHE_TTL_MS || Date.now() - cachedProbeMtime <= -1)) ||
     !inventoryStillSafe() ||
     currentKeys.length !== plannedKeys.length ||
