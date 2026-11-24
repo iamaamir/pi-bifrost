@@ -15,6 +15,14 @@ const config = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.
 const receipt = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.transaction!.nextOwnershipBytes).toString());
 
 describe("init action planner", () => {
+  it("leaves absent and scalar pools unchanged without eligible distinct additions", () => {
+    const generated = { absent: ["stale/x"], quick: ["p/old"], general: ["p/g", "p/new"] };
+    const value = buildInitActionPlan({ action: "merge", source: source({ quick: "p/old", general: ["manual/x", "p/g"] }),
+      inventories: [{ provider: "stale", status: "stale", modelsByTier: { absent: ["stale/x"] } },
+        { provider: "p", status: "complete", modelsByTier: { quick: ["p/old"], general: ["p/g", "p/new"] } }],
+      generated, inheritedTiers: new Set(), validateMergedConfig: () => true });
+    assert.deepEqual(config(value).models, { quick: "p/old", general: ["manual/x", "p/g", "p/new"] });
+  });
   it("requires inventory for removals, reorder, additions and inherited overrides", () => {
     const inventories = [{ provider: "p", status: "complete" as const, modelsByTier: {} }];
     const check = (before: Record<string, string[]>, after: Record<string, string[]>, inherited = new Map<string, readonly string[]>()) =>

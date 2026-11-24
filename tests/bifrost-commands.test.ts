@@ -2977,13 +2977,14 @@ describe("bifrost command ui", () => {
         const inherited = { models: { quick: ["inherited/old"] }, customSetting: { preserve: true } };
         if (incompleteCandidate) writeFileSync(inheritedPath, JSON.stringify(inherited));
         const cases = [
-          { models: { quick: ["manual/unavailable", "manual/second"] }, cost: 0.2, saved: { quick: ["manual/unavailable", "manual/second", "fixture/chat"] } },
+          { models: { quick: ["manual/unavailable", "manual/second"], general: "fixture/other" }, cost: 0.2, saved: { quick: ["manual/unavailable", "manual/second", "fixture/chat"], general: "fixture/other" } },
           { models: { general: ["manual/old"] }, cost: 1, saved: { general: ["manual/old", "fixture/chat"] } },
         ];
         const fixture = cases[Number(incompleteCandidate)]!;
         writeFileSync(configPath, JSON.stringify({ models: fixture.models }));
         const models = [makeModel("fixture", "chat", fixture.cost, fixture.cost)];
         if (incompleteCandidate) models.push(makeModel("manual", "old", 1, 1), makeModel("partial", "chat", 0.2, 0.2));
+        else models.push(makeModel("fixture", "other", 1, 1));
         writeRecentProbeCache(join(piDir, "bifrost-probe.json"), models.map((model) => ({
           provider: model.provider, model: model.id, status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10,
         })));

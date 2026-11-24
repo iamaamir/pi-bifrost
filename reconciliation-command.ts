@@ -521,11 +521,12 @@ function applyGeneratedTiers(
         || (current === undefined && inheritedTiers.has(tier))) continue;
       const old = normalizePool(current) ?? [];
       const appended = new Set(old);
-      setOwn(nextModels, tier, [...old, ...additions.filter((key) => {
+      const distinctAdditions = additions.filter((key) => {
         if (appended.has(key)) return false;
         appended.add(key);
         return true;
-      })]);
+      });
+      if (distinctAdditions.length > 0) setOwn(nextModels, tier, [...old, ...distinctAdditions]);
     } else {
       const inherited = inheritedPools?.get(tier);
       if (current === undefined && owner !== "deleted" && inherited
