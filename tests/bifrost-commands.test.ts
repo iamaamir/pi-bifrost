@@ -5402,6 +5402,31 @@ describe("route dispatch", () => {
     assert.doesNotMatch(output, /full (?:results|errors)[^\n]*bifrost-probe\.json/);
   });
 
+  it("reports a rejected standalone probe and clears progress", async () => {
+    const { ctx, calls } = makeCtx([makeModel("fixture", "chat")]);
+    const widgets: unknown[] = [];
+    (ctx as any).ui.setWidget = (key: string, value: unknown) => {
+      if (key !== "bifrost-probe") return;
+      widgets.push(value);
+      if (typeof value === "function") throw new Error("progress failed");
+    };
+    await inTempDir(async () => { await createCommandRouter(makeState() as never)("probe", ctx as never); });
+    assert.deepEqual(widgets.at(-1), []);
+    assert.ok(calls.some((call) => String(call.value).includes("Probe failed")));
+  });
+
+  it("reports an unsaved report after all models succeed", async () => {
+    const { ctx, calls } = makeCtx([makeModel("fixture", "chat")]);
+    (ctx as any).modelRegistry.streamSimple = () => ({ result: async () => ({
+      stopReason: "stop", usage: { totalTokens: 1 }, content: [{ type: "text", text: "ok" }],
+    }) });
+    await inTempDir(async () => {
+      mkdirSync(".pi/bifrost-probe.json", { recursive: true });
+      await createCommandRouter(makeState() as never)("probe", ctx as never);
+    });
+    assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Probe report could not be saved.")));
+  });
+
   it("clears the probe widget when /bifrost probe is cancelled", async () => {
     const { ctx, calls } = makeCtx([makeModel("fixture", "one"), makeModel("fixture", "two")]);
     const state = makeState();

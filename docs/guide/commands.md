@@ -81,7 +81,7 @@ If the host cannot ask the save question, init stops before catalog refresh or p
 
 For project init, a generated pool that differs from an inherited global or workspace pool is shown as a project-only override in the review. Confirming a choice that includes that override writes only project `.pi/bifrost.json`; inherited source files remain unchanged. Init blocks the replacement when the inherited provider inventory is unknown, unsigned-in, or stale. Use `-g` when you intend to update the global source.
 
-A failed save can leave a reconciliation journal. For a project save, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the matching command before you retry.
+A failed save can leave a reconciliation journal. For a project save, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the command matching the failed save’s configuration source. If recovery reports `completed`, run `/bifrost reload` before retrying init.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 

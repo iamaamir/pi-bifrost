@@ -5471,6 +5471,9 @@ export function createCommandRouter(
             setProbeProgress(ctx, { done, total, okCount, errCount });
           },
         });
+      } catch {
+        logImportant(ctx, "Probe failed", "Partial results were not saved; run /bifrost probe again to retry.", "error");
+        return;
       } finally {
         // Clear on every exit: a cancelled or thrown probe must not leave a
         // frozen progress bar that still reads as "probing".
@@ -5591,7 +5594,7 @@ export function createCommandRouter(
           expandedDetails,
         );
       } else if (ok.length > 0) {
-        logImportant(ctx, "Probe complete", `All ${ok.length} models are working.`, "success");
+        logImportant(ctx, "Probe complete", `All ${ok.length} models are working.${persisted ? "" : " Probe report could not be saved."}`, persisted ? "success" : "warning");
       }
 
       // Clear the probe widget so results don't persist in the TUI.
