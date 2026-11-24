@@ -2,7 +2,7 @@
 
 ## Router SDK consumer examples
 
-These run wherever `pi-bifrost` is installed — no Pi, no API key, no provider connection:
+These are standalone: install `pi-bifrost` and run them without Pi, an API key, or a provider connection:
 
 - `examples/router-standalone.mjs` — a standalone Node.js application: custom tiers, selected and no-decision results, and known-but-unavailable reporting from `pi-bifrost/router`.
 - `examples/host-adapter.mjs` — a host integration: translate your inventory into public DTOs, resolve, revalidate, and let your host dispatch.
@@ -11,20 +11,20 @@ The Pi config recipes below need a running Pi with Bifrost installed.
 
 ## Config recipes
 
-These recipes show decisions Bifrost can automate. They are templates, not universal model lists. Replace model patterns with models available in your Pi registry.
+These recipes show decisions Bifrost can automate. Treat them as templates and replace model patterns with models available in your Pi registry.
 
 Where files live:
 
 - **Complete example files** in this directory are full config files. Copy one to `.pi/bifrost.json` for a single project, or `~/.pi/agent/bifrost.json` for all projects.
 - **Fragments** shown below are added inside that same `.pi/bifrost.json` file.
 
-Tier keys may use any name you like, but only a single lowercase alphabetic word (such as `quick`) can be typed at the start of a message to force that tier.
+Tier keys may use any name you like. To force a tier at the start of a message, type one lowercase alphabetic word, such as `quick`.
 
 After any edit, run `/bifrost reload` in Pi.
 
 ## Reliability: circuit breaker for flaky models
 
-Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`. Keep its current `default` and `models` values. Do not replace the full config with this fragment.
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`, and keep its current `default` and `models` values.
 
 ```json
 {
@@ -38,11 +38,11 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 ```
 
 **What this does:**
-- Records probe failures and runtime failures (`setModel` errors)
+- Records probe and runtime failures
 - Opens circuit after `failureThreshold` failures in `windowMinutes`
 - Skips open-circuit models, falls back to default tier
 - After `cooldownMinutes`, allows one trial request: success closes the circuit, failure reopens it with a longer cooldown
-- Persists breaker state in `.pi/bifrost-reliability.json`
+- Keeps breaker state locally across restarts
 
 See full example: `economical-frontier-reliability.json`
 
@@ -55,16 +55,16 @@ Try:
 /bifrost preview summarize this file
 ```
 
-If a model fails repeatedly (e.g., network timeout or auth error), it will be skipped temporarily and the system falls back to the default tier.
+A model that fails repeatedly, such as on a network timeout or auth error, is skipped temporarily and routing falls back to the default tier.
 
-## Install Bifrost first:
+## Install Bifrost
 
 ```sh
 pi install npm:pi-bifrost
 /bifrost init
 ```
 
-Init asks one time before it saves. When Pi gives Bifrost no UI, you must use `/bifrost init --write` to save the proposal. Add `-f` for new probes. Add `-g` for the global configuration.
+Init asks once before saving. A session with no UI saves the proposal with `/bifrost init --write`. Add `-f` for new probes. Add `-g` for the global configuration.
 
 Copy a recipe to `.pi/bifrost.json`, then reload:
 
@@ -74,7 +74,7 @@ Copy a recipe to `.pi/bifrost.json`, then reload:
 
 ## Reconcile generated model membership
 
-Preview and apply are separate steps. Preview is offline by default; `--refresh` explicitly contacts one provider and still only creates a proposal.
+Preview and apply are separate steps. Preview is offline by default; `--refresh` contacts one provider and creates a proposal.
 
 ```text
 /bifrost config reconcile --source project --tier general --provider openai --json
@@ -93,7 +93,7 @@ Preview before sending:
 
 ### `economic-reserve-observe.json`
 
-Starts with a provider-scoped estimate in observe mode. The example includes no balance or remaining allowance. Add a user-entered observation only when you have a current fact, then use `mode: "policy"` only after reviewing `/bifrost inspect` and the configured unknown handling. Pi does not fetch billing data or provide an account-level spend cap.
+Starts with a provider-scoped estimate in observe mode. Add a user-entered observation when you have a current balance fact, then switch `mode` to `"policy"` after reviewing `/bifrost inspect` and the configured unknown handling. Billing facts come from your observations; account spend stays with the provider.
 
 Try:
 
@@ -103,20 +103,19 @@ Try:
 
 ### `economic-billing-preference.json`
 
-Shows an explicit subscription preference between two models with different declared billing classes. The preference-only policy has `admission: []`: it changes strategy ordering only when a fresh preferred-class fact exists among final eligible candidates in the selected tier. It does not restore reserve- or circuit-excluded candidates, cross a tier boundary, or guarantee savings. The example uses static facts only; no adapter or account binding is configured.
+Shows an explicit subscription preference between two models with different declared billing classes. The preference-only policy has `admission: []`: it changes strategy ordering only when a fresh preferred-class fact exists among final eligible candidates in the selected tier. Reserve- and circuit-excluded candidates stay excluded, and tier boundaries stay fixed. Savings depend on provider prices and the facts you declare. The example uses static facts only.
 
 The command shows the source alias, period, and freshness without printing quota values.
 
 ### `rules-only-local.json`
 
-Use when routing should follow explicit patterns and skip the extra classifier call.
+Use when routing should follow explicit patterns without the extra classifier call.
 
-- Disables the LLM classifier.
-- Uses ordered regex rules.
+- Uses ordered regex rules without the LLM classifier.
 - Routes complex work to a local frontier tier.
 - Falls back to `economical` when no rule matches.
 
-This setting disables the extra classification call. It does not change which provider receives the generation prompt.
+The selected generation provider still receives the prompt.
 
 Try:
 
@@ -131,7 +130,7 @@ Tradeoff: routing follows only the patterns you define.
 
 General-purpose setup for using cheap models by default and stronger models for harder work.
 
-- Optional classifier handles prompts regex rules do not describe well.
+- Optional classifier handles prompts that regex rules miss.
 - Economical tier selects by combined cost.
 - Frontier tier selects the largest available context window.
 - Classification cache reduces repeated classifier calls.
@@ -185,7 +184,7 @@ Tradeoff: exact bindings are predictable but less flexible when model availabili
 
 ### `task-aware-routing.json`
 
-Use when you want fine-grained routing across many task types without maintaining per-project rules.
+Use when you want fine-grained routing across many task types from one shared policy.
 
 - 14 categories: `architecture`, `implementation`, `debugging`, `code_review`, `reasoning`, `frontend`, `testing`, `summarisation`, `writing`, `quick`, `long_context`, `free_pool`, `premium`, and `general`.
 - Per-category selection strategies (e.g. `cheapest_input` for summarisation, `largest_context` for long_context).
