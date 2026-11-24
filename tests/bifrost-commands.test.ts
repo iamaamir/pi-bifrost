@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, describeInitCommitFailure, getBifrostCommandCompletions, initRecoveryCommand, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, initProbeFailureStatus, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, describeInitCommitFailure, getBifrostCommandCompletions, initRecoveryCommand, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { buildRouteDecisionSummary, createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
@@ -2393,6 +2393,13 @@ describe("bifrost command ui", () => {
     assert.equal(initRecoveryCommand("project"), "/bifrost config reconcile --recover");
     assert.equal(initRecoveryCommand("workspace"), "/bifrost config reconcile --source workspace --recover");
     assert.equal(initRecoveryCommand("user"), "/bifrost config reconcile --source user --recover");
+  });
+
+  it("classifies probe inventory failures without inventing authentication errors", () => {
+    assert.equal(initProbeFailureStatus("authentication_or_access"), "auth_failed");
+    assert.equal(initProbeFailureStatus("provider_error"), "partial");
+    assert.equal(initProbeFailureStatus("http_error"), "partial");
+    assert.equal(initProbeFailureStatus("rate_limit"), undefined);
   });
 
   it("blocks managed removals when cached auth-failed probe belongs to provider among successful providers", async () => {

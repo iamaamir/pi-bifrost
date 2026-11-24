@@ -1937,7 +1937,7 @@ function initPoolHasCompleteInventory(
   state: BifrostState,
   ctx: ExtensionContext,
   refreshRemainsCurrent: boolean,
-  authFailedProbeProviders: ReadonlySet<string>,
+  incompleteProbeProviders: ReadonlyMap<string, "auth_failed" | "partial">,
   initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
 ): boolean {
   const availableProviders = new Set(available.map((model) => model.provider));
@@ -1953,11 +1953,22 @@ function initPoolHasCompleteInventory(
       authConfigured = undefined;
     }
     const now = Date.now();
-    return authConfigured === true && !authFailedProbeProviders.has(provider) &&
+    return authConfigured === true && !incompleteProbeProviders.has(provider) &&
       evidence?.status === "complete" && now >= evidence.refreshedAt &&
       (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
         (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
   });
+}
+
+export function initProbeFailureStatus(reason: string | undefined): "auth_failed" | "partial" | undefined {
+  if (reason === "authentication_or_access") return "auth_failed";
+  if (reason === "provider_error" || reason === "http_error") return "partial";
+  return undefined;
+}
+
+function recordInitProbeFailure(providers: Map<string, "auth_failed" | "partial">, provider: string, reason: string | undefined): void {
+  const status = initProbeFailureStatus(reason);
+  if (status && providers.get(provider) !== "auth_failed") providers.set(provider, status);
 }
 
 async function probeInitModels(
@@ -1981,7 +1992,7 @@ async function probeInitModels(
   let ranProbe: number | undefined;
   let probeAge = "";
   let cachedProbeMtime: number | undefined;
-  const authFailedProbeProviders = new Set<string>();
+  const incompleteProbeProviders = new Map<string, "auth_failed" | "partial">();
 
   if (!isForced(args)) {
     const cacheHit = readRecentCompleteProbeReportCacheHit(probePath, available);
@@ -1989,7 +2000,7 @@ async function probeInitModels(
       const cachedResults = cacheHit.results;
       cachedProbeMtime = cacheHit.mtimeMs;
       for (const result of cachedResults) {
-        if (["authentication_or_access", "provider_error", "http_error"].includes(failureDetails(result)?.reason ?? "")) authFailedProbeProviders.add(result.provider);
+        recordInitProbeFailure(incompleteProbeProviders, result.provider, failureDetails(result)?.reason);
       }
       workingModels = cachedResults
         .filter((result) => result.status === "ok")
@@ -2048,7 +2059,7 @@ async function probeInitModels(
     ranProbe = Date.now();
     const { results } = probeRun;
     for (const result of results) {
-      if (["authentication_or_access", "provider_error", "http_error"].includes(failureDetails(result)?.reason ?? "")) authFailedProbeProviders.add(result.provider);
+      recordInitProbeFailure(incompleteProbeProviders, result.provider, failureDetails(result)?.reason);
     }
     if (selectedSource !== "user") {
       state.reliabilityStore.applyOutcomes(
@@ -2083,7 +2094,7 @@ async function probeInitModels(
     const skipped = results.filter((r) => r.status === "skipped").length;
     log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   }
-  return { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders, cachedProbeMtime };
+  return { available, workingModels, probeLoaded, ranProbe, probeAge, incompleteProbeProviders, cachedProbeMtime };
 }
 
 function buildInitInventories(
@@ -2097,7 +2108,7 @@ function buildInitInventories(
   ctx: ExtensionContext,
   refreshRemainsCurrent: boolean,
   initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
-  authFailedProbeProviders: ReadonlySet<string>,
+  incompleteProbeProviders: ReadonlyMap<string, "auth_failed" | "partial">,
 ) {
   const byProvider = new Map<string, Record<string, string[]>>();
   for (const model of available) {
@@ -2154,11 +2165,11 @@ function buildInitInventories(
         (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
     const status = state.forceRegistryRefresh || !availableProviders.has(provider)
       ? ("stale" as const)
-      : authConfigured === false || authFailedProbeProviders.has(provider)
+      : authConfigured === false
         ? ("auth_failed" as const)
-        : fresh && authConfigured === true
+        : incompleteProbeProviders.get(provider) ?? (fresh && authConfigured === true
           ? ("complete" as const)
-          : ("stale" as const);
+          : ("stale" as const));
     return { provider, status, modelsByTier };
   });
   return inventories;
@@ -2271,7 +2282,7 @@ function prepareInitInheritedPools(
   selectedSource: ReconciliationConfigSource, hasConfiguredTiers: boolean,
   inheritedEffective: ReadonlyMap<string, InheritedTierPool>, models: Record<string, string[]>,
   available: Parameters<typeof initPoolHasCompleteInventory>[1], state: BifrostState, ctx: ExtensionContext,
-  refreshRemainsCurrent: boolean, authFailedProbeProviders: ReadonlySet<string>,
+  refreshRemainsCurrent: boolean, incompleteProbeProviders: ReadonlyMap<string, "auth_failed" | "partial">,
   initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
   writeWithoutPrompt: boolean, hasDeletedTierIntent: boolean,
 ): boolean {
@@ -2282,7 +2293,7 @@ function prepareInitInheritedPools(
       const identical = generated.length === inherited.pool.length &&
         generated.every((key, index) => key === inherited.pool[index]);
       const completeInventory = initPoolHasCompleteInventory(
-        inherited.pool, available, state, ctx, refreshRemainsCurrent, authFailedProbeProviders, initRefreshReceipt,
+        inherited.pool, available, state, ctx, refreshRemainsCurrent, incompleteProbeProviders, initRefreshReceipt,
       );
       if (!writeWithoutPrompt && !identical && !completeInventory) {
         reportInitOutcome(
@@ -2354,7 +2365,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   const { initRefreshReceipt } = refresh;
   const probe = await probeInitModels(args, ctx, state, selectedSource, initConfig);
   if (!probe) return;
-  const { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders, cachedProbeMtime } = probe;
+  const { available, workingModels, probeLoaded, ranProbe, probeAge, incompleteProbeProviders, cachedProbeMtime } = probe;
   if (probeLoaded && workingModels.length === 0) {
     reportInitOutcome(
       ctx,
@@ -2456,7 +2467,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   const inheritedPoolsReady = prepareInitInheritedPools(
     selectedSource, hasConfiguredTiers, inheritedEffective, models, available, state, ctx,
-    refreshRemainsCurrent, authFailedProbeProviders, initRefreshReceipt, writeWithoutPrompt, hasDeletedTierIntent,
+    refreshRemainsCurrent, incompleteProbeProviders, initRefreshReceipt, writeWithoutPrompt, hasDeletedTierIntent,
   );
   if (!inheritedPoolsReady) return;
   const generatedPools = Object.fromEntries(
@@ -2503,7 +2514,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   if (source.configBytes !== null && (hasConfiguredTiers || hasDeletedTierIntent)) {
     const inventories = buildInitInventories(
       available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
-      refreshRemainsCurrent, initRefreshReceipt, authFailedProbeProviders,
+      refreshRemainsCurrent, initRefreshReceipt, incompleteProbeProviders,
     );
     const validateMergedConfig = (selected: ReconciliationConfigSource, bytes: Uint8Array) =>
       prospectiveConfigInstallable(selected, bytes, state);
@@ -2735,7 +2746,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     proposal.default = initPlanDefault(plan.transaction?.nextConfigBytes, sourceConfig, inheritedEffective, state.extensionDir, inheritedFields, String(proposal.default));
     inventoryStillSafe = () => actionHasCompleteAffectedInventory(plan, buildInitInventories(
       available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
-      initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), initRefreshReceipt, authFailedProbeProviders,
+      initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), initRefreshReceipt, incompleteProbeProviders,
     ));
     if (
       !writeWithoutPrompt &&
@@ -2869,7 +2880,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       const generated = models[tier];
       return !generated || JSON.stringify(generated) === JSON.stringify(inherited.pool) ||
         initPoolHasCompleteInventory(inherited.pool, available, state, ctx,
-          initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), authFailedProbeProviders, initRefreshReceipt);
+          initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), incompleteProbeProviders, initRefreshReceipt);
     });
     if (source.configBytes === null && source.ownershipBytes !== null) {
       reportInitOutcome(
