@@ -404,8 +404,7 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
     return new ModelSelectorComponent(
       tui,
       ctx.model,
-      // The extension facade exposes only registry methods; this adapter
-      // implements the subset ModelSelectorComponent consumes.
+      // SAFETY: The extension facade implements the registry subset ModelSelectorComponent consumes.
       modelRuntime as unknown as ModelRuntime,
       ctx.scopedModels,
       onSelect,
@@ -2145,6 +2144,34 @@ function buildInitInventories(
   return inventories;
 }
 
+function initRefreshRemainsCurrent(
+  ranProbe: boolean,
+  initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
+  ctx: ExtensionContext,
+  state: BifrostState,
+): boolean {
+  let refreshRemainsCurrent = false;
+  if (ranProbe && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
+    try {
+      const currentKeys = ctx.modelRegistry
+        .getAll()
+        .filter((model) => !isBifrostAuto(model))
+        .map(modelKey)
+        .sort();
+      refreshRemainsCurrent =
+        currentKeys.length === initRefreshReceipt.catalogKeys.length &&
+        currentKeys.every((key, index) => key === initRefreshReceipt!.catalogKeys[index]) &&
+        [...initRefreshReceipt.evidence].every(
+          ([provider, evidence]) => state.registryInventoryEvidence?.[provider] === evidence,
+        );
+    } catch {
+      /* an unreadable catalog cannot extend this command's refresh evidence */
+    }
+  }
+
+  return refreshRemainsCurrent;
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -2211,24 +2238,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     return;
   }
 
-  let refreshRemainsCurrent = false;
-  if (ranProbe && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
-    try {
-      const currentKeys = ctx.modelRegistry
-        .getAll()
-        .filter((model) => !isBifrostAuto(model))
-        .map(modelKey)
-        .sort();
-      refreshRemainsCurrent =
-        currentKeys.length === initRefreshReceipt.catalogKeys.length &&
-        currentKeys.every((key, index) => key === initRefreshReceipt!.catalogKeys[index]) &&
-        [...initRefreshReceipt.evidence].every(
-          ([provider, evidence]) => state.registryInventoryEvidence?.[provider] === evidence,
-        );
-    } catch {
-      /* an unreadable catalog cannot extend this command's refresh evidence */
-    }
-  }
+  const refreshRemainsCurrent = initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state);
 
   if (probeLoaded && workingModels.length > 0 && ctx.mode !== "tui") {
     logImportant(
@@ -4924,6 +4934,7 @@ function persistBootstrapConfig(
     !Array.isArray(current.classifier)
       ? (current.classifier as Record<string, unknown>)
       : source.configBytes === null && state.config.classifier
+        // SAFETY: Classifier config is a plain object whose properties are copied below.
         ? (state.config.classifier as unknown as Record<string, unknown>)
         : {};
   if (classifierChoice)
