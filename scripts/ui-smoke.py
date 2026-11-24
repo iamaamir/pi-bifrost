@@ -709,7 +709,8 @@ def capture(
         for delay, payload in actions:
             time.sleep(delay)
             send(master, payload)
-            time.sleep(1.5)
+            # Scroll incrementally without expiring the 30s inventory review.
+            time.sleep(0.1 if name == "init-refresh" and payload == "j" else 1.5)
 
         if name == "classify":
             wait_for_model_attempts(
@@ -932,7 +933,7 @@ def main() -> int:
             "init-refresh",
             True,
             # Expand full diff; PgDn scrolls one row, so page through late pool/action details before Keep.
-            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.5, "\r"), (0.5, "\x1b")],
+            [(0.5, "/bifrost init\r"), (1.0, "\x0f")] + [(0.2, "j")] * 20 + [(0.5, "\r"), (0.5, "\x1b")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
