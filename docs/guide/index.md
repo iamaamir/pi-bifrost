@@ -40,7 +40,7 @@ The guide index combines navigation with short orientation. Substantive pages ke
 - **Tier:** named capability group such as `quick`, `general`, or `frontier`.
 - **Model pool:** provider/model candidates you allow for one tier.
 - **Strategy:** rule that selects one healthy candidate from a pool.
-- **Classifier:** optional tier judge. It does not choose the exact provider model.
+- **Classifier:** optional tier judge. The tier strategy chooses the exact provider model.
 
 ## Core model
 
@@ -58,7 +58,7 @@ Bifrost separates two decisions:
 - **Which tier fits this prompt?** A tier name in the message, the local classification cache, an optional classifier, a regex rule, or the configured default.
 - **Which model serves that tier?** User-owned model pool, reliability filtering, and configured strategy.
 
-Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They do not receive the provider model pool or choose the exact provider/model. Bifrost applies configured task-fit policy; it does not claim to identify one universally best model or guarantee savings.
+Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. Bifrost applies your configured task-fit policy to that tier's model pool, so a route reflects your policy rather than a claim about one universally best model. See [Classifier backends](classifiers.md).
 
 ## Choose what to read
 
@@ -77,10 +77,10 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 
 - Bifrost uses Pi's real provider/model. In Auto, Pi shows the virtual selection and dispatched physical model together.
 - Automatic retries are limited to one usage or billing rejection after Pi proves the initial Auto generation had no output or tool activity; see [the recovery boundary](reliability-and-cache.md#reliability-circuits).
-- Reliability state records model failures. Usage and billing errors pause models that use the same configured provider ID by default. Bifrost does not identify provider accounts or fetch live usage limits. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks).
+- Reliability state records model failures. Usage and billing errors pause models that use the same configured provider ID by default. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) for the pause boundary.
 - Provider prompt caches remain controlled by Pi's provider integration and each provider.
-- Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
-- `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.
+- Adaptive routing may trade prompt-cache locality for per-turn task fit. Provider behavior and your policy determine results, cost, latency, and cache reuse; see [Provider prompt caching](prompt-caching.md).
+- `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message stays ordinary text while pinned.
 
 ## More references
 

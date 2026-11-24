@@ -20,7 +20,7 @@ Bifrost currently offers adaptive routing, explicit tier selection, hard pinning
 
 ## Start a message with a tier name
 
-The tier name must be one you configured in `.pi/bifrost.json`. It is not an alias and not a separate command. For example, this config:
+The tier name must be one you configured in `.pi/bifrost.json`. It uses the tier key directly. For example, this config:
 
 ```json
 {
@@ -50,11 +50,10 @@ Forcing a tier skips the tier choice, but the name alone does not pick the model
 ### When a tier name is recognized
 
 - The tier name must be the first word of the message, followed by a space.
-- The tier key must be one lowercase alphabetic word, such as `quick` or `frontier`. A key with uppercase letters, such as `Quick`, never matches, because Bifrost looks up the lowercased first word as an exact key.
+- The tier key must be one lowercase alphabetic word, such as `quick` or `frontier`. Bifrost lowercases the first word before the exact key lookup, so configure lowercase keys.
 - You can type the prefix in any letter case, so `QUICK` selects the `quick` tier.
-- Tier keys may use any name you like (`long-context`, `code_review`), but you cannot type those names at the start of a message.
+- Tier keys may use any name you like (`long-context`, `code_review`); type only a one-word lowercase key at the start of a message.
 - Digits, hyphens, punctuation, and multiword names are not recognized.
-- There is no separate list of aliases.
 - If the first word is not a configured tier, the whole message is routed normally.
 - A tier name anywhere other than the first word is ordinary text.
 
@@ -76,20 +75,20 @@ Selecting `bifrost/auto` enables routing and clears a pin. `/bifrost pin` and `/
 
 ## Pin is a hard lock
 
-`/bifrost pin` is session-local. It does not survive restart and does not propagate to child sessions. A pin cannot bypass an active provider pause while Bifrost is on. Bifrost stops before dispatch. `/bifrost off` remains an explicit way to disable Bifrost routing.
+`/bifrost pin` lasts for this session and stays local to it. An active provider pause still stops dispatch while Bifrost is on. `/bifrost off` remains an explicit way to disable Bifrost routing.
 
-Pinned sessions skip all routing, and the first word of a message is never treated as a tier name. Therefore:
+Pinned sessions skip all routing and keep the first word of a message as ordinary text. Therefore:
 
 ```text
 quick commit the changes
 ```
 
-is sent unchanged to the pinned model. It does not select the `quick` tier.
+is sent unchanged to the pinned model, with `quick` kept as prompt text.
 
 Pinning is deliberate: it protects cost, compliance, continuity, and cache locality. Run `/bifrost unpin` to route per message again. See [Provider prompt caching and model switching](prompt-caching.md) for A → B → A, N-switch behavior, and cache-minded workflows.
 
 ## Subagents
 
-Child sessions that load Bifrost start unpinned. Bifrost cannot currently determine whether a child's starting model came from an explicit per-run or role assignment. If an exact child model must remain fixed, ensure that child session does not load Bifrost.
+Child sessions that load Bifrost start unpinned. A child that loads Bifrost routes from whatever model Pi starts it with; for an exact fixed child model, run that child without Bifrost.
 
 Use fixed role/model assignments when the correct model is already known. Use adaptive routing only where task complexity can vary.

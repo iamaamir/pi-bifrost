@@ -113,7 +113,9 @@ Provider usage and billing pauses use Pi’s configured provider ID. Bifrost doe
 
 ## Init and refresh notes
 
-Init remains available to refresh the catalog or reconcile model lists. It reuses recent saved probe results for the current catalog when possible, and probes when it cannot. When it reuses saved results, init shows their approximate age. Pass `-f` to force a fresh check. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
+`/bifrost cost` reads Pi's session entries on demand. In the interactive view, use **Tab** to switch between Requests and Models for the current branch, **Up/Down** to move, **Enter** to expand or collapse a group, and **Esc** to close. Requests are derived from user-message boundaries; they are not a routing trace. The separate all-retained total may include copied fork history and alternate branches. The report shows assistant responses by reported model and auxiliary usage when Pi records it, including compaction. Unknown costs remain unknown; a known-cost subtotal does not include them. The report does not display or store prompt or tool content, and historical routing reasons are unavailable. Costs are Pi-reported estimates, not billing records; zero does not confirm free usage. Classifier and probe overhead may be outside the session or unknown. The report has no baseline; treat its figures as estimates, not a savings claim. When an interactive TUI is unavailable, the command prints a plain-text report.
+
+Init remains available to refresh the catalog or reconcile model lists. It reuses recent saved probe results for the current catalog when possible, and probes when it cannot. When it reuses saved results, init shows their approximate age. Pass `-f` to force a fresh check. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It copies only the settings it writes, so private classifier templates and inherited user settings stay in their source layers. Its summary highlights membership changes; inspect the saved lists and status afterward. Edit the saved configuration before a model answers if needed.
 
 Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`.
 
@@ -121,7 +123,7 @@ Init displays its save target. It saves to project `.pi/bifrost.json` by default
 
 Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. `--write` saves to the target that init shows.
 
-A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session that gives Bifrost no UI cannot ask. Without `--write`, that session refreshes the catalog and shows the proposal, then stops before it writes and logs `run in TUI or use --write to persist`.
+A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session with no UI shows the proposal and waits for `--write`. Without it, the session refreshes the catalog, shows the proposal, and stops before writing with `run in TUI or use --write to persist`.
 
 If you also want new probes or the global target, use the flags together:
 
@@ -131,11 +133,11 @@ If you also want new probes or the global target, use the flags together:
 /bifrost init --write -g
 ```
 
-`--write` removes only the question. The other guards stay in effect. Init does not write a proposal that shadows a handwritten inherited pool. A canceled catalog refresh writes nothing.
+`--write` removes only the question. The other guards stay in effect. Init keeps a handwritten inherited pool and stops before writing a proposal that would shadow it. A canceled catalog refresh writes nothing.
 
 A failure before the commit keeps the files. A failure after Bifrost replaces the configuration file can leave a pending reconciliation journal. Recover the source that init wrote. For the default project target, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the matching command before you retry.
 
-If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace --tier general --provider openai`; use `-g` when you intend to update the global source.
+If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools allow init to proceed. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace --tier general --provider openai`; use `-g` when you intend to update the global source.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 
@@ -147,7 +149,7 @@ For safe migration, follow the [existing-user migration steps](reliability-and-c
 | `/bifrost pin` / `unpin` | No | No |
 | `/bifrost classifier on` / `off` / `inherit` | No | No; choice applies to this Pi session only |
 
-Pin is a hard lock. A tier name at the start of a message is not applied while pinned.
+Pin is a hard lock. A tier name at the start of a message stays ordinary text while pinned.
 
 <!-- Former command-reference section anchors. The procedures moved to workflows.md; these ids keep existing deep links pointing at the relocation notice instead of a missing heading. -->
 <a id="common-workflows"></a>
