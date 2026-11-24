@@ -50,9 +50,9 @@ Forcing a tier skips the tier choice, but the name alone does not pick the model
 ### When a tier name is recognized
 
 - The tier name must be the first word of the message, followed by a space.
-- The tier key must be one lowercase alphabetic word, such as `quick` or `frontier`. Bifrost lowercases the first word before the exact key lookup, so configure lowercase keys.
+- A tier key must be one lowercase alphabetic word to work as a prompt prefix, such as `quick` or `frontier`. Bifrost lowercases the first word before the exact key lookup, so configure lowercase keys.
 - You can type the prefix in any letter case, so `QUICK` selects the `quick` tier.
-- Tier keys may use any name you like (`long-context`, `code_review`); type only a one-word lowercase key at the start of a message.
+- Tier keys may use any name you like (`long-context`, `code_review`), but those names cannot be typed as a prefix. Use a one-word lowercase key when you want prompt control.
 - Digits, hyphens, punctuation, and multiword names are not recognized.
 - If the first word is not a configured tier, the whole message is routed normally.
 - A tier name anywhere other than the first word is ordinary text.
@@ -89,6 +89,6 @@ Pinning is deliberate: it protects cost, compliance, continuity, and cache local
 
 ## Subagents
 
-Child sessions that load Bifrost start unpinned. A child that loads Bifrost routes from whatever model Pi starts it with; for an exact fixed child model, run that child without Bifrost.
+Child sessions that load Bifrost start unpinned, so Bifrost can change the child's model. For an exact fixed child model, run that child without Bifrost.
 
 Use fixed role/model assignments when the correct model is already known. Use adaptive routing only where task complexity can vary.

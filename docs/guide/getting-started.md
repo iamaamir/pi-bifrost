@@ -57,13 +57,13 @@ flowchart TD
 
 ## Initialize
 
-On a fresh install, routing is on and physical model selection is the default. If no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools to `.pi/bifrost.json`. An empty `{}` file does not block setup. Probe requests can use credits or reach rate limits. Bifrost saves generated pools; prompt text stays out of the saved configuration. If every probe fails, it leaves configuration unchanged and warns you.
+On a fresh install, routing is on and physical model selection is the default. If no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools to `.pi/bifrost.json`. An empty `{}` file does not block setup. Probe requests can use credits or reach rate limits. Bifrost saves generated pools and routing settings; prompt text and credentials stay out of the saved configuration. If every probe fails, it leaves configuration unchanged and warns you.
 
 The first route can use a provisional model before its probe finishes. Bifrost applies verified results at a safe input boundary, so a probe does not stop active generation.
 
 You can send a first prompt without running init. A saved configuration or runtime preference can change routing; use `/bifrost debug` to inspect it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. Any setting in a meaningful configuration blocks automatic pool setup. A project route file or explicit routing override also blocks setup.
 
-To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. Both read local state without classifying or probing. A catalog entry shows availability; health comes from routing outcomes.
+To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. Both read local state without classifying or probing. A catalog entry shows availability, not proof that a model is healthy.
 
 Run this command when you want to refresh the model list or save it to a configuration file:
 
@@ -155,7 +155,7 @@ Setting `cache.enabled` to `false` stops classification-cache use. Saved entries
 
 Preview resolves and displays the source, tier, candidates, strategy, and selected model without starting a generation turn or activating the selected model.
 
-Preview runs the normal tier pipeline. A tier name in the preview prompt stays literal, so preview a forced tier through its configuration. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage.
+Preview runs the normal tier pipeline. A tier name in the preview prompt stays literal; preview does not accept a tier override, so inspect a tier's candidates in configuration instead. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage.
 
 For local-only preview:
 

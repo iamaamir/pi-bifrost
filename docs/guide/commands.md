@@ -123,7 +123,7 @@ Init displays its save target. It saves to project `.pi/bifrost.json` by default
 
 Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. `--write` saves to the target that init shows.
 
-A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session with no UI shows the proposal and waits for `--write`. Without it, the session refreshes the catalog, shows the proposal, and stops before writing with `run in TUI or use --write to persist`.
+A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session with no UI cannot ask the question. Without `--write`, it shows the proposal and stops before writing with `run in TUI or use --write to persist`.
 
 If you also want new probes or the global target, use the flags together:
 

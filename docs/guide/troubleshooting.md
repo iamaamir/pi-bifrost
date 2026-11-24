@@ -57,7 +57,7 @@ Preview reports:
 - selected model;
 - reliability fallback reason when applicable.
 
-Preview reports the route without starting the generation turn or activating the selected model. It runs the normal tier pipeline. An enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. A tier name in the preview prompt stays literal, so preview a forced tier through its configuration.
+Preview reports the route without starting the generation turn or activating the selected model. It runs the normal tier pipeline. An enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. A tier name in the preview prompt stays literal; preview does not accept a tier override, so inspect a tier's candidates in configuration instead.
 
 For local-only preview, disable the classifier first. This change lasts for the current Pi session only:
 

@@ -79,7 +79,7 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. Bifro
 - Automatic retries are limited to one usage or billing rejection after Pi proves the initial Auto generation had no output or tool activity; see [the recovery boundary](reliability-and-cache.md#reliability-circuits).
 - Reliability state records model failures. Usage and billing errors pause models that use the same configured provider ID by default. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) for the pause boundary.
 - Provider prompt caches remain controlled by Pi's provider integration and each provider.
-- Adaptive routing may trade prompt-cache locality for per-turn task fit. Provider behavior and your policy determine results, cost, latency, and cache reuse; see [Provider prompt caching](prompt-caching.md).
+- Adaptive routing may trade prompt-cache locality for per-turn task fit. It does not guarantee better results, lower cost, lower latency, or cache savings; see [Provider prompt caching](prompt-caching.md).
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message stays ordinary text while pinned.
 
 ## More references
