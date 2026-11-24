@@ -227,6 +227,10 @@ const CI_EQUIVALENTS = {
     why: "static-analysis.yml runs the pinned Semgrep rules with a baseline diff instead of this wrapper",
     evidence: /semgrep scan --config semgrep\//u,
   },
+  "check:docs-style": {
+    why: "static-analysis.yml runs pinned Vale directly in report-only mode so style findings do not fail the job",
+    evidence: /vale --config=\.vale\.ini --output=line docs\/guide/u,
+  },
   "check:secrets": {
     why: "static-analysis.yml runs the Gitleaks action and the pull-request history scanner with .gitleaks.toml",
     evidence: /gitleaks-action@|scan-gitleaks-pr-history\.sh/u,
