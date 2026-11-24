@@ -25,6 +25,15 @@ describe("init action planner", () => {
     assert.equal(check({}, { quick: ["manual/a"] }), false);
     assert.equal(check({}, { quick: ["p/new"] }, new Map([["quick", ["manual/a"]]])), false);
   });
+  it("requires inventory for retained inherited models when a local override changes the pool", () => {
+    const inherited = new Map([["quick", ["manual/a", "p/old"]]]);
+    const check = (status: "complete" | "stale") => affectedPoolsHaveCompleteInventories(
+      [{ provider: "manual", status, modelsByTier: {} }, { provider: "p", status: "complete", modelsByTier: {} }],
+      {}, { quick: ["manual/a", "p/new"] }, new Set(inherited.keys()), inherited,
+    );
+    assert.equal(check("stale"), false);
+    assert.equal(check("complete"), true);
+  });
   it("requires local removal inventory even when inherited pool is identical", () => {
     const inherited = new Map([["quick", ["manual/a"]]]);
     const check = (status: "complete" | "stale") => affectedPoolsHaveCompleteInventories(
