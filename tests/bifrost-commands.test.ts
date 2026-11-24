@@ -5181,6 +5181,27 @@ describe("route dispatch", () => {
     assert.ok(lines.includes("--- probe results (1 models) ---"));
   });
 
+  it("shows current probe failures without a report pointer when persistence fails", async () => {
+    const { ctx, calls } = makeCtx([makeModel("fixture", "broken"), makeModel("fixture", "working")]);
+    const state = makeState();
+    (ctx as any).modelRegistry.streamSimple = (model: { id: string }) => ({
+      result: async () => model.id === "broken"
+        ? { stopReason: "error", errorMessage: "invalid api key" }
+        : { stopReason: "stop", usage: { totalTokens: 1 }, content: [{ type: "text", text: "ok" }] },
+    });
+    await inTempDir(async () => {
+      mkdirSync(".pi/bifrost-probe.json", { recursive: true });
+      await createCommandRouter(state as never)("probe", ctx as never);
+    });
+    const output = calls.flatMap((call) => [String(call.value ?? ""), ...(call.lines ?? [])]).join("\n");
+    assert.match(output, /Probe report could not be saved\./);
+    assert.match(output, /fixture\/broken/);
+    assert.match(output, /1 failed · 0 timed out/);
+    assert.match(output, /provider errors ×1 — fixture\/broken/);
+    assert.match(output, /1 of 2 models are working/);
+    assert.doesNotMatch(output, /full (?:results|errors)[^\n]*bifrost-probe\.json/);
+  });
+
   it("clears the probe widget when /bifrost probe is cancelled", async () => {
     const { ctx, calls } = makeCtx([makeModel("fixture", "one"), makeModel("fixture", "two")]);
     const state = makeState();
