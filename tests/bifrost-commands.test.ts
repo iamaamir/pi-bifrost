@@ -2399,6 +2399,44 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("blocks managed removals when cached unknown-failed probe belongs to provider among successful providers", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-auth-cache-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      const configPath = join(piDir, "bifrost.json");
+      const original = { default: "quick", models: { quick: ["p/old"] } };
+      writeFileSync(configPath, JSON.stringify(original));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("project", { quick: ["p/old"] }),
+      ));
+      const models = [makeModel("p", "old"), makeModel("q", "working")];
+      writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+        { provider: "p", model: "old", status: "error", error: "opaque provider failure", cost_input: 0, cost_output: 0, duration_ms: 10 },
+        { provider: "q", model: "working", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx(models);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => models;
+      registry.getProvider = (provider: string) => ({ id: provider });
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.getError = () => undefined;
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      const state = makeState() as any;
+      (ctx as any).ui.confirm = async () => { throw new Error("unknown-failed inventory must not reach approval"); };
+
+      await createCommandRouter(state)("init", ctx);
+
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("no model update is safe with the current inventory")), JSON.stringify(calls));
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks managed removals after fresh auth-failed probe despite another provider succeeding", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-auth-fresh-"));
     const previousCwd = process.cwd();
@@ -4158,6 +4196,77 @@ describe("command aliases", () => {
         ),
         JSON.stringify(calls),
       );
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves with unchanged invalid UTF-8 inherited receipt", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-receipt-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(agentDir);
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "old", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), Buffer.from([0xff]));
+      const models = [makeModel("fixture", "old"), makeModel("fixture", "chat")];
+      const { ctx } = makeCtx(models);
+      (ctx as any).modelRegistry.getAll = () => models;
+      (ctx as any).modelRegistry.getProviderAuthStatus = () => ({ configured: true });
+      (ctx as any).modelRegistry.refresh = async () => ({ aborted: false, errors: new Map() });
+      (ctx as any).ui.confirm = async () => {
+
+        return true;
+      };
+      await createCommandRouter(makeState() as never)("init", ctx);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks when invalid UTF-8 inherited receipt changes during confirmation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-receipt-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(agentDir);
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "old", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), Buffer.from([0xff]));
+      const models = [makeModel("fixture", "old"), makeModel("fixture", "chat")];
+      const { ctx, calls } = makeCtx(models);
+      (ctx as any).modelRegistry.getAll = () => models;
+      (ctx as any).modelRegistry.getProviderAuthStatus = () => ({ configured: true });
+      (ctx as any).modelRegistry.refresh = async () => ({ aborted: false, errors: new Map() });
+      (ctx as any).ui.confirm = async () => {
+        writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), Buffer.from([0xfe]));
+        return true;
+      };
+      await createCommandRouter(makeState() as never)("init", ctx);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+      assert.ok(calls.some((call) => String(call.value).includes("init: stale review")), JSON.stringify(calls));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

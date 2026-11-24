@@ -1042,9 +1042,10 @@ function readInheritedConfigSnapshot(path: string): string | null {
 }
 
 /** An unreadable receipt provides no ownership coverage; every pool stays protected as handwritten. */
-function readInheritedReceiptSnapshot(path: string): string | null {
+function readInheritedReceiptSnapshot(bytes: Buffer | undefined): string | null {
   try {
-    return readInheritedConfigSnapshot(path);
+    if (!bytes || bytes.byteLength > MAX_CONFIG_SOURCE_BYTES) return null;
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     return null;
   }
@@ -1059,6 +1060,7 @@ interface InheritedTierPool {
 interface InheritedPoolSnapshot {
   readonly path: string;
   readonly text: string | null;
+  readonly receipt?: boolean;
 }
 
 interface InheritedPools {
@@ -1116,7 +1118,8 @@ function readInheritedLayerPools(layer: ReconciliationConfigSource): {
   )) throw new Error("invalid inherited model pool");
   // No pools to protect, so the receipt cannot change the decision and is not read or tracked.
   const hasPools = Object.keys(rawPools).length > 0;
-  const receiptText = hasPools ? readInheritedReceiptSnapshot(paths.ownershipPath) : null;
+  const receiptBytes = hasPools ? readBoundedRegularSnapshot(paths.ownershipPath) : undefined;
+  const receiptText = hasPools ? readInheritedReceiptSnapshot(receiptBytes) : null;
   const receipt = readReceiptSnapshot(receiptText, layer);
   const tiers = new Map(
     Object.entries(rawPools).map(([tier, raw]) => {
@@ -1127,7 +1130,7 @@ function readInheritedLayerPools(layer: ReconciliationConfigSource): {
   return {
     path: paths.configPath,
     text,
-    receiptSnapshot: hasPools ? { path: paths.ownershipPath, text: receiptText } : null,
+    receiptSnapshot: hasPools ? { path: paths.ownershipPath, text: receiptBytes?.toString("base64") ?? null, receipt: true } : null,
     tiers,
   };
 }
@@ -1972,7 +1975,7 @@ async function probeInitModels(
     const cachedResults = readRecentCompleteProbeReport(probePath, available);
     if (cachedResults) {
       for (const result of cachedResults) {
-        if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+        if (["authentication_or_access", "provider_error", "http_error"].includes(failureDetails(result)?.reason ?? "")) authFailedProbeProviders.add(result.provider);
       }
       workingModels = cachedResults
         .filter((result) => result.status === "ok")
@@ -2028,7 +2031,7 @@ async function probeInitModels(
     ranProbe = Date.now();
     const { results } = probeRun;
     for (const result of results) {
-      if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+      if (["authentication_or_access", "provider_error", "http_error"].includes(failureDetails(result)?.reason ?? "")) authFailedProbeProviders.add(result.provider);
     }
     if (selectedSource !== "user") {
       state.reliabilityStore.applyOutcomes(
@@ -3108,8 +3111,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     return;
   }
   try {
-    for (const { path, text } of inheritedSources) {
-      if (readInheritedConfigSnapshot(path) !== text) {
+    for (const { path, text, receipt } of inheritedSources) {
+      if ((receipt ? readBoundedRegularSnapshot(path)?.toString("base64") ?? null : readInheritedConfigSnapshot(path)) !== text) {
         reportInitOutcome(
           ctx,
           "stale review",
