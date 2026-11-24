@@ -2274,7 +2274,7 @@ function prepareInitInheritedPools(
         );
         return false;
       }
-      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent)) delete models[tier];
+      if (!hasDeletedTierIntent && (writeWithoutPrompt || identical)) delete models[tier];
     }
   }
   return true;

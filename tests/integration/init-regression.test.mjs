@@ -680,6 +680,28 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
+  it("saves settings with deleted intent and an inherited generated pool", async () => {
+    const env = fixture(port, ["healthy"]);
+    const projectPath = join(env.work, ".pi", "bifrost.json");
+    const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+    const globalBytes = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy"] } }));
+    writeFileSync(globalPath, globalBytes);
+    writeFileSync(projectPath, JSON.stringify({ default: "quick", models: {} }));
+    writeFileSync(ownershipPath, JSON.stringify({ version: 2, scope: "project", tiers: { quick: { state: "deleted" } } }));
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.doesNotMatch(result.stdout + result.stderr, /no model update is safe|init: blocked/i);
+      const saved = JSON.parse(readFileSync(projectPath, "utf8"));
+      assert.equal(Object.hasOwn(saved.models, "quick"), false);
+      assert.ok(saved.cache, "missing settings should be saved");
+      assert.equal(JSON.parse(readFileSync(ownershipPath, "utf8")).tiers.quick.state, "deleted");
+      assert.deepEqual(readFileSync(globalPath), globalBytes);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   for (const action of ["keep", "defaults"]) {
     it(`deleted intent ${action} preview matches saved config`, async () => {
       requests = [];
