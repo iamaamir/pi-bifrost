@@ -2527,8 +2527,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const actionSelectionRequired =
       availableActions.length > 1 ||
       (availableActions.length === 1 && (availableActions[0] !== "keep" || hasUnavailableAction));
-    let selectedAction: (typeof availableActions)[number] = "keep";
-    if (actionSelectionRequired && !writeWithoutPrompt) {
+    const buildActionComparison = (): string[] => {
       const actionLabel = (action: (typeof availableActions)[number] | "defaults") =>
         action === "keep" ? "Keep my models" : action === "merge" ? "Merge new models" : "Bifrost defaults";
       const retainedTierLine = ({ tier, before, after, ownershipBefore }: (typeof keepPlan.tiers)[number]) => {
@@ -2599,6 +2598,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           tiers: candidate.tiers,
         }).map((line) => `  ${line.trimStart()}`));
       }
+      return compareLines;
+    };
+    let selectedAction: (typeof availableActions)[number] = "keep";
+    if (actionSelectionRequired && !writeWithoutPrompt) {
+      const compareLines = buildActionComparison();
       if (ctx.mode === "tui" && ctx.hasUI) {
         const labels = availableActions.map((action) =>
           action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
@@ -2654,6 +2658,37 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       return;
     }
+    const reportUnavailablePlan = (plan: typeof keepPlan): void => {
+        if (plan.status === "advisory") {
+          reportInitOutcome(
+            ctx,
+            "paused",
+            "Nothing was saved; the model inventory is incomplete or stale.",
+            "Run /bifrost init -f to refresh the catalog, then retry.",
+            "warning",
+          );
+        } else if (plan.reason === "no_changes") {
+          reportInitOutcome(
+            ctx,
+            "unchanged",
+            "Nothing changed; the pools already match what init would write.",
+            undefined,
+            "info",
+          );
+        } else {
+          reportInitOutcome(
+            ctx,
+            "blocked",
+            plan.reason === "source_invalid"
+              ? "Nothing was saved; the existing configuration is invalid."
+              : plan.reason === "prospective_config_invalid"
+                ? "Nothing was saved; the proposed configuration failed validation."
+                : `Nothing was saved; the pool changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
+            "Fix the configuration and retry.",
+            "error",
+          );
+        }
+    };
     const plan = actionPlans.get(selectedAction)!;
     if (
       !writeWithoutPrompt &&
@@ -2745,35 +2780,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           changes = [];
         }
       } else {
-        if (plan.status === "advisory") {
-          reportInitOutcome(
-            ctx,
-            "paused",
-            "Nothing was saved; the model inventory is incomplete or stale.",
-            "Run /bifrost init -f to refresh the catalog, then retry.",
-            "warning",
-          );
-        } else if (plan.reason === "no_changes") {
-          reportInitOutcome(
-            ctx,
-            "unchanged",
-            "Nothing changed; the pools already match what init would write.",
-            undefined,
-            "info",
-          );
-        } else {
-          reportInitOutcome(
-            ctx,
-            "blocked",
-            plan.reason === "source_invalid"
-              ? "Nothing was saved; the existing configuration is invalid."
-              : plan.reason === "prospective_config_invalid"
-                ? "Nothing was saved; the proposed configuration failed validation."
-                : `Nothing was saved; the pool changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
-            "Fix the configuration and retry.",
-            "error",
-          );
-        }
+        reportUnavailablePlan(plan);
         return;
       }
     } else {

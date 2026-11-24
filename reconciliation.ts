@@ -125,6 +125,19 @@ export function tierOwnership(
   return samePool(entry.models, pool) ? "managed" : "user";
 }
 
+function ownedEntryMembershipCount(tier: string, rawEntry: unknown): number {
+  if (!validTier(tier) || !rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) return -1;
+  const entry = rawEntry as Record<string, unknown>;
+  if (entry.state !== "generated" && entry.state !== "deleted" && entry.state !== "user") return -1;
+  const entryKeys = Object.keys(entry);
+  if (entry.state !== "generated") return entryKeys.length === 1 ? 0 : -1;
+  if (entryKeys.length !== 2 || !own(entry, "models")) return -1;
+  if (!Array.isArray(entry.models) || entry.models.length > MAX_MODELS_PER_TIER) return -1;
+  for (const modelKey of entry.models) if (!validModelKey(modelKey) || modelKey.includes("*")) return -1;
+  if (new Set(entry.models).size !== entry.models.length) return -1;
+  return entry.models.length;
+}
+
 /** Validates a stored v2 payload. Legacy v1 bytes are handled by the store, not here. */
 export function parseOwnershipSnapshot(value: unknown): ReconciliationOwnershipSnapshot | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)
@@ -138,19 +151,9 @@ export function parseOwnershipSnapshot(value: unknown): ReconciliationOwnershipS
   if (tiers.length > MAX_TIERS) return undefined;
   let total = 0;
   for (const [tier, rawEntry] of tiers) {
-    if (!validTier(tier) || !rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) return undefined;
-    const entry = rawEntry as Record<string, unknown>;
-    if (entry.state !== "generated" && entry.state !== "deleted" && entry.state !== "user") return undefined;
-    const entryKeys = Object.keys(entry);
-    if (entry.state !== "generated") {
-      if (entryKeys.length !== 1) return undefined;
-      continue;
-    }
-    if (entryKeys.length !== 2 || !own(entry, "models")) return undefined;
-    if (!Array.isArray(entry.models) || entry.models.length > MAX_MODELS_PER_TIER) return undefined;
-    for (const modelKey of entry.models) if (!validModelKey(modelKey) || modelKey.includes("*")) return undefined;
-    if (new Set(entry.models).size !== entry.models.length) return undefined;
-    total += entry.models.length;
+    const count = ownedEntryMembershipCount(tier, rawEntry);
+    if (count < 0) return undefined;
+    total += count;
     if (total > MAX_OWNED_MEMBERSHIPS) return undefined;
   }
   return value as ReconciliationOwnershipSnapshot;

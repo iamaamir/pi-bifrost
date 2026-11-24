@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,19 @@ import { loadConfigForReload } from "../config-load.ts";
 import { flushDebug, setupDebug } from "../debug.ts";
 import { resolveClassifierEnablement } from "../runtime-state.ts";
 import { wrapResultLines } from "../result-viewer.ts";
+
+let previousAgentDir: string | undefined;
+let isolatedAgentDir: string;
+beforeEach(() => {
+  previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  isolatedAgentDir = mkdtempSync(join(tmpdir(), "bifrost-command-agent-"));
+  process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+});
+afterEach(() => {
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  rmSync(isolatedAgentDir, { recursive: true, force: true });
+});
 
 it("renders missing configured entries in text route traces", () => {
   const trace = buildTracePreview({
@@ -4306,7 +4319,7 @@ describe("command aliases", () => {
       if (text === "if (!probe) return;" || text === "if (!inheritedPoolsReady) return;") continue;
       const preceding = body.slice(Math.max(0, index - 12), index).join("\n");
       assert.ok(
-        preceding.includes("reportInitOutcome("),
+        preceding.includes("reportInitOutcome(") || preceding.includes("reportUnavailablePlan(plan)"),
         `init exit at handleInit+${index} returns without reporting an outcome`,
       );
     }

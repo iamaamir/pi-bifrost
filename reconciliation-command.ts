@@ -323,39 +323,41 @@ function collectMembershipChanges(
   configDigest: string, ownershipDigest: string | null, changes: ReconciliationChange[],
   warnings: Set<ReconciliationWarningCode>, managedTiers: Set<string>, result: { advisory: boolean },
 ): boolean {
+  const collectTier = (inventory: InitMembershipInventory, tier: string): boolean => {
+  const rawPool = Object.hasOwn(before, tier) ? before[tier] : undefined;
+  const owner = tierOwnership(ownership, tier, rawPool);
+  const pool = normalizePool(rawPool) ?? [];
+  // Routine refresh never changes an entire tier controlled by the user.
+  if (owner === "deleted" || owner === "user") {
+    warnings.add("tier_user_managed");
+    return true;
+  }
+  const sourceId = canonicalSourceId(inventory.provider, tier);
+  const view = owner === "managed"
+    ? providerMembershipView(ownership!, tier, inventory.provider, sourceId)
+    : undefined;
+  if (owner === "managed" && !view) return false;
+  const modelsByTier = Object.hasOwn(inventory.modelsByTier, tier) ? { [tier]: inventory.modelsByTier[tier]! } : {};
+  const revision = sha256(Buffer.from(JSON.stringify([inventory.provider, modelsByTier]), "utf8"));
+  const applied: ReconciliationInput["inventory"]["modelsByTier"] = modelsByTier;
+  const proposal = proposeReconciliation({
+    configDigest,
+    ownershipRevision: ownershipDigest,
+    ...(view ? { ownership: view } : {}),
+    configuredModels: { [tier]: pool },
+    inventory: { sourceId, revision, status: inventory.status, enabled: true, modelsByTier: applied },
+  });
+  if (proposal.status === "invalid") return false;
+  if (proposal.status !== "ready") result.advisory = true;
+  for (const warning of proposal.warnings) warnings.add(warning);
+  const applying = proposal.changes.filter((change) => change.disposition === "apply");
+  if (applying.length > 0) managedTiers.add(tier);
+  changes.push(...applying);
+    return true;
+  };
   for (const inventory of inventories) {
     if (!validProvider(inventory.provider)) return false;
-    for (const tier of allTiers) {
-      const rawPool = Object.hasOwn(before, tier) ? before[tier] : undefined;
-      const owner = tierOwnership(ownership, tier, rawPool);
-      const pool = normalizePool(rawPool) ?? [];
-      // Routine refresh never changes an entire tier controlled by the user.
-      if (owner === "deleted" || owner === "user") {
-        warnings.add("tier_user_managed");
-        continue;
-      }
-      const sourceId = canonicalSourceId(inventory.provider, tier);
-      const view = owner === "managed"
-        ? providerMembershipView(ownership!, tier, inventory.provider, sourceId)
-        : undefined;
-      if (owner === "managed" && !view) return false;
-      const modelsByTier = Object.hasOwn(inventory.modelsByTier, tier) ? { [tier]: inventory.modelsByTier[tier]! } : {};
-      const revision = sha256(Buffer.from(JSON.stringify([inventory.provider, modelsByTier]), "utf8"));
-      const applied: ReconciliationInput["inventory"]["modelsByTier"] = modelsByTier;
-      const proposal = proposeReconciliation({
-        configDigest,
-        ownershipRevision: ownershipDigest,
-        ...(view ? { ownership: view } : {}),
-        configuredModels: { [tier]: pool },
-        inventory: { sourceId, revision, status: inventory.status, enabled: true, modelsByTier: applied },
-      });
-      if (proposal.status === "invalid") return false;
-      if (proposal.status !== "ready") result.advisory = true;
-      for (const warning of proposal.warnings) warnings.add(warning);
-      const applying = proposal.changes.filter((change) => change.disposition === "apply");
-      if (applying.length > 0) managedTiers.add(tier);
-      changes.push(...applying);
-    }
+    for (const tier of allTiers) if (!collectTier(inventory, tier)) return false;
   }
   return true;
 }
@@ -414,50 +416,53 @@ export function buildInitMembershipPlan(
   if (changes.length && !validateMergedConfig(source.source, nextConfigBytes)) {
     return { status: "blocked", reason: "prospective_config_invalid", changes: [], warnings: [] };
   }
-  const after: Record<string, ConfiguredTierPool> = {};
-  const afterModels = isPlainRecord(candidateConfig.models) ? candidateConfig.models : {};
-  for (const [tier, raw] of Object.entries(afterModels)) {
-    const pool = normalizePool(raw);
-    if (pool) setOwn(after, tier, raw);
-  }
-  const nextOwnership = deriveOwnershipSnapshot({
-    scope: source.source,
-    previous: ownership,
-    before,
-    after,
-    managedTiers,
-  });
-  const nextOwnershipBytes = serialize(nextOwnership);
-  // Compare semantics, not formatting: re-serializing an unchanged or absent claim set is not a change.
-  const ownershipChanged = JSON.stringify(nextOwnership) !== JSON.stringify(
-    ownership ?? { version: 2, scope: source.source, tiers: {} },
-  );
-  if (!changes.length && !ownershipChanged) {
-    return { status: advisory ? "advisory" : "blocked", reason: "no_changes", changes: [], warnings: [...warnings] };
-  }
-  if (nextConfigBytes.byteLength > MAX_CONFIG_BYTES || nextOwnershipBytes.byteLength > MAX_OWNERSHIP_BYTES) {
-    return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
-  }
-  try {
-    assertPlainJsonObject(nextConfigBytes);
-    assertOwnershipPayload(nextOwnershipBytes);
-  } catch {
-    return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
-  }
-  return {
-    status: advisory ? "advisory" : "ready",
-    changes: Object.freeze(changes),
-    warnings: Object.freeze([...warnings].sort()),
-    transaction: {
-      configPath: source.configPath,
-      ownershipPath: source.ownershipPath,
-      journalPath: source.journalPath,
-      expectedConfigDigest: configDigest,
-      expectedOwnershipDigest: ownershipDigest,
-      nextConfigBytes,
-      nextOwnershipBytes,
-    },
+  const finishMembershipPlan = (): InitMembershipPlan => {
+    const after: Record<string, ConfiguredTierPool> = {};
+    const afterModels = isPlainRecord(candidateConfig.models) ? candidateConfig.models : {};
+    for (const [tier, raw] of Object.entries(afterModels)) {
+      const pool = normalizePool(raw);
+      if (pool) setOwn(after, tier, raw);
+    }
+    const nextOwnership = deriveOwnershipSnapshot({
+      scope: source.source,
+      previous: ownership,
+      before,
+      after,
+      managedTiers,
+    });
+    const nextOwnershipBytes = serialize(nextOwnership);
+    // Compare semantics, not formatting: re-serializing an unchanged or absent claim set is not a change.
+    const ownershipChanged = JSON.stringify(nextOwnership) !== JSON.stringify(
+      ownership ?? { version: 2, scope: source.source, tiers: {} },
+    );
+    if (!changes.length && !ownershipChanged) {
+      return { status: advisory ? "advisory" : "blocked", reason: "no_changes", changes: [], warnings: [...warnings] };
+    }
+    if (nextConfigBytes.byteLength > MAX_CONFIG_BYTES || nextOwnershipBytes.byteLength > MAX_OWNERSHIP_BYTES) {
+      return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
+    }
+    try {
+      assertPlainJsonObject(nextConfigBytes);
+      assertOwnershipPayload(nextOwnershipBytes);
+    } catch {
+      return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
+    }
+    return {
+      status: advisory ? "advisory" : "ready",
+      changes: Object.freeze(changes),
+      warnings: Object.freeze([...warnings].sort()),
+      transaction: {
+        configPath: source.configPath,
+        ownershipPath: source.ownershipPath,
+        journalPath: source.journalPath,
+        expectedConfigDigest: configDigest,
+        expectedOwnershipDigest: ownershipDigest,
+        nextConfigBytes,
+        nextOwnershipBytes,
+      },
+    };
   };
+  return finishMembershipPlan();
 }
 
 export interface InitActionPlan extends InitMembershipPlan {
@@ -496,6 +501,39 @@ function generatedModelsAreProbed(
     }
   }
   return true;
+}
+
+function applyGeneratedTiers(
+  action: "merge" | "defaults",
+  uniqueGeneratedTiers: readonly (readonly [string, readonly string[]])[],
+  before: Record<string, ConfiguredTierPool>,
+  previous: Exclude<ReturnType<typeof ownershipFromBytes>, null>,
+  inheritedTiers: ReadonlySet<string>,
+  inheritedPools: ReadonlyMap<string, readonly string[]> | undefined,
+  nextModels: Record<string, unknown>,
+  managedTiers: Set<string>,
+): void {
+  for (const [tier, additions] of uniqueGeneratedTiers) {
+    const current = Object.hasOwn(before, tier) ? before[tier] : undefined;
+    const owner = tierOwnership(previous, tier, current);
+    if (action === "merge") {
+      if (owner === "deleted" || (current !== undefined && normalizePool(current)?.length === 0)
+        || (current === undefined && inheritedTiers.has(tier))) continue;
+      const old = normalizePool(current) ?? [];
+      const appended = new Set(old);
+      setOwn(nextModels, tier, [...old, ...additions.filter((key) => {
+        if (appended.has(key)) return false;
+        appended.add(key);
+        return true;
+      })]);
+    } else {
+      const inherited = inheritedPools?.get(tier);
+      if (current === undefined && owner !== "deleted" && inherited
+        && additions.length === inherited.length && additions.every((key, index) => key === inherited[index])) continue;
+      setOwn(nextModels, tier, [...additions]);
+      managedTiers.add(tier);
+    }
+  }
 }
 
 /** Plans one explicit init action against the exact selected-layer snapshot. */
@@ -581,27 +619,8 @@ export function buildInitActionPlan(input: {
   }
   const nextModels: Record<string, unknown> = { ...(isPlainRecord(candidate.models) ? candidate.models : {}) };
   if (input.action !== "keep") {
-    for (const [tier, additions] of uniqueGeneratedTiers) {
-      const current = Object.hasOwn(before, tier) ? before[tier] : undefined;
-      const owner = tierOwnership(previous, tier, current);
-      if (input.action === "merge") {
-        if (owner === "deleted" || (current !== undefined && normalizePool(current)?.length === 0)
-          || (current === undefined && input.inheritedTiers.has(tier))) continue;
-        const old = normalizePool(current) ?? [];
-        const appended = new Set(old);
-        setOwn(nextModels, tier, [...old, ...additions.filter((key) => {
-          if (appended.has(key)) return false;
-          appended.add(key);
-          return true;
-        })]);
-      } else {
-        const inherited = input.inheritedPools?.get(tier);
-        if (current === undefined && owner !== "deleted" && inherited
-          && additions.length === inherited.length && additions.every((key, index) => key === inherited[index])) continue;
-        setOwn(nextModels, tier, [...additions]);
-        managedTiers.add(tier);
-      }
-    }
+    applyGeneratedTiers(input.action, uniqueGeneratedTiers, before, previous, input.inheritedTiers,
+      input.inheritedPools, nextModels, managedTiers);
     candidate = { ...original, models: nextModels };
   }
   const after: Record<string, ConfiguredTierPool> = {};
