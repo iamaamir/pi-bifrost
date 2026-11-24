@@ -2737,7 +2737,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
               : plan.reason === "prospective_config_invalid"
                 ? "Nothing was saved; the proposed configuration failed validation."
                 : `Nothing was saved; the pool changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
-            "Fix the configuration and retry.",
+            "Check the configuration and ownership receipt; see the init receipt limits in docs/guide/commands.md.",
             "error",
           );
         }

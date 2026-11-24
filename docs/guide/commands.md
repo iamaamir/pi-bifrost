@@ -219,3 +219,9 @@ Probe sends `1+1=` to every model available in Pi's registry. The primary transp
 | `/bifrost classifier on` / `off` / `inherit` | No | No; choice applies to this Pi session only |
 
 Pin is a hard lock. A tier name at the start of a message is not applied while pinned.
+
+### Init ownership receipt limits
+
+Each ownership receipt supports 100 active tiers and 100 historical deletion markers, subject to existing byte and generated-model limits. If init cannot save, check the selected configuration and its ownership receipt. Remove unneeded active tiers to stay within the active limit. Deletion markers preserve intent and are never discarded automatically.
+
+To explicitly reset deletion history, first back up the configuration and the selected scope's `bifrost-reconcile-ownership.json` (workspace scope uses `bifrost-reconcile-workspace-ownership.json`), then remove the receipt while Bifrost is stopped and retry init. This resets all recorded ownership, not only deletion history: existing tiers become user-owned, and deleted tiers may be offered again. Review proposed changes before saving. Do not remove a receipt while a reconciliation journal is pending.

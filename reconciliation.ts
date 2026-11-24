@@ -148,11 +148,15 @@ export function parseOwnershipSnapshot(value: unknown): ReconciliationOwnershipS
   if (record.version !== 2 || !["project", "workspace", "user"].includes(record.scope as string)) return undefined;
   if (!record.tiers || typeof record.tiers !== "object" || Array.isArray(record.tiers)) return undefined;
   const tiers = Object.entries(record.tiers as Record<string, unknown>);
-  if (tiers.length > MAX_TIERS) return undefined;
+  let active = 0;
+  let deleted = 0;
   let total = 0;
   for (const [tier, rawEntry] of tiers) {
     const count = ownedEntryMembershipCount(tier, rawEntry);
     if (count < 0) return undefined;
+    if ((rawEntry as ReconciliationOwnershipTier).state === "deleted") deleted++;
+    else active++;
+    if (active > MAX_TIERS || deleted > MAX_TIERS) return undefined;
     total += count;
     if (total > MAX_OWNED_MEMBERSHIPS) return undefined;
   }

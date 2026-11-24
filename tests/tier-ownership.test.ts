@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { deriveOwnershipSnapshot, tierOwnership, type ReconciliationOwnershipSnapshot } from "../reconciliation.ts";
+import { deriveOwnershipSnapshot, parseOwnershipSnapshot, tierOwnership, type ReconciliationOwnershipSnapshot } from "../reconciliation.ts";
 import { buildInitMembershipPlan, buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 
 const generated = ["p/a", "q/b"];
@@ -29,19 +29,29 @@ describe("ordered whole-tier ownership", () => {
     assert.deepEqual(restored, ownership);
   });
 
-  it("fails closed when a 100-tier edit needs a historical deletion marker", () => {
-    const original: Record<string, string[]> = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`tier${i}`, [`p/m${i}`]]));
-    const receipt = buildInitOwnershipReceipt("project", original)!;
-    assert.equal(Object.keys(receipt.tiers).length, 100);
-    const models: Record<string, string[]> = { ...original, replacement: ["p/new"] };
+  it("allows 100 active tiers and 100 deletion markers, but fails closed beyond either bound", () => {
+    const active = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`tier${i}`, [`p/m${i}`]]));
+    const deleted = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`old${i}`, { state: "deleted" as const }]));
+    const receipt: ReconciliationOwnershipSnapshot = { ...buildInitOwnershipReceipt("project", active)!, tiers: { ...buildInitOwnershipReceipt("project", active)!.tiers, ...deleted } };
+    assert.ok(parseOwnershipSnapshot(receipt));
+    const validPlan = buildInitMembershipPlan({
+      source: "project", configPath: "/fixture/config", ownershipPath: "/fixture/ownership", journalPath: "/fixture/journal",
+      configBytes: Buffer.from(JSON.stringify({ models: active })), ownershipBytes: Buffer.from(JSON.stringify(receipt)),
+    }, [], () => true);
+    assert.notEqual(validPlan.reason, "source_invalid");
+    const edited = { ...active, tier0: ["p/edited"] };
+    const once = deriveOwnershipSnapshot({ scope: "project", previous: receipt, before: edited, after: edited, managedTiers: new Set() });
+    const twice = deriveOwnershipSnapshot({ scope: "project", previous: once, before: edited, after: edited, managedTiers: new Set() });
+    assert.deepEqual(twice, once);
+    assert.deepEqual(twice.tiers.old0, { state: "deleted" });
+    assert.equal(parseOwnershipSnapshot({ ...receipt, tiers: { ...receipt.tiers, extra: { state: "user" } } }), undefined);
+    assert.equal(parseOwnershipSnapshot({ ...receipt, tiers: { ...receipt.tiers, extra: { state: "deleted" } } }), undefined);
+    const models: Record<string, string[]> = { ...active, replacement: ["p/new"] };
     delete models.tier0;
     const configBytes = Buffer.from(JSON.stringify({ models }));
     const ownershipBytes = Buffer.from(JSON.stringify(receipt));
     const configBefore = Buffer.from(configBytes);
     const ownershipBefore = Buffer.from(ownershipBytes);
-    const derived = deriveOwnershipSnapshot({ scope: "project", previous: receipt, before: models, after: models, managedTiers: new Set() });
-    assert.equal(Object.keys(derived.tiers).length, 101);
-    assert.deepEqual(derived.tiers.tier0, { state: "deleted" });
     const plan = buildInitMembershipPlan({
       source: "project", configPath: "/fixture/config", ownershipPath: "/fixture/ownership", journalPath: "/fixture/journal",
       configBytes, ownershipBytes,
