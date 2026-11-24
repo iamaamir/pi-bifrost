@@ -797,6 +797,39 @@ describe("config reconciliation command router", () => {
     }
   });
 
+  it("rejects inherited pool override when inventory evidence changes during approval", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ default: "general", models: { general: ["openai/old-model"] } }));
+      const dir = join(cwd, ".pi");
+      fs.mkdirSync(dir, { recursive: true });
+      const configPath = join(dir, "bifrost.json");
+      const receiptPath = join(dir, "bifrost-reconcile-ownership.json");
+      const config = Buffer.from("{}\n");
+      const receipt = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", {})));
+      fs.writeFileSync(configPath, config);
+      fs.writeFileSync(receiptPath, receipt);
+      writeRecentProbeCache(join(dir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)], evidence: { openai: { status: "complete", refreshedAt: Date.now() } } });
+      const ctx = h.ctx as unknown as { hasUI: boolean; ui: { confirm: (title: string) => Promise<boolean>; notify: () => void } };
+      ctx.hasUI = true;
+      const confirmations: string[] = [];
+      ctx.ui = { confirm: async (title) => {
+        confirmations.push(title);
+        h.state.registryInventoryEvidence = { openai: { status: "partial", refreshedAt: Date.now() } };
+        return true;
+      }, notify: () => {} };
+      const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      assert.deepEqual(confirmations, ["Save Bifrost setup?"], output.join("\n"));
+      assert.match(output.join("\n"), /general: project override[\s\S]*Inherited:[\s\S]*1\. openai\/old-model[\s\S]*Project:[\s\S]*1\. openai\/new-model/);
+      assert.deepEqual(fs.readFileSync(configPath), config);
+      assert.deepEqual(fs.readFileSync(receiptPath), receipt);
+    });
+  });
+
   it("lets interactive fresh init confirm a differing inherited pool override", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
@@ -971,7 +1004,8 @@ describe("config reconciliation command router", () => {
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
         { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
       ]);
-      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      const receiptBytes = fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"));
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)], evidence: { unrelated: { status: "partial", refreshedAt: Date.now() } } });
       let confirmations = 0;
       let selections = 0;
       const ctx = h.ctx as unknown as {
@@ -998,6 +1032,8 @@ describe("config reconciliation command router", () => {
       assert.deepEqual(saved.reliability, BUNDLED_PUBLIC_INIT_DEFAULTS.reliability);
       assert.deepEqual(saved.classifier, BUNDLED_PUBLIC_INIT_DEFAULTS.classifier);
       assert.equal(confirmations, 1, "settings-only changes require explicit user confirmation");
+      assert.deepEqual(saved.models, { general: ["openai/cached-model"] });
+      assert.deepEqual(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json")), receiptBytes);
     });
   });
 
