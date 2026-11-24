@@ -29,6 +29,29 @@ describe("ordered whole-tier ownership", () => {
     assert.deepEqual(restored, ownership);
   });
 
+  it("fails closed when a 100-tier edit needs a historical deletion marker", () => {
+    const original: Record<string, string[]> = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`tier${i}`, [`p/m${i}`]]));
+    const receipt = buildInitOwnershipReceipt("project", original)!;
+    assert.equal(Object.keys(receipt.tiers).length, 100);
+    const models: Record<string, string[]> = { ...original, replacement: ["p/new"] };
+    delete models.tier0;
+    const configBytes = Buffer.from(JSON.stringify({ models }));
+    const ownershipBytes = Buffer.from(JSON.stringify(receipt));
+    const configBefore = Buffer.from(configBytes);
+    const ownershipBefore = Buffer.from(ownershipBytes);
+    const derived = deriveOwnershipSnapshot({ scope: "project", previous: receipt, before: models, after: models, managedTiers: new Set() });
+    assert.equal(Object.keys(derived.tiers).length, 101);
+    assert.deepEqual(derived.tiers.tier0, { state: "deleted" });
+    const plan = buildInitMembershipPlan({
+      source: "project", configPath: "/fixture/config", ownershipPath: "/fixture/ownership", journalPath: "/fixture/journal",
+      configBytes, ownershipBytes,
+    }, [], () => true);
+    assert.equal(plan.reason, "source_invalid");
+    assert.equal(plan.transaction, undefined);
+    assert.deepEqual(configBytes, configBefore);
+    assert.deepEqual(ownershipBytes, ownershipBefore);
+  });
+
   it("never trusts missing, legacy, corrupt, or wrong-scope ownership", () => {
     const configBytes = Buffer.from(JSON.stringify({ models: { quick: generated } }));
     const legacy = { version: 1, sources: { catalog: { generated: { quick: generated }, tombstones: {} } } };
