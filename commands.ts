@@ -1885,6 +1885,68 @@ function resolveInitClassifier(
   return { classifierModel, effectiveClassifierSummary };
 }
 
+function categorizeInitModels(
+  available: ReturnType<ExtensionContext["modelRegistry"]["getAvailable"]>,
+  workingModels: readonly { provider: string; model: string; duration_ms: number }[],
+  probeLoaded: boolean,
+): { models: Record<string, string[]>; uncategorized: string[] } {
+  const models: Record<string, string[]> = {};
+  const uncategorized: string[] = [];
+
+  for (const m of available) {
+    const key = `${m.provider}/${m.id}`;
+
+    // If probe data is loaded, skip models that failed or timed out.
+    if (probeLoaded) {
+      const working = workingModels.find((w) => w.provider === m.provider && w.model === m.id);
+      if (!working) continue;
+    }
+
+    const tier = guessTier(m);
+    if (tier) {
+      models[tier] = models[tier] ?? [];
+      models[tier].push(key);
+    } else {
+      uncategorized.push(key);
+    }
+  }
+
+  const speedMap = new Map(workingModels.map((w) => [`${w.provider}/${w.model}`, w.duration_ms]));
+  for (const tier of Object.keys(models)) {
+    models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
+  }
+  return { models, uncategorized };
+}
+
+function initPoolHasCompleteInventory(
+  pool: readonly string[],
+  available: ReturnType<ExtensionContext["modelRegistry"]["getAvailable"]>,
+  state: BifrostState,
+  ctx: ExtensionContext,
+  refreshRemainsCurrent: boolean,
+  authFailedProbeProviders: ReadonlySet<string>,
+  initRefreshReceipt: Awaited<ReturnType<typeof refreshInitCatalog>>["initRefreshReceipt"],
+): boolean {
+  const availableProviders = new Set(available.map((model) => model.provider));
+  return pool.every((key) => {
+    const separator = key.indexOf("/");
+    const provider = key.slice(0, separator);
+    const evidence = state.registryInventoryEvidence?.[provider];
+    if (!provider || separator < 1 || !availableProviders.has(provider) || state.forceRegistryRefresh) return false;
+    let authConfigured: boolean | undefined;
+    try {
+      authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
+    } catch {
+      authConfigured = undefined;
+    }
+    const now = Date.now();
+    return authConfigured === true && !authFailedProbeProviders.has(provider) &&
+      evidence?.status === "complete" && now >= evidence.refreshedAt &&
+      (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
+        (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
+  });
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -2086,26 +2148,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     );
   }
 
-  const models: Record<string, string[]> = {};
-  const uncategorized: string[] = [];
-
-  for (const m of available) {
-    const key = `${m.provider}/${m.id}`;
-
-    // If probe data is loaded, skip models that failed or timed out.
-    if (probeLoaded) {
-      const working = workingModels.find((w) => w.provider === m.provider && w.model === m.id);
-      if (!working) continue;
-    }
-
-    const tier = guessTier(m);
-    if (tier) {
-      models[tier] = models[tier] ?? [];
-      models[tier].push(key);
-    } else {
-      uncategorized.push(key);
-    }
-  }
+  const { models, uncategorized } = categorizeInitModels(available, workingModels, probeLoaded);
 
   if (probeLoaded && Object.values(models).every((pool) => pool.length === 0)) {
     reportInitOutcome(
@@ -2119,12 +2162,6 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   const probeVerified = new Set(Object.values(models).flat());
 
-  // Sort each tier by probe response time (fastest first) so "first"
-  // strategy picks the fastest model.
-  const speedMap = new Map(workingModels.map((w) => [`${w.provider}/${w.model}`, w.duration_ms]));
-  for (const tier of Object.keys(models)) {
-    models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
-  }
   let source: ReconciliationSourceSnapshot;
   try {
     source = readReconciliationSource(selectedSource);
@@ -2189,30 +2226,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   }
   if (selectedSource === "project" && !hasConfiguredTiers) {
-    const availableProviders = new Set(available.map((model) => model.provider));
-    const inheritedPoolHasCompleteInventory = (pool: readonly string[]) => pool.every((key) => {
-      const separator = key.indexOf("/");
-      const provider = key.slice(0, separator);
-      const evidence = state.registryInventoryEvidence?.[provider];
-      if (!provider || separator < 1 || !availableProviders.has(provider) || state.forceRegistryRefresh) return false;
-      let authConfigured: boolean | undefined;
-      try {
-        authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
-      } catch {
-        authConfigured = undefined;
-      }
-      const now = Date.now();
-      return authConfigured === true && !authFailedProbeProviders.has(provider) &&
-        evidence?.status === "complete" && now >= evidence.refreshedAt &&
-        (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
-          (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
-    });
     for (const [tier, inherited] of inheritedEffective) {
       const generated = models[tier];
       if (!generated) continue;
       const identical = generated.length === inherited.pool.length &&
         generated.every((key, index) => key === inherited.pool[index]);
-      const completeInventory = inheritedPoolHasCompleteInventory(inherited.pool);
+      const completeInventory = initPoolHasCompleteInventory(
+        inherited.pool, available, state, ctx, refreshRemainsCurrent, authFailedProbeProviders, initRefreshReceipt,
+      );
       if (!writeWithoutPrompt && !identical && !completeInventory) {
         reportInitOutcome(
           ctx,
