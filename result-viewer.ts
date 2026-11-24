@@ -131,10 +131,14 @@ export class InitReview {
     }
     if (data === "\x0f") this.expanded = !this.expanded;
     else if (data === "\r" || data === "\n") {
-      if (this.canConfirm && this.actions.length > 0) this.done(this.actions[this.selected]);
+      this.confirmSelection();
     }
     else if (!this.selectOrScroll(data)) return;
     this.requestRender();
+  }
+
+  private confirmSelection(): void {
+    if (this.canConfirm && this.actions.length > 0) this.done(this.actions[this.selected]);
   }
 
   private selectOrScroll(data: string): boolean {
