@@ -17,7 +17,7 @@ The probe sends a minimal prompt (`1+1=`) to every available model in the regist
    - **Fallback Attempt**: If the primary attempt returns no text, the probe attempts one `promptWithMinimalSession()` call (full session transport). A stream error does not start the fallback. It reports `status: "error"`.
 4. **Result Recording**: For each model, the following metrics are captured:
    - `status`: `ok`, `error`, `timeout`, or `skipped`.
-   - `duration_ms`: Time taken for the response.
+   - `duration_ms`: Total elapsed time for the model, including any minimal-session fallback.
    - `transport`: Whether `streamSimple` or `session` was used.
    - `tokens`: Total tokens used (if successful).
    - `error`: Error message if the probe failed.

@@ -185,6 +185,36 @@ describe("probe transport", () => {
     });
   }
 
+  it("measures elapsed duration for an empty primary with no session fallback", async (t) => {
+    // The config-agent path passes sessionFallback: false, so an empty stream ends
+    // as an error rather than a second request. Its elapsed time still has to be
+    // reported instead of the initial zero.
+    let now = 0;
+    t.mock.method(performance, "now", () => now);
+    const model = { provider: "fixture", id: "primary-empty", api: "openai-completions" };
+    let fallbackCalls = 0;
+    const ctx = {
+      modelRegistry: {
+        getAvailable: () => [model],
+        streamSimple: () => ({
+          result: async () => {
+            now = 60;
+            return { stopReason: "stop", content: [], usage: { totalTokens: 1 } };
+          },
+        }),
+      },
+    } as never;
+    const result = await runProbe(ctx, {
+      persist: false,
+      sessionFallback: false,
+      promptWithSession: async () => { fallbackCalls++; return "2"; },
+    });
+    assert.equal(result.results[0]?.status, "error");
+    assert.equal(result.results[0]?.error, "empty response");
+    assert.equal(result.results[0]?.duration_ms, 60, "an empty primary still reports its elapsed time");
+    assert.equal(fallbackCalls, 0);
+  });
+
   it("skips dispatch entirely when the signal is already aborted", async () => {
     const model = { provider: "fixture", id: "pre-aborted", api: "openai-completions" };
     const controller = new AbortController();
