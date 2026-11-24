@@ -3088,6 +3088,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     return;
   }
 
+  reloadAfterInit(ctx, state, source.configPath);
+}
+
+function reloadAfterInit(ctx: ExtensionContext, state: BifrostState, configPath: string): void {
   // Auto-reload so the extension picks up the new config immediately.
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
   if (!installReloadedConfig(state, loadedConfig, ctx)) {
@@ -3126,8 +3130,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     // Saving does not switch routing on: /bifrost off persists across reloads,
     // so report the state the user is actually in.
     state.enabled
-      ? `Saved ${source.configPath} and reloaded. Bifrost is active with ${tiers}.`
-      : `Saved ${source.configPath} and reloaded. Bifrost is configured with ${tiers}, but routing is off.`,
+      ? `Saved ${configPath} and reloaded. Bifrost is active with ${tiers}.`
+      : `Saved ${configPath} and reloaded. Bifrost is configured with ${tiers}, but routing is off.`,
     state.enabled ? "Send a prompt to try it." : "Run /bifrost on to route prompts.",
     "success",
   );
