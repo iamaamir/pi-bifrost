@@ -612,7 +612,7 @@ export function buildInitActionPlan(input: {
   const generatedTiers = Object.entries(generated);
   const probedByTier = collectProbedModels(input.inventories);
   const completeProbed = collectProbedModels(inventories.filter((entry) => entry.status === "complete"));
-  if (!probedByTier || !completeProbed || !generatedModelsAreProbed(generatedTiers, completeProbed)) return blocked("source_invalid");
+  if (!probedByTier || !completeProbed || !generatedModelsAreProbed(generatedTiers, input.action === "keep" ? probedByTier : completeProbed)) return blocked("source_invalid");
   const uniqueGeneratedTiers = generatedTiers.map(([tier, keys]) => [tier, [...new Set(keys)]] as const);
   let candidate: Record<string, unknown> = original;
   let warnings: readonly ReconciliationWarningCode[] = [];

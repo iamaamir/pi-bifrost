@@ -551,6 +551,23 @@ describe("config reconciliation command router", () => {
       });
     });
 
+  it("saves settings with handwritten Keep when unused generated inventory is stale", async () => {
+    await withCwd(async (cwd) => {
+      const dir = join(cwd, ".pi");
+      fs.mkdirSync(dir, { recursive: true });
+      const path = join(dir, "bifrost.json");
+      fs.writeFileSync(path, JSON.stringify({ models: { general: ["manual/model"] } }));
+      writeRecentProbeCache(join(dir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ refresh: async () => { throw new Error("unavailable"); } });
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(path, "utf8"));
+      assert.deepEqual(saved.models.general, ["manual/model"]);
+      assert.ok(saved.rules?.length > 0, "unrelated settings must be saved");
+    });
+  });
+
   it("pauses settings-only inherited replacement when refresh fails", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
