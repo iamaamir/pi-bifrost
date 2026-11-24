@@ -2465,6 +2465,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     | undefined;
   let settingsAdded = false;
   let actionSelectionApproved = false;
+  let inventoryStillSafe = () => true;
   if (source.configBytes !== null && (hasConfiguredTiers || hasDeletedTierIntent)) {
     const inventories = buildInitInventories(
       available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
@@ -2493,7 +2494,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const planSignature = (candidate: (typeof keepPlan)) =>
       `${candidate.status}:${candidate.reason ?? ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextConfigBytes).toString("base64") : ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextOwnershipBytes).toString("base64") : ""}`;
     const keepSignature = planSignature(keepPlan);
-    const actionHasCompleteRemovalInventory = (candidate: (typeof keepPlan)) =>
+    const actionHasCompleteRemovalInventory = (candidate: (typeof keepPlan), inventory = inventories) =>
       candidate.tiers.every(({ tier, before, after }) => {
         const inherited = inheritedEffective.get(tier)?.pool;
         const effectiveBefore = before ?? inherited ?? [];
@@ -2505,7 +2506,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         const changedPool = JSON.stringify(effectiveBefore) !== JSON.stringify(effectiveAfter) ? effectiveBefore : [];
         const affected = [...removed, ...newlyShadowed, ...changedPool];
         return affected.every((model) =>
-          inventories.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
+          inventory.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
       });
     const availableActions = (["keep", "merge", "defaults"] as const).filter((action) => {
       const candidate = actionPlans.get(action)!;
@@ -2695,6 +2696,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         }
     };
     const plan = actionPlans.get(selectedAction)!;
+    inventoryStillSafe = () => actionHasCompleteRemovalInventory(plan, buildInitInventories(
+      available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
+      initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), initRefreshReceipt, authFailedProbeProviders,
+    ));
     if (
       !writeWithoutPrompt &&
       selectedAction === "keep" &&
@@ -3072,6 +3077,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   if (
     refreshReceiptChanged ||
+    !inventoryStillSafe() ||
     currentKeys.length !== plannedKeys.length ||
     currentKeys.some((key, index) => key !== plannedKeys[index])
   ) {

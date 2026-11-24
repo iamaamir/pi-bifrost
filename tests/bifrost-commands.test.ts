@@ -2475,6 +2475,102 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("rejects a cached-probe destructive review when registry evidence changes during confirmation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-cached-evidence-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      mkdirSync(process.env.PI_CODING_AGENT_DIR);
+      const configPath = join(piDir, "bifrost.json");
+      const ownershipPath = join(piDir, "bifrost-reconcile-ownership.json");
+      const probePath = join(piDir, "bifrost-probe.json");
+      writeFileSync(configPath, JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt("project", { quick: ["fixture/old"] })));
+      writeRecentProbeCache(probePath, [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const before = [configPath, ownershipPath, probePath].map((path) => readFileSync(path));
+      const model = makeModel("fixture", "chat", 0.2, 0.2);
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+      let confirmed = false;
+      const { ctx, calls } = makeCtx([model as never], (_title, options) => {
+        confirmed = true;
+        state.registryInventoryEvidence = { fixture: { status: "partial", refreshedAt: Date.now() } };
+        return options.find((option) => option.startsWith("Keep my models"));
+      });
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      registry.streamSimple = () => { throw new Error("cached probe must be reused"); };
+
+      await createCommandRouter(state)("init", ctx as never);
+
+      assert.equal(confirmed, true, "destructive plan must reach confirmation");
+      assert.ok(calls.some((call) => String(call.value).includes("init: stale review. Nothing was saved")),
+        JSON.stringify(calls.filter((call) => call.kind === "notify")));
+      assert.deepEqual([configPath, ownershipPath, probePath].map((path) => readFileSync(path)), before);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cached-probe destructive review when provider auth changes during confirmation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-cached-evidence-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      mkdirSync(process.env.PI_CODING_AGENT_DIR);
+      const configPath = join(piDir, "bifrost.json");
+      const ownershipPath = join(piDir, "bifrost-reconcile-ownership.json");
+      const probePath = join(piDir, "bifrost-probe.json");
+      writeFileSync(configPath, JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt("project", { quick: ["fixture/old"] })));
+      writeRecentProbeCache(probePath, [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const before = [configPath, ownershipPath, probePath].map((path) => readFileSync(path));
+      const model = makeModel("fixture", "chat", 0.2, 0.2);
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+      let confirmed = false;
+      const { ctx, calls } = makeCtx([model as never], (_title, options) => {
+        confirmed = true;
+        registry.getProviderAuthStatus = () => ({ configured: false, source: "stored" });
+        return options.find((option) => option.startsWith("Keep my models"));
+      });
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      registry.streamSimple = () => { throw new Error("cached probe must be reused"); };
+
+      await createCommandRouter(state)("init", ctx as never);
+
+      assert.equal(confirmed, true, "destructive plan must reach confirmation");
+      assert.ok(calls.some((call) => String(call.value).includes("init: stale review. Nothing was saved")),
+        JSON.stringify(calls.filter((call) => call.kind === "notify")));
+      assert.deepEqual([configPath, ownershipPath, probePath].map((path) => readFileSync(path)), before);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("saves managed pool refresh when Keep is selected", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-keep-refresh-"));
     const previousCwd = process.cwd();
