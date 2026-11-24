@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildInitActionPlan, buildInitOwnershipReceipt } from "../reconciliation-command.ts";
+import { affectedPoolsHaveCompleteInventories, buildInitActionPlan, buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 
 const bytes = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2) + "\n");
 const source = (models: Record<string, unknown>, receipt: unknown = null) => ({
@@ -15,6 +15,24 @@ const config = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.
 const receipt = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.transaction!.nextOwnershipBytes).toString());
 
 describe("init action planner", () => {
+  it("requires inventory for removals, reorder, additions and inherited overrides", () => {
+    const inventories = [{ provider: "p", status: "complete" as const, modelsByTier: {} }];
+    const check = (before: Record<string, string[]>, after: Record<string, string[]>, inherited = new Map<string, readonly string[]>()) =>
+      affectedPoolsHaveCompleteInventories(inventories, before, after, new Set(inherited.keys()), inherited);
+    assert.equal(check({ quick: ["manual/a", "manual/b"] }, { quick: ["manual/a", "manual/b", "p/new"] }), true);
+    assert.equal(check({ quick: ["manual/a"] }, { quick: [] }), false);
+    assert.equal(check({ quick: ["manual/a", "manual/b"] }, { quick: ["manual/b", "manual/a"] }), false);
+    assert.equal(check({}, { quick: ["manual/a"] }), false);
+    assert.equal(check({}, { quick: ["p/new"] }, new Map([["quick", ["manual/a"]]])), false);
+  });
+  it("requires local removal inventory even when inherited pool is identical", () => {
+    const inherited = new Map([["quick", ["manual/a"]]]);
+    const check = (status: "complete" | "stale") => affectedPoolsHaveCompleteInventories(
+      [{ provider: "manual", status, modelsByTier: {} }], { quick: ["manual/a"] }, {}, new Set(inherited.keys()), inherited,
+    );
+    assert.equal(check("stale"), false);
+    assert.equal(check("complete"), true);
+  });
   it("accepts realistic model identifiers and rejects control characters", () => {
     const key = "openai/gpt-6.1-terra";
     const input = { action: "defaults" as const, source: source({}), inventories: [{ provider: "openai", status: "complete" as const, modelsByTier: { quick: [key] } }], generated: { quick: [key] }, inheritedTiers: new Set<string>(), validateMergedConfig: () => true };

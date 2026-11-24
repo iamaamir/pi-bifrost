@@ -136,6 +136,7 @@ import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
   buildInitOwnershipReceipt,
   buildInitActionPlan,
+  affectedPoolsHaveCompleteInventories,
   parseReconciliationCommandArgs,
   runReconciliationCommand,
   type ReconciliationCommandReport,
@@ -2560,20 +2561,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const planSignature = (candidate: (typeof keepPlan)) =>
       `${candidate.status}:${candidate.reason ?? ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextConfigBytes).toString("base64") : ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextOwnershipBytes).toString("base64") : ""}`;
     const keepSignature = planSignature(keepPlan);
-    const actionHasCompleteAffectedInventory = (candidate: (typeof keepPlan), inventory = inventories) =>
-      candidate.tiers.every(({ tier, before, after }) => {
-        const inherited = inheritedEffective.get(tier)?.pool;
-        const effectiveBefore = before ?? inherited ?? [];
-        const effectiveAfter = after ?? inherited ?? [];
-        const removed = [...effectiveBefore.filter((model) => !effectiveAfter.includes(model)),
-          ...(before ?? []).filter((model) => !(after ?? []).includes(model))];
-        const newlyShadowed = before === undefined && after !== undefined && inherited !== undefined
-          && JSON.stringify(after) !== JSON.stringify(inherited) ? inherited : [];
-        const changedPool = JSON.stringify(effectiveBefore) !== JSON.stringify(effectiveAfter) ? [...effectiveBefore, ...effectiveAfter] : [];
-        const affected = [...removed, ...newlyShadowed, ...changedPool];
-        return affected.every((model) =>
-          inventory.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
-      });
+    const actionHasCompleteAffectedInventory = (candidate: typeof keepPlan, inventory = inventories) =>
+      affectedPoolsHaveCompleteInventories(inventory,
+        Object.fromEntries(candidate.tiers.filter((tier) => tier.before !== undefined).map((tier) => [tier.tier, tier.before!])),
+        Object.fromEntries(candidate.tiers.filter((tier) => tier.after !== undefined).map((tier) => [tier.tier, tier.after!])),
+        inheritedTiers, new Map([...inheritedEffective].map(([tier, value]) => [tier, value.pool])));
     const availableActions = (["keep", "merge", "defaults"] as const).filter((action) => {
       const candidate = actionPlans.get(action)!;
       return (

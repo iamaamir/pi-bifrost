@@ -536,7 +536,7 @@ function applyGeneratedTiers(
   }
 }
 
-function affectedPoolsHaveCompleteInventories(
+export function affectedPoolsHaveCompleteInventories(
   inventories: readonly InitMembershipInventory[], before: Record<string, ConfiguredTierPool>, after: Record<string, ConfiguredTierPool>,
   inheritedTiers: ReadonlySet<string>, inheritedPools?: ReadonlyMap<string, readonly string[]>,
 ): boolean {
@@ -545,7 +545,16 @@ function affectedPoolsHaveCompleteInventories(
   for (const tier of new Set([...Object.keys(before), ...Object.keys(after), ...inheritedTiers])) {
     const old = normalizePool(before[tier]) ?? inheritedPools?.get(tier) ?? [];
     const next = normalizePool(after[tier]) ?? inheritedPools?.get(tier) ?? [];
-    for (const key of [...old.filter((key) => !next.includes(key)), ...next.filter((key) => !old.includes(key))]) {
+    const localBefore = normalizePool(before[tier]) ?? [];
+    const localAfter = normalizePool(after[tier]) ?? [];
+    const localRemoved = localBefore.filter((key) => !localAfter.includes(key));
+    const removed = old.filter((key) => !next.includes(key));
+    const added = next.filter((key) => !old.includes(key));
+    const retained = old.filter((key) => next.includes(key));
+    const reordered = JSON.stringify(retained) !== JSON.stringify(next.filter((key) => old.includes(key)));
+    const shadowed = before[tier] === undefined && after[tier] !== undefined && inheritedPools?.has(tier)
+      && JSON.stringify(old) !== JSON.stringify(next) ? old : [];
+    for (const key of [...localRemoved, ...removed, ...added, ...shadowed, ...(reordered ? retained : [])]) {
       const provider = key.slice(0, key.indexOf("/"));
       if (!completeProviders.has(provider) || incompleteProviders.has(provider)) return false;
     }
@@ -612,8 +621,10 @@ export function buildInitActionPlan(input: {
   const generatedTiers = Object.entries(generated);
   const probedByTier = collectProbedModels(input.inventories);
   const completeProbed = collectProbedModels(inventories.filter((entry) => entry.status === "complete"));
-  if (!probedByTier || !completeProbed || !generatedModelsAreProbed(generatedTiers, input.action === "keep" ? probedByTier : completeProbed)) return blocked("source_invalid");
-  const uniqueGeneratedTiers = generatedTiers.map(([tier, keys]) => [tier, [...new Set(keys)]] as const);
+  if (!probedByTier || !completeProbed || !generatedModelsAreProbed(generatedTiers, probedByTier)) return blocked("source_invalid");
+  const uniqueGeneratedTiers = generatedTiers.map(([tier, keys]) => [tier, [...new Set(input.action === "merge"
+    ? keys.filter((key) => completeProbed.get(tier)?.has(key)) : keys)]] as const);
+  if (input.action === "defaults" && !generatedModelsAreProbed(generatedTiers, completeProbed)) return blocked("source_invalid");
   let candidate: Record<string, unknown> = original;
   let warnings: readonly ReconciliationWarningCode[] = [];
   const managedTiers = new Set<string>();

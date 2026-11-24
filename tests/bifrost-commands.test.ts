@@ -2432,8 +2432,10 @@ describe("bifrost command ui", () => {
 
       await createCommandRouter(state)("init", ctx);
 
-      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("no model update is safe with the current inventory")), JSON.stringify(calls));
-      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+      assert.ok(calls.some((call) => call.kind === "preview" && call.lines?.some((line) => line.includes("Bifrost defaults unavailable"))), "unsafe Defaults must be unavailable");
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Nothing was saved")), "review cancellation must not save");
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).models, original.models);
+      assert.deepEqual(JSON.parse(readFileSync(join(piDir, "bifrost-reconcile-ownership.json"), "utf8")), buildInitOwnershipReceipt("project", { quick: ["p/old"] }));
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
@@ -2470,8 +2472,10 @@ describe("bifrost command ui", () => {
 
       await createCommandRouter(state)("init", ctx);
 
-      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("no model update is safe with the current inventory")), JSON.stringify(calls));
-      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+      assert.ok(calls.some((call) => call.kind === "preview" && call.lines?.some((line) => line.includes("Bifrost defaults unavailable"))), "unsafe Defaults must be unavailable");
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Nothing was saved")), "review cancellation must not save");
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).models, original.models);
+      assert.deepEqual(JSON.parse(readFileSync(join(piDir, "bifrost-reconcile-ownership.json"), "utf8")), buildInitOwnershipReceipt("project", { quick: ["p/old"] }));
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
@@ -2509,8 +2513,10 @@ describe("bifrost command ui", () => {
 
       await createCommandRouter(state)("init -f", ctx);
 
-      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("no model update is safe with the current inventory")), JSON.stringify(calls));
-      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+      assert.ok(calls.some((call) => call.kind === "preview" && call.lines?.some((line) => line.includes("Bifrost defaults unavailable"))), "unsafe Defaults must be unavailable");
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Nothing was saved")), "review cancellation must not save");
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).models, original.models);
+      assert.deepEqual(JSON.parse(readFileSync(join(piDir, "bifrost-reconcile-ownership.json"), "utf8")), buildInitOwnershipReceipt("project", { quick: ["p/old"] }));
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
@@ -2952,6 +2958,47 @@ describe("bifrost command ui", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  for (const incompleteCandidate of [false, true]) {
+    it(incompleteCandidate
+      ? "merges verified models while skipping an unused incomplete candidate"
+      : "merges verified models while retaining an unavailable handwritten model", async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-merge-unrelated-"));
+      const previousCwd = process.cwd();
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+      process.chdir(tempDir);
+      try {
+        const piDir = join(tempDir, ".pi");
+        mkdirSync(piDir);
+        mkdirSync(process.env.PI_CODING_AGENT_DIR);
+        const configPath = join(piDir, "bifrost.json");
+        writeFileSync(configPath, JSON.stringify({ models: { quick: ["manual/unavailable", "manual/second"] } }));
+        const models = [makeModel("fixture", "chat", 0.2, 0.2)];
+        if (incompleteCandidate) models.push(makeModel("manual", "unavailable", 0.2, 0.2), makeModel("manual", "second", 0.2, 0.2), makeModel("partial", "chat", 0.2, 0.2));
+        writeRecentProbeCache(join(piDir, "bifrost-probe.json"), models.map((model) => ({
+          provider: model.provider, model: model.id, status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10,
+        })));
+        const { ctx, calls } = makeCtx(models, (_title, options) => options.find((option) => option === "Merge new models"));
+        const registry = (ctx as any).modelRegistry;
+        registry.getAll = () => models;
+        registry.getProviderAuthStatus = (provider: string) => ({ configured: incompleteCandidate || provider !== "manual", source: "stored" });
+        registry.refresh = async () => ({ aborted: false, errors: new Map(incompleteCandidate ? [["partial", new Error("partial")]] : []) });
+        registry.streamSimple = () => { throw new Error("cached probe must be reused"); };
+
+        await createCommandRouter(makeState() as never)("init", ctx as never);
+
+        assert.ok(calls.some((call) => call.kind === "select" && call.options?.includes("Merge new models")), "Merge choice must be offered");
+        const saved = JSON.parse(readFileSync(configPath, "utf8"));
+        assert.deepEqual(saved.models.quick, ["manual/unavailable", "manual/second", "fixture/chat"]);
+      } finally {
+        process.chdir(previousCwd);
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("names global scope in the init model-pool picker", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-global-picker-"));

@@ -556,7 +556,7 @@ describe("config reconciliation command router", () => {
     });
   });
 
-  it("does not apply unsafe Keep with --write when managed provider inventory is missing", async () => {
+  it("keeps managed memberships with --write when provider inventory is missing", async () => {
       await withCwd(async (cwd) => {
         const configDir = join(cwd, ".pi");
         fs.mkdirSync(configDir, { recursive: true });
@@ -578,9 +578,9 @@ describe("config reconciliation command router", () => {
 
         const outcome = await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
 
-        assert.ok(outcome.some((line) => line.includes("no model update is safe")), "headless --write must report no safe action");
-        assert.deepEqual(fs.readFileSync(configPath), originalConfig, "no safe action means --write must not apply Keep");
-        assert.deepEqual(fs.readFileSync(ownershipPath), originalOwnership, "ownership receipt must remain unchanged");
+        assert.ok(outcome.length > 0, JSON.stringify(outcome));
+        assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")).models.general, ["missing-provider/retired", "openai/new-model"]);
+        assert.deepEqual(JSON.parse(fs.readFileSync(ownershipPath, "utf8")), buildInitOwnershipReceipt("project", { general: ["missing-provider/retired", "openai/new-model"] }));
       });
     });
 
