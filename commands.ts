@@ -2172,6 +2172,67 @@ function initRefreshRemainsCurrent(
   return refreshRemainsCurrent;
 }
 
+function buildInitConfigProposal(
+  models: Record<string, string[]>, inheritedFields: Set<string>, sourceConfig: Record<string, unknown>,
+  classifierModel: string | undefined, state: BifrostState, sourceClassifier: Record<string, unknown>,
+  publicDefaults: Record<string, unknown>, sourceModels: Record<string, unknown>, inheritedTiers: ReadonlySet<string>,
+) {
+  const proposal = buildInitProposal(
+    models,
+    inheritedFields.has("classifier") || sourceConfig.classifier !== undefined
+      ? undefined
+      : classifierModel,
+    state.extensionDir,
+    sourceClassifier.backend as ClassifierBackend | undefined,
+  ) as Record<string, unknown> & { classifier: Record<string, unknown> };
+  proposal.cache = publicDefaults.cache ?? {
+    enabled: true,
+    maxEntries: DEFAULT_MAX_ENTRIES,
+    threshold: DEFAULT_THRESHOLD,
+  };
+  proposal.classifier = {
+    ...(publicDefaults.classifier as Record<string, unknown> | undefined),
+    ...proposal.classifier,
+  };
+  proposal.reliability = publicDefaults.reliability ?? resolveReliabilityConfig(undefined);
+  proposal.debug = publicDefaults.debug ?? { enabled: false };
+  for (const key of [
+    "schemaVersion",
+    "tierPolicies",
+    "economics",
+    "affinity",
+    "routingScope",
+    "probe",
+  ] as const) {
+    if (sourceConfig[key] !== undefined) proposal[key] = sourceConfig[key];
+    else if (publicDefaults[key] !== undefined) proposal[key] = publicDefaults[key];
+  }
+  proposal.enabled = sourceConfig.enabled ?? publicDefaults.enabled ?? true;
+  proposal.strategy = sourceConfig.strategy ?? publicDefaults.strategy ?? "first";
+  const proposedStrategies = proposal.categoryStrategies as Record<string, RoutingStrategy>;
+  proposal.categoryStrategies = Object.fromEntries(
+    Object.keys(models).map((tier) => [
+      tier,
+      (sourceConfig.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[tier] ??
+        (publicDefaults.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[
+          tier
+        ] ??
+        proposedStrategies[tier] ??
+        "first",
+    ]),
+  );
+  const finalTiers = new Set([
+    ...Object.keys(models),
+    ...Object.keys(sourceModels),
+    ...inheritedTiers,
+  ]);
+  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
+  const defaultTier = sourceConfig.default ?? publicDefaults.default;
+  if (typeof defaultTier === "string" && models[defaultTier]?.length)
+    proposal.default = defaultTier;
+  return proposal;
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -2370,59 +2431,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     state, ctx, initConfig, available, probeLoaded, workingModels,
   );
 
-  const proposal = buildInitProposal(
-    models,
-    inheritedFields.has("classifier") || sourceConfig.classifier !== undefined
-      ? undefined
-      : classifierModel,
-    state.extensionDir,
-    sourceClassifier.backend as ClassifierBackend | undefined,
-  ) as Record<string, unknown> & { classifier: Record<string, unknown> };
-  proposal.cache = publicDefaults.cache ?? {
-    enabled: true,
-    maxEntries: DEFAULT_MAX_ENTRIES,
-    threshold: DEFAULT_THRESHOLD,
-  };
-  proposal.classifier = {
-    ...(publicDefaults.classifier as Record<string, unknown> | undefined),
-    ...proposal.classifier,
-  };
-  proposal.reliability = publicDefaults.reliability ?? resolveReliabilityConfig(undefined);
-  proposal.debug = publicDefaults.debug ?? { enabled: false };
-  for (const key of [
-    "schemaVersion",
-    "tierPolicies",
-    "economics",
-    "affinity",
-    "routingScope",
-    "probe",
-  ] as const) {
-    if (sourceConfig[key] !== undefined) proposal[key] = sourceConfig[key];
-    else if (publicDefaults[key] !== undefined) proposal[key] = publicDefaults[key];
-  }
-  proposal.enabled = sourceConfig.enabled ?? publicDefaults.enabled ?? true;
-  proposal.strategy = sourceConfig.strategy ?? publicDefaults.strategy ?? "first";
-  const proposedStrategies = proposal.categoryStrategies as Record<string, RoutingStrategy>;
-  proposal.categoryStrategies = Object.fromEntries(
-    Object.keys(models).map((tier) => [
-      tier,
-      (sourceConfig.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[tier] ??
-        (publicDefaults.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[
-          tier
-        ] ??
-        proposedStrategies[tier] ??
-        "first",
-    ]),
+  const proposal = buildInitConfigProposal(
+    models, inheritedFields, sourceConfig, classifierModel, state, sourceClassifier,
+    publicDefaults, sourceModels, inheritedTiers,
   );
-  const finalTiers = new Set([
-    ...Object.keys(models),
-    ...Object.keys(sourceModels),
-    ...inheritedTiers,
-  ]);
-  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
-  const defaultTier = sourceConfig.default ?? publicDefaults.default;
-  if (typeof defaultTier === "string" && models[defaultTier]?.length)
-    proposal.default = defaultTier;
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];
   let receiptOnly = false;
   let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
