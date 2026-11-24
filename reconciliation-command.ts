@@ -317,6 +317,49 @@ function modelKeysForProvider(snapshot: ReconciliationRegistrySnapshot, provider
     .map((model) => `${model.provider}/${model.id}`))].sort();
 }
 
+function collectMembershipChanges(
+  inventories: readonly InitMembershipInventory[], allTiers: Set<string>,
+  before: Record<string, ConfiguredTierPool>, ownership: Exclude<ReturnType<typeof ownershipFromBytes>, null>,
+  configDigest: string, ownershipDigest: string | null, changes: ReconciliationChange[],
+  warnings: Set<ReconciliationWarningCode>, managedTiers: Set<string>, result: { advisory: boolean },
+): boolean {
+  for (const inventory of inventories) {
+    if (!validProvider(inventory.provider)) return false;
+    for (const tier of allTiers) {
+      const rawPool = Object.hasOwn(before, tier) ? before[tier] : undefined;
+      const owner = tierOwnership(ownership, tier, rawPool);
+      const pool = normalizePool(rawPool) ?? [];
+      // Routine refresh never changes an entire tier controlled by the user.
+      if (owner === "deleted" || owner === "user") {
+        warnings.add("tier_user_managed");
+        continue;
+      }
+      const sourceId = canonicalSourceId(inventory.provider, tier);
+      const view = owner === "managed"
+        ? providerMembershipView(ownership!, tier, inventory.provider, sourceId)
+        : undefined;
+      if (owner === "managed" && !view) return false;
+      const modelsByTier = Object.hasOwn(inventory.modelsByTier, tier) ? { [tier]: inventory.modelsByTier[tier]! } : {};
+      const revision = sha256(Buffer.from(JSON.stringify([inventory.provider, modelsByTier]), "utf8"));
+      const applied: ReconciliationInput["inventory"]["modelsByTier"] = modelsByTier;
+      const proposal = proposeReconciliation({
+        configDigest,
+        ownershipRevision: ownershipDigest,
+        ...(view ? { ownership: view } : {}),
+        configuredModels: { [tier]: pool },
+        inventory: { sourceId, revision, status: inventory.status, enabled: true, modelsByTier: applied },
+      });
+      if (proposal.status === "invalid") return false;
+      if (proposal.status !== "ready") result.advisory = true;
+      for (const warning of proposal.warnings) warnings.add(warning);
+      const applying = proposal.changes.filter((change) => change.disposition === "apply");
+      if (applying.length > 0) managedTiers.add(tier);
+      changes.push(...applying);
+    }
+  }
+  return true;
+}
+
 /** Builds one ownership-aware membership update for every provider and tier. */
 export function buildInitMembershipPlan(
   source: ReconciliationSourceSnapshot,
@@ -352,40 +395,11 @@ export function buildInitMembershipPlan(
   const allTiers = new Set(Object.keys(models));
   for (const inventory of inventories) for (const tier of Object.keys(inventory.modelsByTier)) allTiers.add(tier);
   if (ownership) for (const tier of Object.keys(ownership.tiers)) allTiers.add(tier);
-  for (const inventory of inventories) {
-    if (!validProvider(inventory.provider)) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
-    for (const tier of allTiers) {
-      const rawPool = Object.hasOwn(before, tier) ? before[tier] : undefined;
-      const owner = tierOwnership(ownership, tier, rawPool);
-      const pool = normalizePool(rawPool) ?? [];
-      // Routine refresh never changes an entire tier controlled by the user.
-      if (owner === "deleted" || owner === "user") {
-        warnings.add("tier_user_managed");
-        continue;
-      }
-      const sourceId = canonicalSourceId(inventory.provider, tier);
-      const view = owner === "managed"
-        ? providerMembershipView(ownership!, tier, inventory.provider, sourceId)
-        : undefined;
-      if (owner === "managed" && !view) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
-      const modelsByTier = Object.hasOwn(inventory.modelsByTier, tier) ? { [tier]: inventory.modelsByTier[tier]! } : {};
-      const revision = sha256(Buffer.from(JSON.stringify([inventory.provider, modelsByTier]), "utf8"));
-      const applied: ReconciliationInput["inventory"]["modelsByTier"] = modelsByTier;
-      const proposal = proposeReconciliation({
-        configDigest,
-        ownershipRevision: ownershipDigest,
-        ...(view ? { ownership: view } : {}),
-        configuredModels: { [tier]: pool },
-        inventory: { sourceId, revision, status: inventory.status, enabled: true, modelsByTier: applied },
-      });
-      if (proposal.status === "invalid") return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
-      advisory ||= proposal.status !== "ready";
-      for (const warning of proposal.warnings) warnings.add(warning);
-      const applying = proposal.changes.filter((change) => change.disposition === "apply");
-      if (applying.length > 0) managedTiers.add(tier);
-      changes.push(...applying);
-    }
+  const result = { advisory };
+  if (!collectMembershipChanges(inventories, allTiers, before, ownership, configDigest, ownershipDigest, changes, warnings, managedTiers, result)) {
+    return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
   }
+  advisory = result.advisory;
   for (const tier of new Set(changes.map((change) => change.tier))) {
     if (!Object.hasOwn(models, tier)) setOwn(models, tier, []);
   }
