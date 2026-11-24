@@ -114,7 +114,7 @@ describe("configure-bifrost skill packaging", () => {
     assert.match(text, /only\s+then repeat check with `"probe":true`/);
     assert.match(text, /one primary probe per model the candidate can select, without session\s+fallback/);
     assert.match(text, /the host may raise or omit the limit/);
-    assert.match(text, /native transport may\s+send additional requests/);
+    assert.match(text, /transport may\s+retry/);
     assert.match(text, /your `"probe":true` is\s+the authorization/);
   });
 
