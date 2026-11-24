@@ -34,7 +34,7 @@ When no saved configuration, route file, runtime routing preference, or explicit
 
 Provisional pools come from the catalog. Background probes send small provider requests and can use credits or reach rate limits. If no model passes, Bifrost leaves configuration unchanged and warns you. The generated configuration includes pools and routing settings; prompt text and credentials stay out. See [Getting started](docs/guide/getting-started.md).
 
-Select `bifrost/auto` in Pi's `/model` picker to let Bifrost choose which model answers each message. The footer shows Auto and the selected model. Use `/bifrost inspect` or `/bifrost debug` to see model lists and status without a classifier call. Pi's model list shows availability; routing outcomes show health.
+Select `bifrost/auto` in Pi's `/model` picker to let Bifrost choose which model answers each message. The footer shows Auto and the selected model. Use `/bifrost inspect` or `/bifrost debug` to see model lists and status without a classifier call. Pi's model list shows availability, not proof that a model is healthy.
 
 ```mermaid
 sequenceDiagram
@@ -90,7 +90,7 @@ Use these commands in Pi:
 
 | Command | Result |
 | --- | --- |
-| `/bifrost preview --offline <prompt>` | Show a route using local cache and rules only. |
+| `/bifrost preview --offline <prompt>` | Show a route using local cache, rules, and the default tier only. |
 | `quick <message>` | Use the `quick` tier once. Bifrost removes its name before sending the prompt. |
 | `/bifrost pin` / `/bifrost unpin` | Hold the current model for this session or resume routing. |
 | `/bifrost off` / `/bifrost on` | Stop or resume routing. |
