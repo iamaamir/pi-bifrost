@@ -5420,7 +5420,7 @@ describe("route dispatch", () => {
   });
 
   it("routes probe", async () => {
-    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }, { provider: "fixture", id: "classifier", type: "classifier" } as never]);
     const state = makeState();
     // runProbe records outcomes on the reliability store; makeStore omits it.
     state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;

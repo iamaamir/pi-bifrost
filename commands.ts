@@ -159,7 +159,7 @@ import {
 } from "./reconciliation-store.ts";
 import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
-import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
+import { isBifrostAuto, isGenerativeModel, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 import { getCostReportData } from "./cost-report.ts";
 import { formatCostText, showCostView } from "./ui/cost-view.ts";
@@ -5473,7 +5473,7 @@ export function createCommandRouter(
 
     // Probe — test every model with a tiny prompt
     exact("probe", async (_, ctx) => {
-      const available = ctx.modelRegistry.getAvailable();
+      const available = ctx.modelRegistry.getAvailable().filter(isGenerativeModel);
       if (available.length === 0) {
         logImportant(ctx, "No models available", "The model registry is empty.", "warning");
         return;
