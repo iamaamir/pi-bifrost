@@ -3051,13 +3051,16 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("skips the save question when refreshed inventory is incomplete", async () => {
+  it("offers safe Keep when refreshed inventory is incomplete", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-incomplete-inventory-"));
     const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
     process.chdir(tempDir);
     try {
       const piDir = join(tempDir, ".pi");
       mkdirSync(piDir);
+      mkdirSync(process.env.PI_CODING_AGENT_DIR);
       writeFileSync(join(piDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
       writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
         buildInitOwnershipReceipt("project", { quick: ["fixture/old"] }),
@@ -3065,7 +3068,11 @@ describe("bifrost command ui", () => {
       writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
         { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
       ]);
-      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const ownershipPath = join(piDir, "bifrost-reconcile-ownership.json");
+      const ownershipBefore = readFileSync(ownershipPath);
+      let offered: string[] = [];
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }],
+        (_title, options) => { offered = [...options]; return options.find((option) => option.startsWith("Keep my models")); });
       const registry = (ctx as any).modelRegistry;
       registry.getAll = () => [makeModel("fixture", "chat", 0.2, 0.2)];
       registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
@@ -3076,10 +3083,14 @@ describe("bifrost command ui", () => {
       await createCommandRouter(makeState() as never)("init", ctx as never);
 
       assert.equal(confirmCalls, 0);
-      assert.equal(readFileSync(join(piDir, "bifrost.json"), "utf8"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
-      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("no model update is safe with the current inventory")), JSON.stringify(calls));
+      assert.deepEqual(JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8")).models, { quick: ["fixture/old"] });
+      assert.deepEqual(readFileSync(ownershipPath), ownershipBefore);
+      assert.ok(calls.some((call) => call.kind === "preview" && call.lines?.some((line: string) => line.includes("Keep my models (default)"))));
+      assert.deepEqual(offered, ["Keep my models (default)"]);
     } finally {
       process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
