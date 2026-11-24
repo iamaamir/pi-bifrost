@@ -1726,6 +1726,27 @@ function initReviewSettingLines(key: string, value: unknown): string[] {
   return [`    ${key}:`, ...serialized.map((line) => `      ${line}`)];
 }
 
+function validateInitSources(selectedSource: ReconciliationConfigSource): void {
+  const preflight = readReconciliationSource(selectedSource);
+  if (preflight.configBytes !== null) {
+    const targetConfig = parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
+    if (targetConfig.models !== undefined) {
+      if (!targetConfig.models || typeof targetConfig.models !== "object" || Array.isArray(targetConfig.models)) {
+        throw new Error("invalid target model pools");
+      }
+      for (const pool of Object.values(targetConfig.models)) {
+        if (typeof pool !== "string" && !(Array.isArray(pool) && pool.every((key) => typeof key === "string"))) {
+          throw new Error("invalid target model pool");
+        }
+      }
+    }
+  }
+  if (preflight.ownershipBytes !== null) {
+    assertOwnershipPayload(preflight.ownershipBytes);
+  }
+  if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -1752,24 +1773,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     return;
   }
   try {
-    const preflight = readReconciliationSource(selectedSource);
-    if (preflight.configBytes !== null) {
-      const targetConfig = parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
-      if (targetConfig.models !== undefined) {
-        if (!targetConfig.models || typeof targetConfig.models !== "object" || Array.isArray(targetConfig.models)) {
-          throw new Error("invalid target model pools");
-        }
-        for (const pool of Object.values(targetConfig.models)) {
-          if (typeof pool !== "string" && !(Array.isArray(pool) && pool.every((key) => typeof key === "string"))) {
-            throw new Error("invalid target model pool");
-          }
-        }
-      }
-    }
-    if (preflight.ownershipBytes !== null) {
-      assertOwnershipPayload(preflight.ownershipBytes);
-    }
-    if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
+    validateInitSources(selectedSource);
   } catch {
     reportInitOutcome(
       ctx,
