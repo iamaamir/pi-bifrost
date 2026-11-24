@@ -608,27 +608,36 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
       });
     }
 
-    it("interactive fresh init reviews and saves a differing inherited pool with fresh authenticated inventory", async () => {
-      requests = [];
-      const env = fixture(port, ["healthy"]);
-      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
-      const globalBytes = Buffer.from('{"models":{"quick":["fake/credits-exhausted"]},"classifier":{"enabled":false}}\n');
-      writeFileSync(globalPath, globalBytes);
-      const projectPath = join(env.work, ".pi", "bifrost.json");
-      const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
-      try {
-        const result = await runInteractiveInit({ ...env, confirm: true });
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.violations, "");
-        assert.match(result.stdout + result.stderr, /quick: project override[\s\S]*Inherited:[\s\S]*1\. fake\/credits-exhausted[\s\S]*Project:[\s\S]*1\. fake\/healthy/u);
-        assert.deepEqual(readFileSync(globalPath), globalBytes);
-        assert.deepEqual(JSON.parse(readFileSync(projectPath, "utf8")).models, { quick: ["fake/healthy"] });
-        assert.deepEqual(JSON.parse(readFileSync(ownershipPath, "utf8")), {
-          version: 2, scope: "project", tiers: { quick: { state: "generated", models: ["fake/healthy"] } },
-        });
-        assert.deepEqual(loadConfigForReload(env.work, ROOT).config.models?.quick, ["fake/healthy"]);
-      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
-    });
+    for (const confirm of [true, false]) {
+      it(`interactive fresh init ${confirm ? "approves" : "declines"} a differing inherited pool with fresh authenticated inventory`, async () => {
+        requests = [];
+        const env = fixture(port, ["healthy"]);
+        const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+        const globalBytes = Buffer.from('{"models":{"quick":["fake/credits-exhausted"]},"classifier":{"enabled":false}}\n');
+        writeFileSync(globalPath, globalBytes);
+        const projectPath = join(env.work, ".pi", "bifrost.json");
+        const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+        try {
+          const result = await runInteractiveInit({ ...env, confirm });
+          assert.equal(result.settled, true, JSON.stringify(result));
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.equal(result.records.filter((record) => record.type === "extension_ui_request" && record.method === "confirm").length, 1);
+          assert.match(result.stdout + result.stderr, /quick: project override[\s\S]*Inherited:[\s\S]*1\. fake\/credits-exhausted[\s\S]*Project:[\s\S]*1\. fake\/healthy/u);
+          assert.deepEqual(readFileSync(globalPath), globalBytes);
+          if (!confirm) {
+            assert.equal(existsSync(projectPath), false);
+            assert.equal(existsSync(ownershipPath), false);
+            return;
+          }
+          assert.deepEqual(JSON.parse(readFileSync(projectPath, "utf8")).models, { quick: ["fake/healthy"] });
+          assert.deepEqual(JSON.parse(readFileSync(ownershipPath, "utf8")), {
+            version: 2, scope: "project", tiers: { quick: { state: "generated", models: ["fake/healthy"] } },
+          });
+          assert.deepEqual(loadConfigForReload(env.work, ROOT).config.models?.quick, ["fake/healthy"]);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
 
   }
   registerInteractiveConfirmationTests();
