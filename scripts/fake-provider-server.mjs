@@ -121,7 +121,7 @@ function simpleFixture(response, model) {
     return true;
   }
   // Drives the real bifrost_config tool so the TUI renders its probe consent
-  // dialog; later turns answer normally so the captured frame settles.
+  // dialog. Every generation turn for this model returns the call again.
   if (model === "config-consent") {
     bifrostConfigCheckSse(response);
     return true;
