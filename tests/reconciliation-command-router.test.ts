@@ -161,6 +161,126 @@ async function loadCommandRouterCopy(target: string, label: string): Promise<typ
   return loaded.createCommandRouter;
 }
 
+function registerInitialConfigCases1() {
+  for (const initialConfig of [{}, { classifier: { enabled: false } }]) {
+    it(`uses fresh-init confirmation for ${Object.keys(initialConfig).length ? "settings-only" : "empty"} project config with inherited tiers`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          classifier: { enabled: false },
+          default: "general",
+          models: { general: ["openai/cached-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+        let confirmations = 0;
+        let selections = 0;
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+        };
+        ctx.hasUI = true;
+        ctx.ui = {
+          confirm: async () => { confirmations++; return true; },
+          notify: () => {},
+          select: async (_title, choices) => { selections++; return choices[0]!; },
+        };
+
+        const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+        assert.equal(selections, 0, "fresh setup must not ask existing-model action choices");
+        assert.equal(confirmations, 1, "fresh setup asks one Yes/No confirmation");
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { classifier?: { enabled?: boolean }; models?: Record<string, string[]> };
+        assert.equal(saved.models?.general, undefined, "identical inherited pool must not be copied into project config");
+        assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
+        const effective = loadConfigForReload(cwd, h.state.extensionDir).config;
+        assert.deepEqual(effective.models?.general, ["openai/cached-model"], "effective inherited pool remains unchanged");
+        assert.match(preview.join("\n"), /general: inherited pool remains effective[\s\S]*Inherited:[\s\S]*1\. openai\/cached-model/);
+      });
+    });
+  }
+
+}
+
+function registerInitialConfigCases2() {
+  for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
+    it(`does not save a fresh inherited override after failed forced refresh (${initialConfig ? "settings-only" : "absent"} project config)`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          default: "general",
+          models: { general: ["openai/old-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        if (initialConfig) fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({
+          models: [makeModel("openai", "new-model", 1, 1)],
+          evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
+          refresh: async () => { throw new Error("forced refresh failed"); },
+        });
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void };
+        };
+        ctx.hasUI = true;
+        ctx.ui = { confirm: async () => true, notify: () => {} };
+
+        const before = initialConfig === undefined ? undefined : fs.readFileSync(configPath);
+        const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+        assert.ok(output.length > 0, "init reports refresh state");
+        if (initialConfig === undefined) assert.equal(fs.existsSync(configPath), false);
+        else assert.deepEqual(fs.readFileSync(configPath), before, "blocked replacement must not save other settings");
+        assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
+        assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
+      });
+    });
+  }
+
+}
+
+function registerInitialConfigCases3() {
+  for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
+    it(`keeps differing inherited pool unchanged for --write (${initialConfig ? "existing" : "absent"} project config)`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          default: "general", models: { general: ["openai/old-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        if (initialConfig) fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+
+        await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+        assert.equal(saved.models?.general, undefined, "--write must not create local tier over inherited pool");
+        assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
+      });
+    });
+  }
+
+}
+
 describe("config reconciliation command router", () => {
   it("is listed in command options and previews offline, then applies only the exact reviewed source proposal", async () => {
     assert.ok(BIFROST_COMMAND_OPTIONS.some((item) => item.value === "config reconcile"));
@@ -509,51 +629,7 @@ describe("config reconciliation command router", () => {
     });
   });
 
-  for (const initialConfig of [{}, { classifier: { enabled: false } }]) {
-    it(`uses fresh-init confirmation for ${Object.keys(initialConfig).length ? "settings-only" : "empty"} project config with inherited tiers`, async () => {
-      await withCwd(async (cwd) => {
-        const agentDir = process.env.PI_CODING_AGENT_DIR!;
-        fs.mkdirSync(agentDir, { recursive: true });
-        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
-          classifier: { enabled: false },
-          default: "general",
-          models: { general: ["openai/cached-model"] },
-        }));
-        const configDir = join(cwd, ".pi");
-        fs.mkdirSync(configDir, { recursive: true });
-        const configPath = join(configDir, "bifrost.json");
-        fs.writeFileSync(configPath, JSON.stringify(initialConfig));
-        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
-          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
-        ]);
-        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
-        let confirmations = 0;
-        let selections = 0;
-        const ctx = h.ctx as unknown as {
-          hasUI: boolean;
-          ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
-        };
-        ctx.hasUI = true;
-        ctx.ui = {
-          confirm: async () => { confirmations++; return true; },
-          notify: () => {},
-          select: async (_title, choices) => { selections++; return choices[0]!; },
-        };
-
-        const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
-
-        assert.equal(selections, 0, "fresh setup must not ask existing-model action choices");
-        assert.equal(confirmations, 1, "fresh setup asks one Yes/No confirmation");
-        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { classifier?: { enabled?: boolean }; models?: Record<string, string[]> };
-        assert.equal(saved.models?.general, undefined, "identical inherited pool must not be copied into project config");
-        assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
-        const effective = loadConfigForReload(cwd, h.state.extensionDir).config;
-        assert.deepEqual(effective.models?.general, ["openai/cached-model"], "effective inherited pool remains unchanged");
-        assert.match(preview.join("\n"), /general: inherited pool remains effective[\s\S]*Inherited:[\s\S]*1\. openai\/cached-model/);
-      });
-    });
-  }
-
+  registerInitialConfigCases1();
   it("renders actual Keep comparison row and reports preserved custom/deleted tiers", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
@@ -600,46 +676,7 @@ describe("config reconciliation command router", () => {
     });
   });
 
-  for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
-    it(`does not save a fresh inherited override after failed forced refresh (${initialConfig ? "settings-only" : "absent"} project config)`, async () => {
-      await withCwd(async (cwd) => {
-        const agentDir = process.env.PI_CODING_AGENT_DIR!;
-        fs.mkdirSync(agentDir, { recursive: true });
-        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
-          default: "general",
-          models: { general: ["openai/old-model"] },
-        }));
-        const configDir = join(cwd, ".pi");
-        fs.mkdirSync(configDir, { recursive: true });
-        const configPath = join(configDir, "bifrost.json");
-        if (initialConfig) fs.writeFileSync(configPath, JSON.stringify(initialConfig));
-        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
-          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
-        ]);
-        const h = makeHarness({
-          models: [makeModel("openai", "new-model", 1, 1)],
-          evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
-          refresh: async () => { throw new Error("forced refresh failed"); },
-        });
-        const ctx = h.ctx as unknown as {
-          hasUI: boolean;
-          ui: { confirm: () => Promise<boolean>; notify: () => void };
-        };
-        ctx.hasUI = true;
-        ctx.ui = { confirm: async () => true, notify: () => {} };
-
-        const before = initialConfig === undefined ? undefined : fs.readFileSync(configPath);
-        const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
-
-        assert.ok(output.length > 0, "init reports refresh state");
-        if (initialConfig === undefined) assert.equal(fs.existsSync(configPath), false);
-        else assert.deepEqual(fs.readFileSync(configPath), before, "blocked replacement must not save other settings");
-        assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
-        assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
-      });
-    });
-  }
-
+  registerInitialConfigCases2();
   it("does not save fresh override for inherited provider absent from refreshed catalog", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
@@ -706,32 +743,7 @@ describe("config reconciliation command router", () => {
     });
   });
 
-  for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
-    it(`keeps differing inherited pool unchanged for --write (${initialConfig ? "existing" : "absent"} project config)`, async () => {
-      await withCwd(async (cwd) => {
-        const agentDir = process.env.PI_CODING_AGENT_DIR!;
-        fs.mkdirSync(agentDir, { recursive: true });
-        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
-          default: "general", models: { general: ["openai/old-model"] },
-        }));
-        const configDir = join(cwd, ".pi");
-        fs.mkdirSync(configDir, { recursive: true });
-        const configPath = join(configDir, "bifrost.json");
-        if (initialConfig) fs.writeFileSync(configPath, JSON.stringify(initialConfig));
-        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
-          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
-        ]);
-        const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
-
-        await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
-
-        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
-        assert.equal(saved.models?.general, undefined, "--write must not create local tier over inherited pool");
-        assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
-      });
-    });
-  }
-
+  registerInitialConfigCases3();
   it("Defaults keeps identical inherited tier inherited alongside local and deleted tiers", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
