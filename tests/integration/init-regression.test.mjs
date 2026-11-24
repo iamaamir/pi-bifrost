@@ -138,6 +138,8 @@ function runInteractiveInit({ home, work, extensionPath = EXTENSION, confirm, se
     let stdout = "";
     let stderr = "";
     let incompleteLine = "";
+    let pipeError;
+    child.stdin.on("error", (error) => { pipeError = error; });
     let records = [];
     let settled = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
@@ -171,6 +173,7 @@ function runInteractiveInit({ home, work, extensionPath = EXTENSION, confirm, se
       let violations = "";
       try { violations = readFileSync(join(home, "network-violations.log"), "utf8"); }
       catch (error) { if (error.code !== "ENOENT") { reject(error); return; } }
+      if (pipeError) { reject(new Error(`RPC stdin: ${pipeError.message}\nstdout: ${stdout}\nstderr: ${stderr}`)); return; }
       resolve({ code, stdout, stderr, violations, settled, records });
     });
     child.stdin.write(`${JSON.stringify({ id: "init-command", type: "prompt", message: "/bifrost init" })}\n`);

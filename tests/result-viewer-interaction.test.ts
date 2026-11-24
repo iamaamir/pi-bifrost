@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { InitReview, ResultViewer, wrapResultLines } from "../result-viewer.ts";
+import { InitReview, ResultViewer } from "../result-viewer.ts";
 
 describe("result viewer interaction", () => {
   it("keeps every preview line reachable in scrollable viewer, including long previews", () => {
@@ -43,24 +43,39 @@ describe("result viewer interaction", () => {
   });
 
   function assertWrappedRowsReachable(width: number) {
-      const detail = `detail-${"abcdefghij".repeat(24)}-tail`;
-      const review = new InitReview([], [detail], ["Keep", "Merge", "Defaults"], { fg: (_color, text) => text }, () => {}, () => {});
-      const seen = new Set<string>();
+      const details = ["abcdefghijklmnopQRST", "row-two", "row-three", "row-four", "row-five", "row-six"];
+      const expected = width === 18
+        ? ["abcdefghijklmnop", "QRST", ...details.slice(1)] : details;
+      const review = new InitReview([], details, ["Keep", "Merge", "Defaults"], { fg: (_color, text) => text }, () => {}, () => {});
       review.handleInput("\x0f");
-      let rendered = review.render(width);
-      const collect = () => {
-        for (const line of rendered.slice(2, 6)) if (line.trim()) seen.add(line.trim());
-      };
-      collect();
-      for (let offset = 0; offset < wrapResultLines([detail], width - 2).length; offset++) {
+      const observed: string[] = [];
+      for (let i = 0; i < expected.length; i++) {
+        const line = review.render(width)[2];
+        if (observed.at(-1) !== line) observed.push(line);
         review.handleInput("j");
-        rendered = review.render(width);
-        collect();
       }
-      const expectedRows = wrapResultLines([detail], width - 2);
-      assert.ok([...seen].some((line) => line.includes("-tail")), `tail reachable at width ${width}`);
-      for (const expected of expectedRows) assert.ok(seen.has(expected), `wrapped row reachable at width ${width}: ${expected}`);
+      observed.push(...review.render(width).slice(3, 6));
+      assert.deepEqual(observed, expected);
+
   }
+
+  it("pages by four rows and clamps at both boundaries", () => {
+    const review = new InitReview(Array.from({ length: 10 }, (_, i) => `row-${i}`), [], ["OK"], { fg: (_color, text) => text }, () => {}, () => {});
+    const first = () => review.render(80)[2];
+    assert.equal(first(), "row-0");
+    review.handleInput("\x1b[6~");
+    assert.equal(first(), "row-4");
+    review.handleInput("\x1b[6~");
+    assert.equal(first(), "row-6");
+    review.handleInput("k");
+    assert.equal(first(), "row-5");
+    review.handleInput("\x1b[5~");
+    assert.equal(first(), "row-1");
+    review.handleInput("\x1b[5~");
+    assert.equal(first(), "row-0");
+    review.handleInput("j");
+    assert.equal(first(), "row-1");
+  });
 
   it("shows and confirms every selected action at normal and narrow widths", () => {
     const actions = ["Keep my models", "Merge new models", "Bifrost defaults"];
@@ -75,7 +90,10 @@ describe("result viewer interaction", () => {
       const review = new InitReview([], [], actions, { fg: (_color, text) => text }, (value) => { result = value; }, () => {});
       for (let i = 0; i < selected; i++) review.handleInput("\x1b[B");
       const rows = review.render(width);
-      assert.ok(rows.some((line) => line.startsWith("❯ ")), `selection marker visible at width ${width}`);
+      const markers = rows.flatMap((line, index) => line.startsWith("❯ ") ? [index] : []);
+      assert.equal(markers.length, 1);
+      const selectedLabel = rows.slice(markers[0], markers[0] + 2).map((line) => line.replace(/^❯?\s*/, "")).join("").replace(/\s/g, "");
+      assert.ok(selectedLabel.startsWith(actions[selected].replace(/\s/g, "")));
       const actionStart = rows.indexOf("") + 1;
       const visibleActions = rows.slice(actionStart, -1).map((line) => line.replace(/^❯?\s*/, "")).join("").replace(/\s/g, "");
       for (const action of actions) assert.ok(visibleActions.includes(action.replace(/\s/g, "")), `${action} visible at width ${width}`);

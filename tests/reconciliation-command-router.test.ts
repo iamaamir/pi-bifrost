@@ -754,14 +754,14 @@ describe("config reconciliation command router", () => {
       ctx.ui = { confirm: async () => { confirmations++; now += REGISTRY_REFRESH_TTL_MS; return true; }, notify: () => {} };
       await captureStderr(() => router(h.state)("init", h.ctx));
       assert.equal(confirmations, 1);
-      return fs.readFileSync(configPath).equals(before);
+      return { unchanged: fs.readFileSync(configPath).equals(before), receipt: fs.existsSync(join(dir, "bifrost-reconcile-ownership.json")) };
     });
     try {
       fs.writeFileSync(scratch.target, source.replace(guard, ""));
       const mutant = await loadCommandRouterCopy(scratch.target, "ttl-mutant");
-      assert.equal(await run(mutant), false, "fault must allow expired inventory to save");
+      assert.equal((await run(mutant)).unchanged, false, "fault must allow expired inventory to save");
       Date.now = originalNow;
-      assert.equal(await run(createCommandRouter), true, "expired inventory must not save");
+      assert.deepEqual(await run(createCommandRouter), { unchanged: true, receipt: false }, "expired inventory must not save");
     } finally {
       Date.now = originalNow;
       fs.rmSync(scratch.directory, { recursive: true, force: true });

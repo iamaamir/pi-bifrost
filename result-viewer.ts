@@ -95,6 +95,10 @@ export class ResultViewer {
   invalidate(): void {}
 }
 
+function scrollStep(data: string): number {
+  return data === "j" || data === "k" ? 1 : 4;
+}
+
 export class InitReview {
   private selected = 0;
   private scrollOffset = 0;
@@ -144,8 +148,8 @@ export class InitReview {
   private selectOrScroll(data: string): boolean {
     if (data === "\x1b[A") this.selected = (this.selected + this.actions.length - 1) % this.actions.length;
     else if (data === "\x1b[B") this.selected = (this.selected + 1) % this.actions.length;
-    else if (data === "k" || data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - 1);
-    else if (data === "j" || data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + 1);
+    else if (data === "k" || data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - scrollStep(data));
+    else if (data === "j" || data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + scrollStep(data));
     else return false;
     return true;
   }
