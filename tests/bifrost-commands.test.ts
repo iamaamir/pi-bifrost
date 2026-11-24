@@ -1404,11 +1404,10 @@ describe("bifrost command ui", () => {
       const preview = calls.filter((call) => call.kind === "preview").at(-1);
       const visible = preview?.lines?.join("\n") ?? "";
       assert.ok(visible.length > 3_000, `scrollable preview contained only ${visible.length} chars: ${JSON.stringify(calls)}`);
-      assert.match(visible, /fixture\/model-000/);
-      assert.match(visible, /fixture\/model-219/);
+      assert.deepEqual([...new Set(visible.match(/fixture\/model-\d{3}/g))], models.map((model) => `fixture/${model.id}`));
       assert.deepEqual(stderr, []);
       assert.equal(calls.some((call) => call.kind === "custom"), true);
-      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
+      assert.deepEqual(JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8")).models.quick, models.map((model) => `fixture/${model.id}`));
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });

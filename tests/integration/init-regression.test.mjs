@@ -307,7 +307,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
         const original = Buffer.from(JSON.stringify({ models: { quick: ["manual/keep"] }, classifier: { enabled: false } }) + "\n");
         writeFileSync(lowerPath, original);
         try {
+          requests = [];
           const result = await runInit({ ...env, args: "--write" });
+          assert.deepEqual([...requests].sort(), run === 0 ? ["credits-exhausted", "healthy"] : []);
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
           assert.deepEqual(readFileSync(lowerPath), original);
@@ -915,7 +917,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
     writeFileSync(receiptPath, ownership(["fake/healthy"]));
     try {
       for (let run = 0; run < 2; run++) {
+        requests = [];
         const result = await runInit({ ...env, args: "--write" });
+        assert.deepEqual(requests, run === 0 ? ["healthy"] : []);
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
         assert.deepEqual(readFileSync(configPath), original);
