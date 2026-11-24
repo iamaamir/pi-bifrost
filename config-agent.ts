@@ -2354,9 +2354,9 @@ export interface ConfigAgentToolDeps {
   /** Resolve the currently effective session/config classifier state without network access. */
   readonly classifierRuntime?: (config: BifrostConfig, ctx: ExtensionToolContext) => ConfigAgentClassifierRuntime;
   /**
-   * Send one tiny request to each named model and report what came back.
-   * Injected by the host so core policy never owns provider transport, and
-   * only called when the caller opts in with `probe: true`.
+   * Run one primary probe per named model, with no session fallback, and report
+   * what came back. Injected by the host so core policy never owns provider
+   * transport, and only called when the caller opts in with `probe: true`.
    */
   readonly probeModels?: (
     models: readonly string[],
@@ -2639,7 +2639,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
               ...(plan.skipped.length > 0 ? { probeSkipped: plan.skipped } : {}),
               notes: [...result.notes,
                 ...(plan.models.length > 0
-                  ? [`Live probe would target ${plan.models.length} model(s), one primary probe each, no session fallback. ${PROBE_RESOURCE_DISCLOSURE} It does not run unless the caller opts in with probe: true.`]
+                  ? [`Live probe would target ${plan.models.length} model(s), one primary probe each, no session fallback. It does not run unless the caller opts in with probe: true.`]
                   : []),
                 ...(plan.skipped.length > 0
                   ? [`${plan.skipped.length} model(s) are not probed because their provider's sign-in does not resolve for this session; they are skipped, not failures.`]

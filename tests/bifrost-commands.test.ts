@@ -4746,3 +4746,36 @@ describe("preview parity with Auto sign-in exclusions", () => {
     assert(renderPreviewReport(report).some((line) => line.startsWith("sign-in:")));
   });
 });
+
+describe("bifrost init probe ordering", () => {
+  it("orders generated pools and the auto classifier by measured probe time", async () => {
+    // The CHANGELOG says elapsed probe time now reorders init's generated pools
+    // and its automatic classifier model. The registry order here is slow-first
+    // on purpose, so only the probe-time sort can produce the fast-first result.
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-probe-order-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "slow", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 90 },
+        { provider: "fixture", model: "fast", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx } = makeCtx([{ provider: "fixture", id: "slow" }, { provider: "fixture", id: "fast" }]);
+      const state = makeState();
+      await createCommandRouter(state as never)("init --write", ctx as never);
+
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.deepEqual(saved.models.quick, ["fixture/fast", "fixture/slow"], "the fastest probed model leads its tier");
+      assert.equal(saved.classifier.model, "fixture/fast", "the automatic classifier model is the fastest eligible probe");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
