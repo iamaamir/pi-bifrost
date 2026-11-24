@@ -4548,6 +4548,58 @@ describe("command aliases", () => {
     }
   });
 
+  function assertBlockedReceipt(calls: ReturnType<typeof makeCtx>["calls"], config: string, receipt: string, configBytes: Buffer, bytes: Buffer, probes: number) {
+    assert.equal(probes, 0);
+    assert.ok(calls.some((call) => String(call.value).includes("init: blocked")));
+    assert.deepEqual(readFileSync(config), configBytes);
+    assert.deepEqual(readFileSync(receipt), bytes);
+  }
+
+  async function checkReceiptScope(tempDir: string, args: string, dir: string, scope: "project" | "user") {
+    const config = join(tempDir, dir, "bifrost.json");
+    const receipt = join(tempDir, dir, "bifrost-reconcile-ownership.json");
+    const configBytes = Buffer.from('{"models":{}}\n');
+    writeFileSync(config, configBytes);
+    for (const [payload, blocked] of [
+      [{ version: 2, scope: scope === "project" ? "user" : "project", tiers: {} }, true],
+      [{ version: 2, scope, tiers: {} }, false],
+      [{ version: 1, sources: {} }, false],
+    ] as const) {
+      const bytes = Buffer.from(JSON.stringify(payload));
+      writeFileSync(receipt, bytes);
+      const { ctx, calls } = makeCtx([]);
+      let refreshes = 0;
+      let probes = 0;
+      (ctx as any).modelRegistry.refresh = async () => { refreshes++; };
+      (ctx as any).modelRegistry.streamSimple = () => { probes++; throw new Error("unexpected probe"); };
+      await createCommandRouter(makeState() as never)(args, ctx as never);
+      if (blocked) {
+        assert.equal(refreshes, 0, "wrong-scope receipt must block before refresh");
+        assertBlockedReceipt(calls, config, receipt, configBytes, bytes, probes);
+      } else assert.equal(refreshes, 1, "valid receipt must allow discovery");
+    }
+    rmSync(config); rmSync(receipt);
+  }
+
+  it("preflights selected receipt scope before discovery", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-scope-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(join(tempDir, "agent"));
+      await checkReceiptScope(tempDir, "init --write", ".pi", "project");
+      await checkReceiptScope(tempDir, "init -g --write", "agent", "user");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid selected and inherited sources before discovery", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-preflight-"));
     const previousCwd = process.cwd();

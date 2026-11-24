@@ -1746,6 +1746,8 @@ function validateInitSources(selectedSource: ReconciliationConfigSource): void {
   }
   if (preflight.ownershipBytes !== null) {
     assertOwnershipPayload(preflight.ownershipBytes);
+    const receipt = parseOwnershipSnapshot(JSON.parse(Buffer.from(preflight.ownershipBytes).toString("utf8")));
+    if (receipt && receipt.scope !== selectedSource) throw new Error("invalid target ownership scope");
   }
   if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
 }
