@@ -72,7 +72,8 @@ import {
   runProbe,
   probeOptionsFromConfig,
   PROBE_PROMPT_TEXT,
-  readRecentCompleteProbeReport,
+  readRecentCompleteProbeReportCacheHit,
+  PROBE_CACHE_TTL_MS,
   failureDetails,
 } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
@@ -1977,11 +1978,14 @@ async function probeInitModels(
   let probeLoaded = false;
   let ranProbe: number | undefined;
   let probeAge = "";
+  let cachedProbeMtime: number | undefined;
   const authFailedProbeProviders = new Set<string>();
 
   if (!isForced(args)) {
-    const cachedResults = readRecentCompleteProbeReport(probePath, available);
-    if (cachedResults) {
+    const cacheHit = readRecentCompleteProbeReportCacheHit(probePath, available);
+    if (cacheHit) {
+      const cachedResults = cacheHit.results;
+      cachedProbeMtime = cacheHit.mtimeMs;
       for (const result of cachedResults) {
         if (["authentication_or_access", "provider_error", "http_error"].includes(failureDetails(result)?.reason ?? "")) authFailedProbeProviders.add(result.provider);
       }
@@ -2077,7 +2081,7 @@ async function probeInitModels(
     const skipped = results.filter((r) => r.status === "skipped").length;
     log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   }
-  return { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders };
+  return { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders, cachedProbeMtime };
 }
 
 function buildInitInventories(
@@ -2334,7 +2338,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   const { initRefreshReceipt } = refresh;
   const probe = await probeInitModels(args, ctx, state, selectedSource, initConfig);
   if (!probe) return;
-  const { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders } = probe;
+  const { available, workingModels, probeLoaded, ranProbe, probeAge, authFailedProbeProviders, cachedProbeMtime } = probe;
   if (probeLoaded && workingModels.length === 0) {
     reportInitOutcome(
       ctx,
@@ -3095,6 +3099,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   if (
     refreshReceiptChanged ||
+    (removed.length > 0 && cachedProbeMtime !== undefined &&
+      (Date.now() - cachedProbeMtime >= PROBE_CACHE_TTL_MS || Date.now() - cachedProbeMtime <= -1)) ||
     !inventoryStillSafe() ||
     currentKeys.length !== plannedKeys.length ||
     currentKeys.some((key, index) => key !== plannedKeys[index])
