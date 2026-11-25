@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, normalize } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { after, before, describe, it, test } from "node:test";
 import ts from "typescript";
 import { acquirePackLock } from "./fixtures/pack-lock.mjs";
@@ -84,25 +84,23 @@ function installedRouterFiles(consumer) {
 }
 
 /**
- * Compiled JS and declaration inventory derived from the entry's source import
- * closure, not from the emitted directory. An output the build failed to write
- * therefore shows up as a gap instead of silently shrinking the expectation.
+ * Compiled JS and declaration inventory derived from the router build project's
+ * own module resolution, not from the emitted directory. TypeScript resolves
+ * every import form the build supports (`./`, `../`, path mappings), so a file
+ * the build emits cannot drop out of the expectation. An output the build
+ * failed to write still shows up as a gap instead of shrinking the expectation.
  */
 function expectedRouterInventory(entry, root) {
-  const sources = new Set();
-  const queue = [entry];
-  while (queue.length > 0) {
-    const file = queue.shift();
-    if (sources.has(file)) continue;
-    sources.add(file);
-    for (const imported of ts.preProcessFile(readFileSync(join(root, file), "utf8"), true, true).importedFiles) {
-      if (!imported.fileName.startsWith("./")) continue;
-      const resolved = normalize(join(dirname(file), imported.fileName)).split("\\").join("/");
-      if (resolved.endsWith(".ts")) queue.push(resolved);
-    }
-  }
-  return [...sources]
-    .flatMap((file) => [`dist/router/${file.slice(0, -3)}.js`, `dist/router/${file.slice(0, -3)}.d.ts`])
+  const { compilerOptions } = JSON.parse(readFileSync(join(root, "tsconfig.router-build.json"), "utf8"));
+  const { options, errors } = ts.convertCompilerOptionsFromJson(compilerOptions, root);
+  assert.deepEqual(errors, [], "the router build config must convert without option errors");
+  const program = ts.createProgram({ rootNames: [join(root, entry)], options: { ...options, noEmit: true } });
+  const rootDir = options.rootDir ?? root;
+  const outDir = relative(root, options.outDir ?? join(root, "dist", "router")).split(sep).join("/");
+  return program.getSourceFiles()
+    .filter((file) => !file.isDeclarationFile && !file.fileName.split(sep).includes("node_modules"))
+    .map((file) => relative(rootDir, file.fileName).split(sep).join("/"))
+    .flatMap((file) => [`${outDir}/${file.slice(0, -3)}.js`, `${outDir}/${file.slice(0, -3)}.d.ts`])
     .sort();
 }
 
@@ -464,43 +462,74 @@ test("installed router inspection is recursive and rejects a nested host referen
   }
 });
 
-test("nested router sources compile to an independent JS and declaration inventory", () => {
-  const directory = mkdtempSync(join(tmpdir(), "pi-bifrost-router-nested-build-"));
+// A nested capability whose entry reaches a sibling and a package-level parent
+// by `./` and `../`. A resolver that only understands `./` silently drops the
+// parent files from the expectation, so their omission could never be caught.
+test("nested capability compilation, packing and installation match the parent-relative inventory", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-bifrost-router-nested-build-"));
+  const cache = join(root, "npm-cache");
+  const consumer = join(root, "consumer");
+  const app = join(root, "app");
   const { compilerOptions } = JSON.parse(readFileSync(join(process.cwd(), "tsconfig.router-build.json"), "utf8"));
   for (const [name, body] of Object.entries({
-    "router.ts": 'import { inner } from "./nested/inner.ts";\nexport const router = inner;\n',
-    "nested/inner.ts": 'import { leaf } from "./deeper/leaf.ts";\nexport const inner: number = leaf;\n',
-    "nested/deeper/leaf.ts": "export const leaf = 1;\n",
+    "types.ts": "export type Shared = { id: string };\n",
+    "capability/router.ts": 'import type { Shared } from "../types.ts";\nimport { inner } from "./nested/inner.ts";\nexport const router: Shared = { id: inner.id };\n',
+    "capability/nested/inner.ts": 'import type { Shared } from "../../types.ts";\nexport const inner: Shared = { id: "inner" };\n',
   })) {
-    const file = join(directory, name);
+    const file = join(app, name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, body);
   }
   // The real build settings name the `node` type library, which resolves from
-  // this checkout's install; the nested sources use no host APIs.
-  symlinkSync(join(process.cwd(), "node_modules"), join(directory, "node_modules"), "dir");
+  // this checkout's install; the capability sources use no host APIs.
+  symlinkSync(join(process.cwd(), "node_modules"), join(app, "node_modules"), "dir");
   // The real package is an ES module, which `verbatimModuleSyntax` requires.
-  writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "router-nested-build", version: "1.0.0", type: "module", private: true }));
-  writeFileSync(join(directory, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { ...compilerOptions, outDir: "out" },
-    include: ["router.ts"],
+  writeFileSync(join(app, "package.json"), JSON.stringify({
+    name: "router-nested-capability", version: "1.0.0", type: "module", private: true,
+    files: ["dist/router/", "capability/**/*.ts"],
   }));
+  writeFileSync(join(app, "tsconfig.router-build.json"), JSON.stringify({
+    compilerOptions: { ...compilerOptions, rootDir: ".", outDir: "dist/router" },
+    include: ["capability/router.ts"],
+  }));
+  writeFileSync(join(app, "tsconfig.json"), readFileSync(join(app, "tsconfig.router-build.json")));
+  // Written by hand: neither the build output nor the packlist may define it.
   const expected = [
-    "nested/deeper/leaf.d.ts", "nested/deeper/leaf.js",
-    "nested/inner.d.ts", "nested/inner.js",
-    "router.d.ts", "router.js",
+    "dist/router/capability/nested/inner.d.ts", "dist/router/capability/nested/inner.js",
+    "dist/router/capability/router.d.ts", "dist/router/capability/router.js",
+    "dist/router/types.d.ts", "dist/router/types.js",
   ];
   try {
-    const build = spawnSync(process.execPath, [typescriptCompiler, "-p", directory], { encoding: "utf8" });
+    mkdirSync(cache);
+    mkdirSync(consumer);
+    assert.deepEqual(expectedRouterInventory("capability/router.ts", app), expected,
+      "TypeScript resolution must follow `../` imports into the expected inventory");
+
+    const build = spawnSync(process.execPath, [typescriptCompiler, "-p", app], { encoding: "utf8" });
     assert.equal(build.status, 0, build.stdout + build.stderr);
-    const compiled = listFiles(join(directory, "out"));
-    assert.deepEqual(compiled, expected, "nested sources must emit JS and declarations in the mirrored tree");
-    // Omission control: the same inventory comparison used for the packed
-    // archive must name a compiled file the build did not produce.
-    rmSync(join(directory, "out", "nested", "inner.js"));
-    assert.deepEqual(inventoryGaps(expected, listFiles(join(directory, "out"))), ["nested/inner.js"]);
+    assert.deepEqual(listFiles(join(app, "dist", "router"), "dist/router"), expected,
+      "the build must emit JS and declarations for every resolved source");
+
+    const packed = JSON.parse(execFileSync("npm", [
+      "pack", "--json", "--cache", cache, "--pack-destination", cache,
+    ], { cwd: app, encoding: "utf8", timeout: 60_000 }))[0];
+    const archivePaths = packed.files.map((file) => file.path);
+    assert.deepEqual(inventoryGaps(expected, archivePaths), [], "the archive must carry the compiled inventory");
+
+    execFileSync("npm", [
+      "install", "--prefix", consumer, "--cache", cache, "--offline", "--ignore-scripts",
+      "--no-audit", "--no-fund", join(cache, packed.filename),
+    ], { cwd: consumer, encoding: "utf8", stdio: "pipe", timeout: 60_000 });
+    const installed = join(consumer, "node_modules", "router-nested-capability", "dist", "router");
+    assert.deepEqual(listFiles(installed, "dist/router"), expected, "the installed package must carry the compiled inventory");
+
+    // Omission control on real installed output: the same comparison must name
+    // the parent-relative file instead of absorbing its disappearance.
+    rmSync(join(installed, "types.js"));
+    assert.deepEqual(inventoryGaps(expected, listFiles(installed, "dist/router")), ["dist/router/types.js"],
+      "a missing parent-relative compiled file must be reported");
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
