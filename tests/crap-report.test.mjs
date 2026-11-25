@@ -39,7 +39,7 @@ test("the default CRAP inventory includes nested runtime TS and excludes module 
     writeFileSync(join(root, "modules/alpha/tests/widget.test.ts"), body);
     writeFileSync(join(root, "modules/alpha/tests/fixtures/helper.ts"), body);
     writeFileSync(join(root, "skip.d.ts"), "declare const x: number;\n");
-    assert.deepEqual(targetFiles([], root).map((file) => file.slice(root.length + 1)).sort(), [
+    assert.deepEqual(targetFiles([], root).map((file) => file.slice(root.length + 1).replaceAll("\\", "/")).sort(), [
       "a.ts", "modules/alpha/nested/deep.ts", "modules/alpha/widget.ts", "modules/beta/thing.ts",
     ]);
     assert.deepEqual(targetFiles(["explicit.ts"], root), [join(root, "explicit.ts")],

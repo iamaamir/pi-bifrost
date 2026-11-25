@@ -368,8 +368,6 @@ test("mutation inventory adds direct module tests without moving legacy bindings
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-  assert.deepEqual(allTestFiles().filter((file) => file.startsWith("modules/")), [],
-    "the current checkout has no adopted module");
 });
 
 test("no-coverage mutants count against both scores", () => {

@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 const ROOT = new URL("../", import.meta.url);
 const MODULE_HELPER = new URL("../scripts/module-tests.mjs", import.meta.url);
+const moduleHelper = await import(MODULE_HELPER.href);
 
 function fixture(build) {
   const dir = mkdtempSync(join(tmpdir(), "bifrost-module-discovery-"));
@@ -81,6 +82,23 @@ test("fault control: dropping the tests-directory walk loses every module test",
     const { moduleTestFiles } = await faultyHelper(dir, (source) =>
       source.replace('const testsDir = join(root, "modules", capability.name, "tests");', 'const testsDir = join(root, "modules", capability.name, "not-tests");'));
     assert.deepEqual(moduleTestFiles(dir), [], "the faulted helper must stop discovering module tests");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("moduleSourceFiles excludes misplaced test-suffix files and every tests subtree", () => {
+  const { moduleSourceFiles } = moduleHelper;
+  const dir = fixture((root) => {
+    put(root, "modules/alpha/widget.ts");
+    put(root, "modules/alpha/types.d.ts");
+    put(root, "modules/alpha/widget.test.ts");
+    put(root, "modules/alpha/internal/tests/helper.ts");
+    put(root, "modules/alpha/tests/case.test.mjs");
+    put(root, "modules/beta/thing.ts");
+  });
+  try {
+    assert.deepEqual(moduleSourceFiles(dir), ["modules/alpha/widget.ts", "modules/beta/thing.ts"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
