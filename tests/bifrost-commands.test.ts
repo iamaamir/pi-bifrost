@@ -1565,7 +1565,7 @@ describe("bifrost command ui", () => {
       assert.equal(saved.classifier.typesafe, undefined);
       assert.equal(calls.some((call) => call.kind === "select"), false);
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
-      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("classifier: off"))));
+      assert(calls.some((call) => call.kind === "widget" && Array.isArray(call.lines) && call.lines.some((line) => line.includes("classifier: off"))));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1599,7 +1599,7 @@ describe("bifrost command ui", () => {
 
       assert.equal(confirmCalls, 1);
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), true);
-      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("prompt (no eligible model; regex fallback)"))));
+      assert(calls.some((call) => call.kind === "widget" && Array.isArray(call.lines) && call.lines.some((line) => line.includes("prompt (no eligible model; regex fallback)"))));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3747,7 +3747,7 @@ describe("command aliases", () => {
         return false;
       };
       await createCommandRouter(makeState() as never)("init", ctx);
-      assert.ok(calls.some((call) => call.lines?.includes("Preparing init; refreshing Pi's model catalog...")));
+      assert.ok(calls.some((call) => typeof call.lines === "function" && /Refreshing model catalog/.test((call.lines as any)(null, { fg: (_: string, text: string) => text, bold: (text: string) => text }).render(80).join("\n"))));
       assert.equal(confirmations, 1);
       assert.equal(widgetAtConfirmation, "bifrost-probe:0");
       assert.equal(probes, 0);
@@ -3775,7 +3775,7 @@ describe("command aliases", () => {
       let sawProbe = false;
       registry.streamSimple = () => {
         sawProbe = true;
-        const widget = calls.find((call) => call.kind === "widget" && typeof call.lines === "function")?.lines as any;
+        const widget = calls.filter((call) => call.kind === "widget" && typeof call.lines === "function").at(-1)?.lines as any;
         assert.ok(widget);
         const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
         assert.match(widget(null, theme).render(80).join("\n"), /Probing models · 0\/1/);
@@ -3784,7 +3784,7 @@ describe("command aliases", () => {
       const state = makeState() as any;
       state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} };
       const pending = createCommandRouter(state)("init -f", ctx);
-      assert.ok(calls.some((call) => call.lines?.includes("Preparing init; refreshing Pi's model catalog...")));
+      assert.ok(calls.some((call) => typeof call.lines === "function" && /Refreshing model catalog/.test((call.lines as any)(null, { fg: (_: string, text: string) => text, bold: (text: string) => text }).render(80).join("\n"))));
       assert.equal(sawProbe, false);
       releaseRefresh();
       await pending;
@@ -3802,7 +3802,8 @@ describe("command aliases", () => {
     process.chdir(tempDir);
     try {
       const model = makeModel("fixture", "chat");
-      const { ctx } = makeCtx([model]);
+      const { ctx, calls } = makeCtx([model]);
+      (ctx as any).mode = "rpc";
       let probes = 0;
       const registry = (ctx as any).modelRegistry;
       registry.getAll = () => [model];
@@ -3817,6 +3818,9 @@ describe("command aliases", () => {
 
       await createCommandRouter(state)("init -f", ctx);
 
+      const widgets = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:"));
+      assert(widgets.some((call) => call.lines?.some((line) => line.includes("Refreshing model catalog"))));
+      assert.equal(widgets.at(-1)?.value, "bifrost-probe:0");
       assert.equal(probes, 0);
       assert.equal(state.registryInventoryEvidence.fixture.status, "stale");
       assert.equal(state.forceRegistryRefresh, true);
@@ -4245,7 +4249,7 @@ describe("route dispatch", () => {
       ]);
       await createCommandRouter(state as never)("init", ctx);
     });
-    const proposal = calls.findIndex((c) => c.lines?.includes("--- init ---"));
+    const proposal = calls.findIndex((c) => Array.isArray(c.lines) && c.lines.includes("--- init ---"));
     assert.ok(proposal >= 0);
     assert.ok(calls.slice(proposal + 1).some((c) => c.value === "bifrost-output:0"));
   });

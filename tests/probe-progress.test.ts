@@ -3,6 +3,14 @@ import assert from "node:assert/strict";
 import { probeProgressComponent, setProbeProgress } from "../ui/probe-progress.ts";
 
 describe("init probe progress presentation", () => {
+  it("renders neutral preparation without a percentage or counts", () => {
+    const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const output = probeProgressComponent(theme, { phase: "preparing" }).render(80).join("\n");
+    assert.match(output, /Refreshing model catalog/);
+    assert.match(output, /─{24}/);
+    assert.doesNotMatch(output, /%|working|failed|\d+\/\d+/);
+  });
+
   it("renders counts without provider details", () => {
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
     const output = probeProgressComponent(theme, { done: 2, total: 4, okCount: 1, errCount: 1 }).render(80).join("\n");
