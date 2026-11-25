@@ -4,6 +4,9 @@
   "description": "Route Pi turns through models you choose, with configured tiers and opt-in per-request dispatch.",
   "files": [
     "*.ts",
+    "modules/**/*.ts",
+    "!modules/**/tests/**",
+    "!modules/**/*.test.ts",
     "ui/",
     "dist/router/",
     "bifrost.json",
