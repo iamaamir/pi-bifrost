@@ -76,6 +76,9 @@ function scopeOf(rel) {
   const normalized = rel.replace(/\\/g, "/");
   if (/^[^/]+\.(ts|mjs|cjs)$/.test(normalized)) return "source";
   if (normalized.startsWith("ui/") || normalized.startsWith("scripts/")) return "source";
+  // The reserved tests subtree wins over the module source classification.
+  if (/^modules\/[^/]+\/tests\//.test(normalized)) return "tests";
+  if (normalized.startsWith("modules/")) return "source";
   if (normalized.startsWith("tests/")) return "tests";
   return null;
 }

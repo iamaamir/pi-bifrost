@@ -375,14 +375,37 @@ function loadCoverage(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function targetFiles(argvFiles) {
+export function targetFiles(argvFiles, root = process.cwd()) {
   if (argvFiles.length > 0) {
-    return argvFiles.map((f) => path.resolve(f));
+    return argvFiles.map((f) => path.resolve(root, f));
   }
-  return fs
-    .readdirSync(".")
-    .filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"))
-    .map((f) => path.resolve(f));
+  const tsFile = (name) => name.endsWith(".ts") && !name.endsWith(".d.ts");
+  const files = fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && tsFile(entry.name))
+    .map((entry) => path.resolve(root, entry.name));
+  // Nested capability runtime joins the default inventory; the reserved tests
+  // subtree stays test-owned and out of the shipped-source population.
+  let capabilities;
+  try {
+    capabilities = fs.readdirSync(path.join(root, "modules"), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    capabilities = [];
+  }
+  const walk = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.isDirectory()) {
+        if (entry.name !== "tests") walk(path.join(directory, entry.name));
+      } else if (entry.isFile() && tsFile(entry.name)) {
+        files.push(path.resolve(directory, entry.name));
+      }
+    }
+  };
+  for (const capability of capabilities) {
+    if (capability.isDirectory() && !capability.name.startsWith(".")) walk(path.join(root, "modules", capability.name));
+  }
+  return files.sort();
 }
 
 function formatRow(row) {
