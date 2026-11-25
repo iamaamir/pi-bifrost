@@ -8,12 +8,12 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const NAMED = ["root unit case", "alpha module case", "beta module case"];
 
-function fixtureTree() {
+function fixtureTree(rootCount = 90) {
   const dir = mkdtempSync(join(tmpdir(), "bifrost-module-gates-"));
   const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   writeFileSync(join(dir, "package.json"), JSON.stringify({
@@ -32,7 +32,7 @@ function fixtureTree() {
   }));
   mkdirSync(join(dir, "tests"), { recursive: true });
   // The quick canary requires at least 90 root test files; keep them trivial.
-  for (let i = 0; i < 90; i += 1) {
+  for (let i = 0; i < rootCount; i += 1) {
     writeFileSync(join(dir, "tests", `root-${i}.test.mjs`), 'import { test } from "node:test"; test("filler", () => {});\n');
   }
   writeFileSync(join(dir, "tests", "named.test.mjs"), `import { test } from "node:test"; test("${NAMED[0]}", () => {});\n`);
@@ -44,12 +44,16 @@ function fixtureTree() {
   return dir;
 }
 
-function run(dir, command, args) {
+function childEnv() {
   // Node skips test files when NODE_TEST_CONTEXT is inherited from an outer
   // `node --test`; the fixture must exercise the entrypoint as a standalone run.
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  return execFileSync(command, args, { cwd: dir, encoding: "utf8", timeout: 120_000, stdio: "pipe", env });
+  return env;
+}
+
+function run(dir, command, args) {
+  return execFileSync(command, args, { cwd: dir, encoding: "utf8", timeout: 120_000, stdio: "pipe", env: childEnv() });
 }
 
 function assertNamedOnce(output, label) {
@@ -74,6 +78,18 @@ test("full, coverage, quick and acceptance unit gates execute module tests exact
     assert.ok(gate, "the acceptance unit gate must exist");
     const paths = [...gate[1].matchAll(/"([^"]+)"/gu)].map((match) => match[1]);
     assertNamedOnce(run(dir, process.execPath, ["--test", "--experimental-strip-types", ...paths]), "acceptance unit gate paths");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the quick canary stays root-only when module files could compensate", () => {
+  const dir = fixtureTree(5);
+  try {
+    const result = spawnSync("npm", ["run", "test:quick", "--silent"], { cwd: dir, encoding: "utf8", env: childEnv(), timeout: 120_000 });
+    assert.notEqual(result.status, 0, "a deficient root tier must refuse to run");
+    assert.match(result.stderr, /expected ~100 root test files, found 6/u,
+      "the canary must count root files only, not root plus module files");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

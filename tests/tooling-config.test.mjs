@@ -214,11 +214,12 @@ function escapeRegExp(text) {
 const KNIP_MODULE_GLOBS = new Set(["modules/**/*.ts", "modules/**/*.mjs"]);
 
 function globProblems(config, files) {
+  const hasModules = files.some((file) => file.startsWith("modules/"));
   return ["entry", "project"].flatMap((field) => {
     const globs = Array.isArray(config[field]) ? config[field] : [];
     if (globs.length === 0) return [`missing ${field} globs`];
     return globs
-      .filter((glob) => !KNIP_MODULE_GLOBS.has(glob) && !files.some((file) => matchesGlob(file, glob)))
+      .filter((glob) => !(!hasModules && KNIP_MODULE_GLOBS.has(glob)) && !files.some((file) => matchesGlob(file, glob)))
       .map((glob) => `${field} glob ${glob} matches no tracked file`);
   });
 }
@@ -362,9 +363,13 @@ test("Knip entry and project cover module sources and module-owned test entrypoi
   }
   assert.deepEqual(globProblems({ ...config, project: [...config.project, "*.nope"] }, trackedFiles()), ["project glob *.nope matches no tracked file"],
     "the module-glob exception must not excuse unrelated dead globs");
-  assert.deepEqual(globProblems(config, [
+  const withModules = [
     "index.ts", "scripts/toolbox.mjs", "mutation/targets.mjs",
     "tests/routing.test.ts", "tests/acceptance-runner.test.mjs",
     "modules/alpha/widget.ts", "modules/alpha/tests/widget.test.mjs",
-  ]), [], "module globs must still be audited when modules exist");
+  ];
+  assert.deepEqual(globProblems(config, withModules), [], "module globs must still be audited when modules exist");
+  assert.deepEqual(globProblems({ ...config, project: [...config.project, "modules/**/*.nope"] }, withModules),
+    ["project glob modules/**/*.nope matches no tracked file"],
+    "a dead module-named glob must go red once modules exist");
 });
