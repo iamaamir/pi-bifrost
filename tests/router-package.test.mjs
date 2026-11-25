@@ -153,7 +153,26 @@ function modulePublishedFiles(root) {
 
 const TYPES_CONSUMER = `
   import { createRouter, type RouterSnapshot, type RouterResolveResult } from "pi-bifrost/router";
+  import {
+    modelContextSize, modelCost, modelInputCost, modelOutputCost, selectModel,
+    type RoutingModelBase,
+  } from "pi-bifrost/dist/router/routing.js";
   const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
+  // The metric accessors stay declared over the published RoutingModelBase, not
+  // the capability's wider structural input. Exact-type equality fails if a
+  // re-export widens a parameter, which callers still compile against.
+  type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+  const expectExactType = <T extends true>(): void => undefined;
+  expectExactType<Same<typeof modelCost, (model: RoutingModelBase) => number>>();
+  expectExactType<Same<typeof modelInputCost, (model: RoutingModelBase) => number>>();
+  expectExactType<Same<typeof modelOutputCost, (model: RoutingModelBase) => number>>();
+  expectExactType<Same<typeof modelContextSize, (model: RoutingModelBase) => number>>();
+  const routingModel: RoutingModelBase = model;
+  const metricTotal: number = modelCost(routingModel) + modelInputCost(routingModel)
+    + modelOutputCost(routingModel) + modelContextSize(routingModel);
+  const selected = selectModel([routingModel], "cheapest");
+  void (selected ?? routingModel);
+  void metricTotal;
   const snapshot: RouterSnapshot = {
     config: { models: { quick: ["fixture/small"] }, default: "quick", strategy: "first", rules: [] },
     registry: { knownModels: [model], availableModels: [model] },

@@ -233,6 +233,27 @@ describe("strategy selection properties", () => {
       );
     });
 
+    it("resolves an all-tied pool to whichever candidate is listed first", () => {
+      const TIED_ENTRY = fc.record({
+        input: fc.integer({ min: 0, max: 3 }),
+        output: fc.integer({ min: 0, max: 3 }),
+        contextWindow: fc.integer({ min: 1_000, max: 1_003 }),
+      });
+      fc.assert(
+        fc.property(fc.array(TIED_ENTRY, { minLength: 1, maxLength: 8 }), (entries) => {
+          const models = entries.map((entry, index) =>
+            fixture({ input: entry.input, output: entry.output }, index, entry.contextWindow));
+          const cheapest = models.find((model) => modelCost(model) === Math.min(...models.map(modelCost)));
+          assert.equal(selectModel([...models], "cheapest", RNG), cheapest);
+
+          const contexts = entries.map((entry) => entry.contextWindow);
+          const largest = contexts.indexOf(Math.max(...contexts));
+          assert.equal(selectModel([...models], "largest_context", RNG), models[largest]);
+        }),
+        { numRuns: 200 },
+      );
+    });
+
     it("keeps the earliest candidate among equal best-value ratios", () => {
       fc.assert(
         fc.property(TIED_COST_LIST, fc.integer({ min: 1_000, max: 1_010 }), (specs, baseContext) => {
@@ -259,14 +280,14 @@ describe("strategy selection properties", () => {
     });
   });
 
-  describe("empty and singleton pools", () => {
-    it("returns undefined for every strategy when the pool is empty", () => {
+  describe("empty and singleton eligible sets", () => {
+    it("returns undefined for every strategy when nothing is eligible", () => {
       for (const strategy of EXPECTED_STRATEGIES) {
         assert.equal(selectModel([], strategy, RNG), undefined, strategy);
       }
     });
 
-    it("returns the sole candidate without scoring or drawing for every strategy", () => {
+    it("returns a lone candidate without scoring or drawing for every strategy", () => {
       fc.assert(
         fc.property(STRATEGY, COST_SPEC, (strategy, spec) => {
           const model = fixture(spec, 0, Math.round(spec.input + spec.output) + 1_000);

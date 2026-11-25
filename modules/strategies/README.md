@@ -48,12 +48,21 @@ Ties keep the earliest candidate. An unknown strategy name keeps the legacy
 first-candidate fallback; callers validate names elsewhere. `random` is total for
 draws outside `[0, 1)` and for `NaN`, selecting the last candidate.
 
-Edge characterization: when every metric score is non-finite (`NaN`,
-`Infinity`, an overflowing cost sum, or `0 / 0` for `best_value`) there is no
-comparable minimum and the result is `undefined` rather than a fabricated
-candidate. A missing `cost` object is a caller error and throws for
-multi-candidate metric strategies. Valid-domain callers cannot reach these
-states; changing them is a separate decision.
+Numeric edge characterization: metrics are assumed finite. The scan seeds its
+minimum with `+Infinity` and only lets a score win when it is strictly lower, so
+on malformed input the observable rules are:
+
+- a finite score wins over `NaN` and `+Infinity`, wherever each appears;
+- `NaN` scores never win;
+- `+Infinity` scores, including an overflowing `input + output` sum, never win;
+- `-Infinity` always wins, keeping the earliest such candidate;
+- when every score is `NaN` or `+Infinity` (including `0 / 0` for `best_value`)
+  there is no comparable minimum and the result is `undefined` rather than a
+  fabricated candidate.
+
+A missing `cost` object is a caller error and throws for multi-candidate metric
+strategies. Valid-domain callers cannot reach these states; changing them is a
+separate decision.
 
 ## Dependencies and effects
 

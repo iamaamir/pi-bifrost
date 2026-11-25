@@ -7,18 +7,40 @@ import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityR
 import { spawnSync } from "node:child_process";
 import { checkProviderScope, compileRoutingScope, type CompiledRoutingScope, type RoutingScope, type RoutingScopeOrigin } from "./routing-scope.ts";
 import {
-  modelContextSize,
-  modelCost,
-  modelInputCost,
-  modelOutputCost,
+  modelContextSize as measureContextSize,
+  modelCost as measureCost,
+  modelInputCost as measureInputCost,
+  modelOutputCost as measureOutputCost,
   selectModel,
   type RoutingStrategy,
 } from "./modules/strategies/selection.ts";
 
-// The built-in selection contract lives in the strategies capability. These
-// re-exports keep every existing root subpath import working.
-export { modelContextSize, modelCost, modelInputCost, modelOutputCost, selectModel };
+// The built-in selection contract lives in the strategies capability. The
+// metric accessors stay defined here, over `RoutingModelBase`, so the published
+// signatures compiled consumers import do not change with the capability's
+// wider structural input.
+export { selectModel };
 export type { RoutingStrategy };
+
+/** Sum of input + output token costs per 1M tokens. Does not include cache read/write costs. */
+export function modelCost(model: RoutingModelBase): number {
+  return measureCost(model);
+}
+
+/** Input token cost only. */
+export function modelInputCost(model: RoutingModelBase): number {
+  return measureInputCost(model);
+}
+
+/** Output token cost only. */
+export function modelOutputCost(model: RoutingModelBase): number {
+  return measureOutputCost(model);
+}
+
+/** Context window size. */
+export function modelContextSize(model: RoutingModelBase): number {
+  return measureContextSize(model);
+}
 
 export interface RouteRule {
   pattern: string;
