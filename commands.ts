@@ -1,6 +1,5 @@
 import { log as initNotice } from "./ui/notice.ts";
-import { clearProbeProgress, setProbeProgress } from "./ui/probe-progress.ts";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { clearProbeProgress, setProbeProgress, withProgressCancellation } from "./ui/probe-progress.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
@@ -289,10 +288,6 @@ export function clearBifrostWidgets(ctx: ExtensionContext) {
   }
 }
 
-function clearProbeWidget(ctx: ExtensionContext) {
-  clearProbeProgress(ctx);
-}
-
 export function syncBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeStatusState) {
   setBifrostModeStatus(ctx, {
     enabled: state.enabled,
@@ -526,18 +521,6 @@ export function buildInitProposal(
 
 const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
 
-async function withProgressCancellation<T>(ctx: ExtensionContext, run: (signal: AbortSignal | undefined, cancellable: boolean) => Promise<T>): Promise<T> {
-  if (ctx.mode !== "tui" || !ctx.hasUI || typeof ctx.ui.onTerminalInput !== "function") return run(ctx.signal, false);
-  const controller = new AbortController();
-  const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
-  const unsubscribe = ctx.ui.onTerminalInput((data) => {
-    if (!matchesKey(data, Key.escape)) return undefined;
-    controller.abort();
-    return { consume: true };
-  });
-  try { return await run(signal, true); } finally { unsubscribe(); }
-}
-
 async function runInitProbe(
   ctx: ExtensionContext,
   state: BifrostState,
@@ -565,7 +548,7 @@ async function runInitProbe(
     return undefined;
   } finally {
     uiDone(ctx);
-    clearProbeWidget(ctx);
+    clearProbeProgress(ctx);
   }
   if (probeRun.cancelled || ctx.signal?.aborted) {
     initLog(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
@@ -1439,10 +1422,10 @@ async function handleInitInner(
       initLog(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
     } finally {
       uiDone(ctx);
-      clearProbeWidget(ctx);
+      clearProbeProgress(ctx);
     }
   } else {
-    clearProbeWidget(ctx);
+    clearProbeProgress(ctx);
   }
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
@@ -3517,7 +3500,7 @@ export function createCommandRouter(
         return;
       } finally {
         uiDone(ctx);
-        clearProbeWidget(ctx);
+        clearProbeProgress(ctx);
       }
       if (probeRun.cancelled || ctx.signal?.aborted) {
         log(ctx, "Probe was cancelled; partial results were not saved.", "warning");
