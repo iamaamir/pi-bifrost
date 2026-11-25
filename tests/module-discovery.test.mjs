@@ -120,7 +120,7 @@ test("full, coverage, quick, and acceptance unit gates all include module tests"
 
   const quick = readFileSync(new URL("scripts/test-quick.mjs", ROOT), "utf8");
   assert.match(quick, /moduleTestFiles/u, "quick tier must enumerate module tests");
-  assert.match(quick, /files\.length < 90/u, "the root-only canary must remain");
+  assert.match(quick, /rootFiles\.length < 90/u, "the root-only canary must remain");
   assert.match(quick, /const HEAVY = new Set\(\[/u, "heavy root exclusions must remain");
 
   const acceptance = readFileSync(new URL("scripts/acceptance.mjs", ROOT), "utf8");

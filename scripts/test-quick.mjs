@@ -14,17 +14,15 @@ const HEAVY = new Set([
   "router-package.test.mjs",
 ]);
 
-const files = [
-  ...readdirSync("tests").filter((f) => /\.test\.(ts|mjs)$/.test(f) && !HEAVY.has(f)).map((f) => `tests/${f}`),
-  ...moduleTestFiles(process.cwd()),
-];
+const rootFiles = readdirSync("tests").filter((f) => /\.test\.(ts|mjs)$/.test(f) && !HEAVY.has(f));
 // Canary against silent selection drift: ~100 root files today; a big drop
-// means the glob or exclusions regressed. Module tests are additive, so this
-// bound cannot be satisfied by module files alone.
-if (files.length < 90) {
-  console.error(`test:quick: expected ~100 root test files, found ${files.length} — selection drifted, refusing to run`);
+// means the glob or exclusions regressed. Module tests are additive and must
+// not be able to compensate for a lost root file.
+if (rootFiles.length < 90) {
+  console.error(`test:quick: expected ~100 root test files, found ${rootFiles.length} — selection drifted, refusing to run`);
   process.exit(2);
 }
+const files = [...rootFiles.map((f) => `tests/${f}`), ...moduleTestFiles(process.cwd())];
 console.error(`test:quick: typecheck + ${files.length} files (excluded: ${[...HEAVY].sort().join(", ")})`);
 const check = spawnSync("npm", ["run", "typecheck"], {
   stdio: "inherit",
