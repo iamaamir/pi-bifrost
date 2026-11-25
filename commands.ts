@@ -288,6 +288,10 @@ export function clearBifrostWidgets(ctx: ExtensionContext) {
   }
 }
 
+function setInitProbeWidget(ctx: ExtensionContext, lines: string[]) {
+  if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-probe", lines);
+}
+
 export function syncBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeStatusState) {
   setBifrostModeStatus(ctx, {
     enabled: state.enabled,
@@ -531,6 +535,7 @@ async function runInitProbe(
   let okCount = 0;
   let errCount = 0;
   uiBusy(ctx, `Probing ${available.length} models...`);
+  setProbeProgress(ctx, { done: 0, total: available.length, okCount, errCount });
   let probeRun: Awaited<ReturnType<typeof runProbe>>;
   try {
     probeRun = await runProbe(ctx, {
@@ -1342,7 +1347,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     outcome.messages = ["Init failed unexpectedly; check the configuration before retrying."];
     outcome.type = "error";
   } finally {
-    if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-output", []);
+    clearBifrostWidgets(ctx);
     initNotice(ctx, "Init", outcome.messages.join("\n") || "Init did not complete.", outcome.type ?? "info");
   }
 }
@@ -1370,6 +1375,7 @@ async function handleInitInner(
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
+  setInitProbeWidget(ctx, ["Preparing init; refreshing Pi's model catalog..."]);
   let initRefreshReceipt: { catalogKeys: string[]; evidence: Map<string, object> } | undefined;
   let refreshedCatalogKeys: string[] | undefined;
   let refreshedProviders: string[] = [];
@@ -1421,6 +1427,7 @@ async function handleInitInner(
       initLog(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
     } finally { uiDone(ctx); }
   }
+  setInitProbeWidget(ctx, []);
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));

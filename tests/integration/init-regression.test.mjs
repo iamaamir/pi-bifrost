@@ -496,6 +496,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         const progress = records.findIndex((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.some((line) => /Probing models:/.test(line)));
         const clear = records.findIndex((r, i) => i > progress && r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.length === 0);
         assert.ok(progress >= 0 && clear > progress, JSON.stringify(records));
+        assert.deepEqual(records[progress].widgetLines, ["Probing models: 0/2", "  ok: 0  errors: 0"]);
         assert.ok(records.slice(clear + 1).some((r) => r.method === "notify"), JSON.stringify(records));
       };
       check(fresh);
