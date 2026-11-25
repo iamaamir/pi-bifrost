@@ -290,11 +290,6 @@ test("inScopeFiles and analyze measure module source and module-owned tests", ()
     assert.equal(report.files["modules/alpha/tests/widget.test.ts"].scope, "tests");
     assert.equal(report.scopes.source.files, 4);
     assert.equal(report.scopes.tests.files, 3);
-
-    // Fault control: the previous classifier could not see any module path.
-    const oldScope = (rel) => (/^[^/]+\.(ts|mjs|cjs)$/.test(rel) || rel.startsWith("ui/") || rel.startsWith("scripts/") ? "source" : rel.startsWith("tests/") ? "tests" : null);
-    assert.equal(oldScope("modules/alpha/widget.ts"), null);
-    assert.equal(oldScope("modules/alpha/tests/widget.test.ts"), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

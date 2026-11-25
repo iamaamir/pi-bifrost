@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -31,22 +31,19 @@ test("the default CRAP inventory includes nested runtime TS and excludes module 
     mkdirSync(join(root, "modules", "alpha", "tests", "fixtures"), { recursive: true });
     mkdirSync(join(root, "modules", "alpha", "nested"), { recursive: true });
     mkdirSync(join(root, "modules", "beta"), { recursive: true });
-    for (const file of [
-      "a.ts", "modules/alpha/widget.ts", "modules/alpha/nested/deep.ts", "modules/beta/thing.ts",
-      "modules/alpha/tests/widget.test.ts", "modules/alpha/tests/fixtures/helper.ts",
-    ]) {
-      writeFileSync(join(root, file), "export const value = 1;\n");
-    }
+    const body = "export const value = 1;\n";
+    writeFileSync(join(root, "a.ts"), body);
+    writeFileSync(join(root, "modules/alpha/widget.ts"), body);
+    writeFileSync(join(root, "modules/alpha/nested/deep.ts"), body);
+    writeFileSync(join(root, "modules/beta/thing.ts"), body);
+    writeFileSync(join(root, "modules/alpha/tests/widget.test.ts"), body);
+    writeFileSync(join(root, "modules/alpha/tests/fixtures/helper.ts"), body);
     writeFileSync(join(root, "skip.d.ts"), "declare const x: number;\n");
     assert.deepEqual(targetFiles([], root).map((file) => file.slice(root.length + 1)).sort(), [
       "a.ts", "modules/alpha/nested/deep.ts", "modules/alpha/widget.ts", "modules/beta/thing.ts",
     ]);
     assert.deepEqual(targetFiles(["explicit.ts"], root), [join(root, "explicit.ts")],
       "explicit file arguments still win over discovery");
-
-    // Fault control: a root-only readdir inventory omits every nested source.
-    const oldInventory = readdirSync(root).filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"));
-    assert.deepEqual(oldInventory.sort(), ["a.ts"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
