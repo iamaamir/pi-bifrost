@@ -802,7 +802,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
       assert.equal(cached.code, 0, cached.stderr);
       assert.equal(cached.violations, "");
       assert.deepEqual(requests, [], "ordinary init must reuse a complete recent report without new provider requests");
-      assert.match(cached.stderr + cached.stdout, /Using verified models: 1 working models \(within the past hour\)\./u);
+      assert.match(cached.stderr + cached.stdout, /Using verified models: 1 working models \(saved probe results \(1m old\)\)\./u);
       assert.doesNotMatch(cached.stderr + cached.stdout, /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
       const configPath = join(env.work, ".pi", "bifrost.json");
       const cachedConfigBytes = readFileSync(configPath);
@@ -1017,7 +1017,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 240_000 }, () =>
       assert.equal(result.violations, "");
       assert.equal(result.code, 0, result.stderr);
       assert.deepEqual(requests, []);
-      assert.match(result.stderr + result.stdout, /init: failed — no working models\. Nothing was saved\. Check API keys, credits, and network, then retry\./u);
+      assert.match(result.stderr + result.stdout, /init: failed — no working models\. Nothing was saved; no usable models in saved probe results \(1m old\)\. Check API keys, credits, and network, then run \/bifrost init -f to check again\./u);
       assert.doesNotMatch(result.stderr + result.stdout, /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
       assert.deepEqual(readFileSync(join(env.work, ".pi", "bifrost.json")), original);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }

@@ -73,6 +73,7 @@ import {
   probeOptionsFromConfig,
   PROBE_PROMPT_TEXT,
   readRecentCompleteProbeReportCacheHit,
+  describeProbeReportCacheAge,
   PROBE_CACHE_TTL_MS,
   failureDetails,
 } from "./probe.ts";
@@ -2031,7 +2032,7 @@ async function probeInitModels(
           cost: { input: result.cost_input ?? 0, output: result.cost_output ?? 0 },
           duration_ms: result.duration_ms ?? 0,
         }));
-      probeAge = "within the past hour";
+      probeAge = `saved probe results (${describeProbeReportCacheAge(cacheHit)} old)`;
       probeLoaded = true;
     }
   }
@@ -2404,8 +2405,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     reportInitOutcome(
       ctx,
       "failed — no working models",
-      "Nothing was saved.",
-      "Check API keys, credits, and network, then retry.",
+      ranProbe ? "Nothing was saved." : `Nothing was saved; no usable models in ${probeAge}.`,
+      ranProbe ? "Check API keys, credits, and network, then retry." : "Check API keys, credits, and network, then run /bifrost init -f to check again.",
       "error",
     );
     return;
@@ -2413,7 +2414,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
 
   const refreshRemainsCurrent = initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state);
 
-  if (probeLoaded && workingModels.length > 0 && ctx.mode !== "tui") {
+  if (probeLoaded && workingModels.length > 0 && (!ranProbe || ctx.mode !== "tui")) {
     logImportant(
       ctx,
       "Using verified models",
