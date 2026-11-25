@@ -4128,6 +4128,53 @@ describe("route dispatch", () => {
     assert.ok(lines.includes("--- probe results (1 models) ---"));
   });
 
+  it("sanitizes probe failures and clears progress when the probe rejects", async () => {
+    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+    const runtime = ctx as unknown as { modelRegistry: { getAvailable: () => unknown[] } };
+    let count = 0;
+    runtime.modelRegistry.getAvailable = () => {
+      if (++count === 1) return [{ provider: "fixture", id: "chat" }];
+      throw new Error("SECRET_PROBE_CANARY");
+    };
+    await createCommandRouter(makeState() as never)("probe", ctx);
+    assert.doesNotMatch(JSON.stringify(calls), /SECRET_PROBE_CANARY/);
+    assert.equal(calls.filter((c) => c.kind === "notify" && String(c.value).includes("Probe failed unexpectedly")).length, 1);
+    assert.ok(calls.some((c) => c.value === "bifrost-probe:0"));
+  });
+
+  it("keeps provider error details in the report but not probe output", async () => {
+    const model = { provider: "fixture", id: "chat", api: "openai-completions", cost: { input: 0, output: 0 } };
+    const { ctx, calls } = makeCtx([model]);
+    (ctx as any).modelRegistry.streamSimple = () => { throw new Error("SECRET_PROVIDER_CANARY"); };
+    await inTempDir(async () => {
+      await createCommandRouter(makeState() as never)("probe", ctx);
+      assert.match(readFileSync(join(process.cwd(), ".pi", "bifrost-probe.json"), "utf8"), /SECRET_PROVIDER_CANARY/);
+    });
+    assert.doesNotMatch(JSON.stringify(calls), /SECRET_PROVIDER_CANARY/);
+    assert.ok(calls.some((c) => Array.isArray(c.lines) && c.lines.some((line) => line.includes("fixture/chat — error"))));
+  });
+
+  it("clears the init proposal after declining", async () => {
+    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+    const state = makeState();
+    const registry = (ctx as any).modelRegistry;
+    registry.getAll = () => [{ provider: "fixture", id: "chat", api: "openai-completions", cost: { input: 0.2, output: 0.2 } }];
+    registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+    registry.refresh = async () => ({ aborted: false, errors: new Map() });
+    await inTempDir(async () => {
+      mkdirSync(join(process.cwd(), ".pi"), { recursive: true });
+      writeFileSync(join(process.cwd(), ".pi", "bifrost.json"), JSON.stringify({ enabled: true, models: { quick: ["fixture/old"] }, classifier: { enabled: false } }));
+      writeFileSync(join(process.cwd(), ".pi", "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt({ quick: ["fixture/old"] })));
+      writeRecentProbeCache(join(process.cwd(), ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      await createCommandRouter(state as never)("init", ctx);
+    });
+    const proposal = calls.findIndex((c) => c.lines?.includes("--- init ---"));
+    assert.ok(proposal >= 0);
+    assert.ok(calls.slice(proposal + 1).some((c) => c.value === "bifrost-output:0"));
+  });
+
   it("routes benchmark", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();

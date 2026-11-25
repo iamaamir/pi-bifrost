@@ -1342,6 +1342,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     outcome.messages = ["Init failed unexpectedly; check the configuration before retrying."];
     outcome.type = "error";
   } finally {
+    if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-output", []);
     initNotice(ctx, "Init", outcome.messages.join("\n") || "Init did not complete.", outcome.type ?? "info");
   }
 }
@@ -3487,6 +3488,9 @@ export function createCommandRouter(
             setProbeProgress(ctx, { done, total, okCount, errCount });
           },
         });
+      } catch {
+        log(ctx, ctx.signal?.aborted ? "Probe was cancelled; partial results were not saved." : "Probe failed unexpectedly; check the configuration before retrying.", ctx.signal?.aborted ? "warning" : "error");
+        return;
       } finally {
         uiDone(ctx);
         if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
@@ -3522,7 +3526,7 @@ export function createCommandRouter(
       if (errs.length > 0) {
         lines.push("errors:");
         for (const e of errs.slice(0, 10)) {
-          lines.push(`  ${e.provider}/${e.model} — ${e.error}`);
+          lines.push(`  ${e.provider}/${e.model} — error`);
         }
         if (errs.length > 10) lines.push(`  ... and ${errs.length - 10} more`);
       }
