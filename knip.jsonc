@@ -14,14 +14,20 @@
     // Tests spawn helper modules by path, so static import tracing cannot see
     // their entry status. Listing the whole test tree avoids false orphans.
     "tests/**/*.ts",
-    "tests/**/*.mjs"
+    "tests/**/*.mjs",
+    // Adopted capability sources are wildcard-accessible subpaths like root
+    // modules; module-owned tests are spawned by path and cannot be traced.
+    "modules/**/*.ts",
+    "modules/**/*.mjs"
   ],
   "project": [
     "*.ts",
     "scripts/**/*.mjs",
     "mutation/**/*.mjs",
     "tests/**/*.ts",
-    "tests/**/*.mjs"
+    "tests/**/*.mjs",
+    "modules/**/*.ts",
+    "modules/**/*.mjs"
   ],
   "ignore": ["dist/**", "coverage/**", "screenshots/**", "reports/**", "evidence/**", "docs/**", "examples/**"],
   "ignoreDependencies": [
