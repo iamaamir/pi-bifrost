@@ -110,13 +110,16 @@ Contract to preserve exactly:
 - Unknown strategy names keep the legacy first-candidate fallback.
 - No I/O, no host runtime, no dispatch, no credential or settlement effect.
 
-Characterization, not policy change: a pool whose scores are all `NaN` or `+Infinity`
+Characterization, not policy change: the lowest comparable score wins and equal
+scores keep the earliest candidate. Callers pass validated finite metrics, but
+arithmetic on finite inputs can still overflow to `+Infinity` (a cost sum or the
+`best_value` ratio), so a pool whose scores are all `NaN` or `+Infinity`
 (including overflowing sums and `0 / 0`) has no comparable minimum and yields
-`undefined`; in mixed pools the first finite score wins, `NaN` never wins, and
-`-Infinity` always wins. A missing `cost` object throws for multi-candidate metric
-strategies. Valid-domain callers cannot reach those states; the current `selectModel`
-doc comment overstates totality and will be corrected in the moved code without
-changing behavior. Any behavior fix is a separate adjudication.
+`undefined`; in mixed pools a finite score wins, `NaN` never wins, and `-Infinity`
+always wins. A missing `cost` object throws for multi-candidate metric strategies.
+Valid-domain callers cannot reach those states; the moved doc comments are
+corrected to this contract without changing behavior. Any behavior fix is a
+separate adjudication.
 
 ## 5. Module boundary
 
