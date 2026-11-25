@@ -128,6 +128,27 @@ test("misplaced test-suffix paths are rejected while legitimate locations are ac
   assert.equal(isExecutableTest("modules\\alpha\\tests\\checks.test.mjs"), true, "Windows separators normalize");
 });
 
+test("executable-test classification matches what the gate globs actually run", async () => {
+  const { moduleTestFiles, isExecutableTest, misplacedTestFiles } = moduleHelper;
+  const dir = fixture((root) => {
+    put(root, "modules/alpha/tests/checks.test.mjs");
+    // The gate globs skip dot-prefixed path segments, so neither of these runs.
+    put(root, "modules/.experimental/tests/case.test.mjs");
+    put(root, "modules/alpha/tests/.dot.test.mjs");
+  });
+  try {
+    assert.deepEqual(moduleTestFiles(dir), ["modules/alpha/tests/checks.test.mjs"],
+      "discovery must not advertise a file the gate globs cannot reach");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const unrunnable = ["modules/.experimental/tests/case.test.mjs", "modules/alpha/tests/.dot.test.mjs"];
+  for (const path of unrunnable) {
+    assert.equal(isExecutableTest(path), false, `${path} is not reachable by any reserved gate glob`);
+  }
+  assert.deepEqual(misplacedTestFiles(unrunnable), unrunnable, "a test that cannot run must be rejected, not accepted");
+});
+
 test("every test-suffix file in the repository inventory sits in a reserved location", () => {
   const { misplacedTestFiles } = moduleHelper;
   // The real inventory, not a path example: an untracked file must fail locally

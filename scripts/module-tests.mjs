@@ -7,7 +7,10 @@ import { join } from "node:path";
 const EXECUTABLE_TEST = /\.test\.(?:ts|mjs)$/u;
 const ROOT_TEST = /^tests\/[^/]+\.test\.(?:ts|mjs)$/u;
 const INTEGRATION_TEST = /^tests\/integration\/[^/]+\.test\.mjs$/u;
-const MODULE_TEST = /^modules\/[^/]+\/tests\/[^/]+\.test\.(?:ts|mjs)$/u;
+// The gate globs skip dot-prefixed path segments, so a hidden capability or a
+// dot-prefixed test file never runs. Classifying one as executable would let
+// the repository inventory accept a test that silently stays unexecuted.
+const MODULE_TEST = /^modules\/(?!\.)[^/]+\/tests\/(?!\.)[^/]+\.test\.(?:ts|mjs)$/u;
 
 /** Repo-relative executable unit tests under `modules/<capability>/tests/`. */
 export function moduleTestFiles(root) {
@@ -30,7 +33,7 @@ export function moduleTestFiles(root) {
       throw error;
     }
     for (const entry of entries) {
-      if (entry.isFile() && EXECUTABLE_TEST.test(entry.name)) {
+      if (entry.isFile() && !entry.name.startsWith(".") && EXECUTABLE_TEST.test(entry.name)) {
         files.push(`modules/${capability.name}/tests/${entry.name}`);
       }
     }
