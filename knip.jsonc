@@ -15,10 +15,13 @@
     // their entry status. Listing the whole test tree avoids false orphans.
     "tests/**/*.ts",
     "tests/**/*.mjs",
-    // Adopted capability sources are wildcard-accessible subpaths like root
-    // modules; module-owned tests are spawned by path and cannot be traced.
-    "modules/**/*.ts",
-    "modules/**/*.mjs"
+    // Only the module-owned unit tests the gates spawn by path are entries,
+    // because no import trace reaches them. Capability runtime stays in
+    // `project`: it is reachable through its tests and consumers, so an
+    // unreferenced private helper, unused export or unused test fixture is
+    // still a finding instead of a blanket entrypoint exemption.
+    "modules/*/tests/*.test.ts",
+    "modules/*/tests/*.test.mjs"
   ],
   "project": [
     "*.ts",

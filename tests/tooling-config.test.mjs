@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, matchesGlob } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,9 @@ const tsconfig = JSON.parse(readFileSync(join(root, "tsconfig.json"), "utf8"));
 // Launch TypeScript's JS entrypoint directly: node_modules/.bin/tsc is an
 // extensionless shim on Windows that execFileSync cannot start without a shell.
 const tsCompiler = createRequire(join(root, "package.json")).resolve("typescript/bin/tsc");
+// Knip's exports map hides its declared `bin` entry, so address the CLI file the
+// package itself declares instead of resolving a subpath.
+const knipCli = join(root, "node_modules", "knip", JSON.parse(readFileSync(join(root, "node_modules", "knip", "package.json"), "utf8")).bin.knip);
 const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
 const workflowDirectory = join(root, ".github", "workflows");
 const workflows = readdirSync(workflowDirectory)
@@ -212,18 +215,28 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-// A zero-module revision is a valid state, so module globs are the one set
-// allowed to match no tracked file. They are still checked whenever modules
-// exist, and no other glob gets this treatment.
-const KNIP_MODULE_GLOBS = new Set(["modules/**/*.ts", "modules/**/*.mjs"]);
+// A capability may adopt only one extension or test style, so a contract module
+// glob is excused while the tracked module tree has no file of its kind. The
+// exemption is per glob: any other dead glob, including a module-named one with
+// an unsupported extension, still fails.
+const KNIP_MODULE_GLOBS = new Map([
+  ["modules/**/*.ts", (moduleFiles) => moduleFiles.some((file) => file.endsWith(".ts"))],
+  ["modules/**/*.mjs", (moduleFiles) => moduleFiles.some((file) => file.endsWith(".mjs"))],
+  ["modules/*/tests/*.test.ts", (moduleFiles) => moduleFiles.some((file) => /^modules\/[^/]+\/tests\/[^/]+\.test\.ts$/u.test(file))],
+  ["modules/*/tests/*.test.mjs", (moduleFiles) => moduleFiles.some((file) => /^modules\/[^/]+\/tests\/[^/]+\.test\.mjs$/u.test(file))],
+]);
 
 function globProblems(config, files) {
-  const hasModules = files.some((file) => file.startsWith("modules/"));
+  const moduleFiles = files.filter((file) => file.startsWith("modules/"));
   return ["entry", "project"].flatMap((field) => {
     const globs = Array.isArray(config[field]) ? config[field] : [];
     if (globs.length === 0) return [`missing ${field} globs`];
     return globs
-      .filter((glob) => !(!hasModules && KNIP_MODULE_GLOBS.has(glob)) && !files.some((file) => matchesGlob(file, glob)))
+      .filter((glob) => {
+        const witness = KNIP_MODULE_GLOBS.get(glob);
+        if (witness !== undefined && !witness(moduleFiles)) return false;
+        return !files.some((file) => matchesGlob(file, glob));
+      })
       .map((glob) => `${field} glob ${glob} matches no tracked file`);
   });
 }
@@ -359,12 +372,67 @@ test("a type error in an orphan module file is invisible without the include and
   }
 });
 
+/** Run the real Knip CLI over an isolated capability tree. */
+function knipFixture(config, files) {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-knip-modules-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({
+    name: "knip-modules-fixture", version: "1.0.0", type: "module", private: true,
+  }));
+  writeFileSync(join(dir, "knip.jsonc"), JSON.stringify(config));
+  symlinkSync(join(root, "node_modules"), join(dir, "node_modules"), "dir");
+  for (const [name, body] of Object.entries(files)) {
+    mkdirSync(join(dir, dirname(name)), { recursive: true });
+    writeFileSync(join(dir, name), body);
+  }
+  const result = spawnSync(process.execPath, [knipCli, "--config", "knip.jsonc", "--reporter", "json"], {
+    cwd: dir, encoding: "utf8", timeout: 120_000,
+  });
+  return { dir, result };
+}
+
+function knipFindings(result) {
+  assert.ok(result.stdout, `Knip produced no report: ${result.stderr}`);
+  const issues = JSON.parse(result.stdout).issues;
+  return {
+    unusedFiles: issues.flatMap((issue) => issue.files.map((file) => file.name)).sort(),
+    unusedExports: issues.flatMap((issue) => issue.exports.map((entry) => `${issue.file}:${entry.name}`)).sort(),
+  };
+}
+
+const MODULE_FIXTURE = {
+  "modules/alpha/widget.ts": "export function used(value: number): number { return value + 1; }\nexport function neverImported(): number { return 0; }\n",
+  "modules/alpha/internal/orphan.ts": "export function orphanHelper(): number { return 42; }\n",
+  "modules/alpha/tests/case.test.ts": "import { test } from \"node:test\";\nimport { used } from \"../widget.ts\";\ntest(\"case\", () => { used(1); });\n",
+  "modules/alpha/tests/helper.mjs": "export const unusedFixture = 1;\n",
+};
+
+// Issue #351 CRUX-04: the entry/project roles must produce real findings for
+// capability internals, not hide them behind a blanket module entrypoint.
+test("real Knip findings cover nested module helpers, exports and unused test fixtures", () => {
+  const config = knipConfigFrom(knipSource);
+  const run = knipFixture(config, MODULE_FIXTURE);
+  const blanket = knipFixture({ ...config, entry: [...config.entry, "modules/**/*.ts", "modules/**/*.mjs"] }, MODULE_FIXTURE);
+  try {
+    assert.deepEqual(knipFindings(run.result), {
+      unusedFiles: ["modules/alpha/internal/orphan.ts", "modules/alpha/tests/helper.mjs"],
+      unusedExports: ["modules/alpha/widget.ts:neverImported"],
+    }, "nested private helpers, unused exports and unused fixtures must all be findings");
+    assert.deepEqual(knipFindings(blanket.result), { unusedFiles: [], unusedExports: [] },
+      "fault control: the old blanket module entrypoints hid every module finding");
+  } finally {
+    rmSync(run.dir, { recursive: true, force: true });
+    rmSync(blanket.dir, { recursive: true, force: true });
+  }
+});
+
 test("Knip entry and project cover module sources and module-owned test entrypoints", () => {
   const config = knipConfigFrom(knipSource);
-  for (const field of ["entry", "project"]) {
-    assert.ok(config[field].includes("modules/**/*.ts"), `${field} must cover module TypeScript`);
-    assert.ok(config[field].includes("modules/**/*.mjs"), `${field} must cover module test entrypoints`);
-  }
+  assert.ok(config.project.includes("modules/**/*.ts"), "project must cover module TypeScript");
+  assert.ok(config.project.includes("modules/**/*.mjs"), "project must cover module test helpers");
+  assert.ok(config.entry.includes("modules/*/tests/*.test.ts"), "entry must reach spawned module TS tests");
+  assert.ok(config.entry.includes("modules/*/tests/*.test.mjs"), "entry must reach spawned module MJS tests");
+  assert.ok(!config.entry.includes("modules/**/*.ts"),
+    "module runtime must not be a blanket entrypoint, or its dead code would be invisible");
   assert.deepEqual(globProblems({ ...config, project: [...config.project, "*.nope"] }, trackedFiles()), ["project glob *.nope matches no tracked file"],
     "the module-glob exception must not excuse unrelated dead globs");
   const withModules = [
@@ -373,7 +441,20 @@ test("Knip entry and project cover module sources and module-owned test entrypoi
     "modules/alpha/widget.ts", "modules/alpha/tests/widget.test.mjs",
   ];
   assert.deepEqual(globProblems(config, withModules), [], "module globs must still be audited when modules exist");
+  assert.deepEqual(globProblems(config, [
+    "index.ts", "scripts/toolbox.mjs", "mutation/targets.mjs",
+    "tests/routing.test.ts", "tests/acceptance-runner.test.mjs",
+    "modules/alpha/widget.ts", "modules/alpha/tests/widget.test.ts",
+  ]), [], "a TypeScript-only capability must not require an .mjs module file");
+  assert.deepEqual(globProblems(config, [
+    "index.ts", "scripts/toolbox.mjs", "mutation/targets.mjs",
+    "tests/routing.test.ts", "tests/acceptance-runner.test.mjs",
+    "modules/alpha/tests/widget.test.mjs",
+  ]), [], "an .mjs-only capability must not require a .ts module file");
   assert.deepEqual(globProblems({ ...config, project: [...config.project, "modules/**/*.nope"] }, withModules),
     ["project glob modules/**/*.nope matches no tracked file"],
     "a dead module-named glob must go red once modules exist");
+  assert.deepEqual(globProblems({ ...config, project: [...config.project, "modules/**/*.cjs"] }, withModules),
+    ["project glob modules/**/*.cjs matches no tracked file"],
+    "the exemption covers only the declared module globs");
 });

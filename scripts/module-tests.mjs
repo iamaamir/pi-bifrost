@@ -72,3 +72,12 @@ export function isExecutableTest(relativePath) {
   const normalized = relativePath.replace(/\\/g, "/");
   return ROOT_TEST.test(normalized) || INTEGRATION_TEST.test(normalized) || MODULE_TEST.test(normalized);
 }
+
+/**
+ * Executable-looking test files that sit outside every reserved location. The
+ * gates select by glob, so such a file would never run while still looking
+ * like a test; the repository inventory test rejects it instead.
+ */
+export function misplacedTestFiles(relativePaths) {
+  return relativePaths.filter((path) => EXECUTABLE_TEST.test(path) && !isExecutableTest(path));
+}
