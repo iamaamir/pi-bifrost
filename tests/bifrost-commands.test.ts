@@ -5512,7 +5512,17 @@ describe("route dispatch", () => {
       widgets.push(value);
       if (typeof value === "function") throw new Error("progress failed");
     };
-    await inTempDir(async () => { await createCommandRouter(makeState() as never)("probe", ctx as never); });
+    const state = makeState();
+    let reliabilityWrites = 0;
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => { reliabilityWrites++; } } as never;
+    await inTempDir(async () => {
+      mkdirSync(".pi", { recursive: true });
+      const oldCache = Buffer.from("old cache bytes\n");
+      writeFileSync(".pi/bifrost-probe.json", oldCache);
+      await createCommandRouter(state as never)("probe", ctx as never);
+      assert.deepEqual(readFileSync(".pi/bifrost-probe.json"), oldCache);
+    });
+    assert.equal(reliabilityWrites, 0);
     assert.deepEqual(widgets.at(-1), []);
     assert.ok(calls.some((call) => String(call.value).includes("Probe failed")));
   });
@@ -5608,8 +5618,15 @@ describe("route dispatch", () => {
         calls.push({ kind: "widget", value: `bifrost-probe:${shape}` });
         if (typeof value === "function") throw new Error("progress render failed");
       };
-      // A progress render that throws rejects runProbe before the widget clear.
-      await createCommandRouter(makeState() as never)("init", ctx as never);
+      const oldCache = Buffer.from("old cache bytes\n");
+      writeFileSync(".pi/bifrost-probe.json", oldCache);
+      const state = makeState();
+      let reliabilityWrites = 0;
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => { reliabilityWrites++; } } as never;
+      await createCommandRouter(state as never)("init -f", ctx as never);
+      assert.deepEqual(readFileSync(".pi/bifrost-probe.json"), oldCache);
+      assert.equal(reliabilityWrites, 0);
+      assert.equal(existsSync(".pi/bifrost.json"), false);
       assert.ok(JSON.stringify(calls).includes("Probe failed; run /bifrost init again to retry."));
       assert.equal(
         probeWidgets[probeWidgets.length - 1],
