@@ -2342,6 +2342,15 @@ function freshInheritedInventoriesComplete(
   return affectedPoolsHaveCompleteInventories(inventories, {}, overrides, inheritedTiers, pools);
 }
 
+function initHasDeletedTierIntent(ownership: ReturnType<typeof parseOwnershipSnapshot> | undefined, source: ReconciliationConfigSource, models: Record<string, unknown>): boolean {
+  return ownership?.scope === source && Object.keys(ownership.tiers).some((tier) => !(tier in models));
+}
+
+function initFreshConfigInvalid(configBytes: Buffer, ownershipBytes: Buffer, source: ReconciliationConfigSource, state: BifrostState): boolean {
+  return configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES || ownershipBytes.byteLength > 5_000_000 ||
+    !prospectiveConfigInstallable(source, configBytes, state);
+}
+
 function initSourceDigest(bytes: Uint8Array | null): string | null {
   return bytes ? createHash("sha256").update(bytes).digest("hex") : null;
 }
@@ -2483,8 +2492,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     reportInitOutcome(ctx, "blocked", "Nothing was saved; the ownership receipt could not be read safely.", "Fix the ownership receipt, then retry.", "error");
     return;
   }
-  const hasDeletedTierIntent = ownership?.scope === source.source
-    && Object.keys(ownership.tiers).some((tier) => !(tier in sourceModels));
+  const hasDeletedTierIntent = initHasDeletedTierIntent(ownership, source.source, sourceModels);
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
   let inheritedTiers: ReadonlySet<string> = new Set<string>();
   let inheritedEffective: ReadonlyMap<string, InheritedTierPool> = new Map();
@@ -2943,11 +2951,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       : { ...installProposal, ...sourceConfig, models };
     const configBytes = Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8");
     const ownershipBytes = Buffer.from(JSON.stringify(freshOwnership, null, 2) + "\n", "utf8");
-    if (
-      configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
-      ownershipBytes.byteLength > 5_000_000 ||
-      !prospectiveConfigInstallable(source.source, configBytes, state)
-    ) {
+    if (initFreshConfigInvalid(configBytes, ownershipBytes, source.source, state)) {
       reportInitOutcome(
         ctx,
         "blocked",
@@ -2972,11 +2976,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     changes = Object.entries(models).flatMap(([tier, keys]) =>
       keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
     );
-  }
-  if (!inventoryStillSafe()) {
-    reportInitOutcome(ctx, "blocked", "Nothing was saved; the model inventory is incomplete or stale.",
-      "Refresh the provider catalog, then rerun /bifrost init.", "warning");
-    return;
+    if (!inventoryStillSafe()) {
+      reportInitOutcome(ctx, "blocked", "Nothing was saved; the model inventory is incomplete or stale.",
+        "Refresh the provider catalog, then rerun /bifrost init.", "warning");
+      return;
+    }
   }
   const savedPools = (
     JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
