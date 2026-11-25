@@ -42,8 +42,8 @@ export const TARGETS = {
   // Issue #272 pilot: the built-in selection contract now lives in its own
   // capability, so its focused suite must measure the moved implementation.
   // routing.ts keeps its target for the surrounding resolver and rule policy.
-  // Measured: 61 mutants in 1s on this host -> 0.016 s/mutant.
-  "modules/strategies/selection.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.016 },
+  // Measured: 52 mutants in 1.77s on this host -> 0.034 s/mutant.
+  "modules/strategies/selection.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.034 },
   // A gate script, not a product module. Its bound tests cover the structural
   // rule scope, the duplication threshold, and the parsers that turn tool
   // output into findings. A mutant survives when a gate stops failing a tree it
@@ -135,7 +135,7 @@ export const MUTANT_ESTIMATE = {
   "reliability.ts": 352,
   "reliability-v2.ts": 2447,
   "routing.ts": 1000,
-  "modules/strategies/selection.ts": 61,
+  "modules/strategies/selection.ts": 52,
   "scripts/toolbox.mjs": 855,
 };
 
