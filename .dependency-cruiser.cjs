@@ -13,6 +13,10 @@
  */
 const HOST_ADAPTERS = "^(index|commands|ux-status|result-viewer|probe)\\.ts$";
 const ADAPTER_OWNERS = "^(index|commands)\\.ts$";
+// Capability production files join the shipped-root protections. The reserved
+// `tests/` subtree stays a test location and never becomes production.
+const PRODUCTION_ROOTS = "^(?:[^/]+|ui/[^/]+|modules/(?!.*(?:^|/)tests/).+)\\.ts$";
+const REPOSITORY_TOOLING = "^(?:scripts|tests)/|^modules/[^/]+/tests/";
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
@@ -68,15 +72,15 @@ module.exports = {
       severity: "error",
       comment:
         "Shipped root modules run inside Pi and must not import dev-only tooling (tests, mutation, coverage, fuzzing, repository scripts).",
-      from: { path: "^(?:[^/]+|ui/[^/]+)\\.ts$" },
+      from: { path: PRODUCTION_ROOTS },
       to: { dependencyTypes: ["npm-dev"], dependencyTypesNot: ["npm-peer"] },
     },
     {
       name: "production-no-repository-tooling",
       severity: "error",
       comment: "Shipped modules must not depend on repository scripts, tests, or fixtures.",
-      from: { path: "^(?:[^/]+|ui/[^/]+)\\.ts$" },
-      to: { path: "^(scripts|tests)/" },
+      from: { path: PRODUCTION_ROOTS },
+      to: { path: REPOSITORY_TOOLING },
     },
     {
       name: "no-unresolvable",
