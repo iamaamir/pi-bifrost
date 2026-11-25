@@ -1589,7 +1589,6 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
   it("cleanup control: a missing actual receipt retains every owned path and preserves the real cleanup error", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "bifrost-trace-cleanup-missing-receipt-"));
     let actualSafetyReceipt;
-    let observedReceipt;
     let released;
     let cleanupError;
     try {
@@ -1634,9 +1633,8 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         released = error.released;
       }
 
-      // The submitted cleanup outcome has no actual receipt, so it must not be
+      // The submitted cleanup outcome has no reported receipt, so it must not be
       // treated as observed-safe even though a separate safe receipt exists.
-      assert.equal(observedReceipt, undefined, "the reported receipt must be missing");
       assert.ok(actualSafetyReceipt, "the real owned run must have produced a separate safe receipt");
       assert.equal(actualSafetyReceipt.closed, true, "the real owned run must actually close");
       assert.equal(actualSafetyReceipt.groupGone, true, "the real owned process group must actually be absent");
@@ -1651,7 +1649,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
       let propagatedError;
       try {
         try { throw cleanupError; }
-        finally { reclaimControlArtifacts(scratch, released, observedReceipt); }
+        finally { reclaimControlArtifacts(scratch, released, undefined); }
       } catch (error) {
         propagatedError = error;
       }
