@@ -3721,6 +3721,81 @@ describe("command aliases", () => {
     }
   });
 
+  it("clears preparation before cached init confirmation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-cached-progress-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const model = makeModel("fixture", "chat");
+      const { ctx, calls } = makeCtx([model]);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      let probes = 0;
+      registry.streamSimple = () => { probes++; throw new Error("unexpected probe"); };
+      let widgetAtConfirmation: unknown;
+      let confirmations = 0;
+      (ctx as any).ui.confirm = async () => {
+        confirmations++;
+        widgetAtConfirmation = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:")).at(-1)?.value;
+        return false;
+      };
+      await createCommandRouter(makeState() as never)("init", ctx);
+      assert.ok(calls.some((call) => call.lines?.includes("Preparing init; refreshing Pi's model catalog...")));
+      assert.equal(confirmations, 1);
+      assert.equal(widgetAtConfirmation, "bifrost-probe:0");
+      assert.equal(probes, 0);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("shows preparation before refresh and zero progress before the first probe", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-progress-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const model = makeModel("fixture", "chat");
+      const { ctx, calls } = makeCtx([model]);
+      const registry = (ctx as any).modelRegistry;
+      let releaseRefresh!: () => void;
+      const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.refresh = async () => { await refreshGate; return { aborted: false, errors: new Map() }; };
+      let sawProbe = false;
+      registry.streamSimple = () => {
+        sawProbe = true;
+        const widget = calls.find((call) => call.kind === "widget" && typeof call.lines === "function")?.lines as any;
+        assert.ok(widget);
+        const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+        assert.match(widget(null, theme).render(80).join("\n"), /Probing models · 0\/1/);
+        return { result: async () => ({ role: "assistant", content: [], usage: { totalTokens: 1 }, stopReason: "error" }) };
+      };
+      const state = makeState() as any;
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} };
+      const pending = createCommandRouter(state)("init -f", ctx);
+      assert.ok(calls.some((call) => call.lines?.includes("Preparing init; refreshing Pi's model catalog...")));
+      assert.equal(sawProbe, false);
+      releaseRefresh();
+      await pending;
+      assert.equal(sawProbe, true);
+      assert.equal(calls.filter((call) => call.value === "bifrost-probe:0").at(-1)?.value, "bifrost-probe:0");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("stops forced init when catalog refresh is cancelled and marks evidence stale", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-force-cancel-"));
     const previousCwd = process.cwd();
