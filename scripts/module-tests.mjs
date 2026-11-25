@@ -1,8 +1,8 @@
 // Issue #351: path-based discovery for the one reserved module test location.
 // Pure and root-relative so gate entrypoints can share it and tests can exercise
 // isolated trees. No registry, no recursion, no runtime asset discovery.
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const EXECUTABLE_TEST = /\.test\.(?:ts|mjs)$/u;
 const ROOT_TEST = /^tests\/[^/]+\.test\.(?:ts|mjs)$/u;
@@ -68,6 +68,19 @@ export function moduleSourceFiles(root) {
     walk(join(root, "modules", capability.name), `modules/${capability.name}`);
   }
   return files.sort();
+}
+
+/**
+ * Copy nested capability runtime into an isolated staging root that mirrors the
+ * shipped layout. Root sources import capabilities by relative path, so a flat
+ * copy of the root cannot resolve them.
+ */
+export function copyModuleSources(root, destination) {
+  for (const file of moduleSourceFiles(root)) {
+    const target = join(destination, file);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(root, file), target);
+  }
 }
 
 /** Whether a path is an executable unit test in one of the three reserved locations. */

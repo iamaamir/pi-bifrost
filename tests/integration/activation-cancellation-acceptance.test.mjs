@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { TYPE_SAFE_API_KEY_ENV } from "../../classifier-backends.ts";
+import { copyModuleSources } from "../../scripts/module-tests.mjs";
 
 function strictConfig(overrides = {}) {
   return {
@@ -278,6 +279,7 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
     for (const file of readdirSync(ROOT)) {
       if (file.endsWith(".ts") || file === "schema.json") copyFileSync(join(ROOT, file), join(copyDir, file));
     }
+    copyModuleSources(ROOT, copyDir);
     cpSync(join(ROOT, "ui"), join(copyDir, "ui"), { recursive: true });
     writeFileSync(join(copyDir, "index.ts"), mutantSource);
     symlinkSync(join(ROOT, "node_modules"), join(copyDir, "node_modules"));

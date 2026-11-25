@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { it } from "node:test";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
+import { copyModuleSources } from "../../scripts/module-tests.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const child = join(root, "tests", "fixtures", "native-activation-cancel-child.mjs");
@@ -230,6 +231,7 @@ it("cancels real AgentSession activation behind a proven deny-all fence", async 
       for (const file of readdirSync(root)) {
         if (file.endsWith(".ts") || file === "bifrost.json" || file === "schema.json") copyFileSync(join(root, file), join(mutantDir, file));
       }
+      copyModuleSources(root, mutantDir);
       cpSync(join(root, "ui"), join(mutantDir, "ui"), { recursive: true });
       writeFileSync(join(mutantDir, "index.ts"), source);
       symlinkSync(join(root, "node_modules"), join(mutantDir, "node_modules"));

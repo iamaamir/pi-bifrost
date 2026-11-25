@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { copyModuleSources } from "../../scripts/module-tests.mjs";
 import { it } from "node:test";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -21,6 +22,7 @@ it("detects a faulty summary that hides classifier disablement in an isolated Pi
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") || ["schema.json", "bifrost.json", "package.json"].includes(name))) {
       cpSync(join(root, file), join(copy, file));
     }
+    copyModuleSources(root, copy);
     cpSync(join(root, "ui"), join(copy, "ui"), { recursive: true });
     symlinkSync(join(root, "node_modules"), join(copy, "node_modules"), "dir");
     mkdirSync(join(copy, "tests/fixtures"), { recursive: true });
