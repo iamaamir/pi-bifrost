@@ -255,6 +255,49 @@ test("classifies Windows-style relative paths with either separator", () => {
   assert.equal(scopeOf("scripts\\tool.mjs"), "source");
   assert.equal(scopeOf("tests\\a.test.ts"), "tests");
   assert.equal(scopeOf("mutation\\run.mjs"), null);
+  // Issue #351: module runtime is source; the reserved tests subtree is tests.
+  assert.equal(scopeOf("modules/alpha/widget.ts"), "source");
+  assert.equal(scopeOf("modules\\alpha\\nested\\deep.mjs"), "source");
+  assert.equal(scopeOf("modules/alpha/tests/widget.test.ts"), "tests");
+  assert.equal(scopeOf("modules\\alpha\\tests\\widget.test.mjs"), "tests");
+  assert.equal(scopeOf("modules/alpha/tests/fixtures/helper.ts"), "tests");
+});
+
+test("inScopeFiles and analyze measure module source and module-owned tests", () => {
+  const root = fixtureRoot();
+  try {
+    mkdirSync(join(root, "modules", "alpha", "tests", "fixtures"), { recursive: true });
+    mkdirSync(join(root, "modules", "beta"), { recursive: true });
+    writeFileSync(join(root, "modules", "alpha", "widget.ts"), "export function pick(a) { return a ? 1 : 2; }\n");
+    writeFileSync(join(root, "modules", "alpha", "nested.ts"), "export const nested = 1;\n");
+    writeFileSync(join(root, "modules", "alpha", "tests", "widget.test.ts"), "test('ok', () => {});\n");
+    writeFileSync(join(root, "modules", "alpha", "tests", "fixtures", "helper.ts"), "export const helper = 1;\n");
+    writeFileSync(join(root, "modules", "beta", "thing.ts"), "export const thing = 1;\n");
+
+    assert.deepEqual(
+      inScopeFiles(root).map((f) => [f.rel, f.scope]).filter(([rel]) => rel.startsWith("modules/")).sort(),
+      [
+        ["modules/alpha/nested.ts", "source"],
+        ["modules/alpha/tests/fixtures/helper.ts", "tests"],
+        ["modules/alpha/tests/widget.test.ts", "tests"],
+        ["modules/alpha/widget.ts", "source"],
+        ["modules/beta/thing.ts", "source"],
+      ],
+    );
+    const report = analyze({ root });
+    assert.equal(report.files["modules/alpha/widget.ts"].scope, "source");
+    assert.equal(report.files["modules/alpha/widget.ts"].maxCyc, 2);
+    assert.equal(report.files["modules/alpha/tests/widget.test.ts"].scope, "tests");
+    assert.equal(report.scopes.source.files, 4);
+    assert.equal(report.scopes.tests.files, 3);
+
+    // Fault control: the previous classifier could not see any module path.
+    const oldScope = (rel) => (/^[^/]+\.(ts|mjs|cjs)$/.test(rel) || rel.startsWith("ui/") || rel.startsWith("scripts/") ? "source" : rel.startsWith("tests/") ? "tests" : null);
+    assert.equal(oldScope("modules/alpha/widget.ts"), null);
+    assert.equal(oldScope("modules/alpha/tests/widget.test.ts"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("measures .mjs and .cjs sources alongside .ts", () => {
