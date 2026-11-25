@@ -1,3 +1,5 @@
+import { log as initNotice } from "./ui/notice.ts";
+import { setProbeProgress } from "./ui/probe-progress.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
@@ -524,28 +526,31 @@ async function runInitProbe(
   state: BifrostState,
   initConfig: BifrostConfig,
   available: readonly { provider: string; id: string }[],
+  initLog: typeof log,
 ): Promise<{ workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] } | undefined> {
   let okCount = 0;
   let errCount = 0;
-  const lastModels: string[] = [];
   uiBusy(ctx, `Probing ${available.length} models...`);
-  const probeRun = await runProbe(ctx, {
-    ...probeOptionsFromConfig(initConfig.probe),
-    signal: ctx.signal,
-    onProgress: (done, total, last) => {
-      if (last.status === "ok") okCount++;
-      else if (last.status === "error" || last.status === "timeout") errCount++;
-      lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
-      if (lastModels.length > 5) lastModels.shift();
-      if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", [`Probing models: ${done}/${total}`, `  ok: ${okCount}  errors: ${errCount}`, "", ...lastModels]);
-    },
-  });
-  uiDone(ctx);
-  // The probe widget must never outlive the probe: every later exit path renders
-  // its feedback in the chat, and a stale progress panel reads as "still probing".
-  if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+  let probeRun: Awaited<ReturnType<typeof runProbe>>;
+  try {
+    probeRun = await runProbe(ctx, {
+      ...probeOptionsFromConfig(initConfig.probe),
+      signal: ctx.signal,
+      onProgress: (done, total, last) => {
+        if (last.status === "ok") okCount++;
+        else if (last.status === "error" || last.status === "timeout") errCount++;
+        setProbeProgress(ctx, { done, total, okCount, errCount });
+      },
+    });
+  } catch {
+    initLog(ctx, ctx.signal?.aborted ? "Init probing was cancelled; no configuration was changed." : "Init probing failed; no configuration was changed.", ctx.signal?.aborted ? "warning" : "error");
+    return undefined;
+  } finally {
+    uiDone(ctx);
+    if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+  }
   if (probeRun.cancelled || ctx.signal?.aborted) {
-    log(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
+    initLog(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
     return undefined;
   }
   const { results } = probeRun;
@@ -556,7 +561,7 @@ async function runInitProbe(
   const errors = results.filter((r) => r.status === "error").length;
   const timeouts = results.filter((r) => r.status === "timeout").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
-  log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
+  initLog(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   return { workingModels: results.filter((r) => r.status === "ok").map((r) => ({
     provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
   })) };
@@ -843,7 +848,7 @@ export function initRecoveryCommand(source: ReconciliationConfigSource): string 
     : `/bifrost config reconcile --source ${source} --recover`;
 }
 
-function logInitCommitFailure(ctx: ExtensionContext, error: unknown, failure: InitCommitFailureContext): void {
+function logInitCommitFailure(ctx: ExtensionContext, error: unknown, failure: InitCommitFailureContext, initLog: typeof log): void {
   const { message, diagnosis } = classifyInitCommitFailure(failure);
   debug("command", "init_commit_failure", {
     locked: failure.locked,
@@ -854,7 +859,7 @@ function logInitCommitFailure(ctx: ExtensionContext, error: unknown, failure: In
     ownership: diagnosis.ownership,
     target: failure.target,
   });
-  log(ctx, message, "error");
+  initLog(ctx, message, "error");
 }
 
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
@@ -1325,14 +1330,39 @@ async function handleConfigCommand(args: string, ctx: ExtensionContext, state: B
   await handleReconciliationCommand(args, ctx, state);
 }
 
-async function handleInit(
+async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const outcome: { messages: string[]; type?: "info" | "warning" | "error" } = { messages: [] };
+  const initLog: typeof log = (_ctx, message, type) => {
+    outcome.messages.push(message);
+    if (type === "error" || (type === "warning" && outcome.type !== "error")) outcome.type = type;
+  };
+  try {
+    await handleInitInner(args, ctx, state, initLog);
+  } catch {
+    outcome.messages = ["Init failed unexpectedly; check the configuration before retrying."];
+    outcome.type = "error";
+  } finally {
+    initNotice(ctx, "Init", outcome.messages.join("\n") || "Init did not complete.", outcome.type ?? "info");
+  }
+}
+
+function initMembershipFailureMessage(status: string, reason: string | undefined): string {
+  return status === "advisory"
+    ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
+    : reason === "no_changes"
+      ? "The refreshed catalog has no safe membership changes; no files were changed."
+      : "Init could not safely prepare a membership update (" + (reason ?? "unknown source state") + "); no files were changed.";
+}
+
+async function handleInitInner(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
+  initLog: typeof log,
 ): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   if (tokens.some((token) => !["-f", "--write", "-g"].includes(token))) {
-    log(ctx, "usage: /bifrost init [-f] [--write] [-g]", "warning");
+    initLog(ctx, "usage: /bifrost init [-f] [--write] [-g]", "warning");
     return;
   }
   const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
@@ -1372,7 +1402,7 @@ async function handleInit(
       );
       if (outcome === "aborted") {
         state.forceRegistryRefresh = true;
-        log(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
+        initLog(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
         return;
       }
       state.forceRegistryRefresh = false;
@@ -1387,7 +1417,7 @@ async function handleInit(
       }
     } catch {
       state.forceRegistryRefresh = true;
-      log(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
+      initLog(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
     } finally { uiDone(ctx); }
   }
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
@@ -1403,8 +1433,8 @@ async function handleInit(
 
   if (!reused) {
     ranProbe = true;
-    log(ctx, `Checking ${available.length} models (${describeProbeReuseReason(forced)}).`);
-    const probeRun = await runInitProbe(ctx, state, initConfig, available);
+    initLog(ctx, `Checking ${available.length} models (${describeProbeReuseReason(forced)}).`);
+    const probeRun = await runInitProbe(ctx, state, initConfig, available, initLog);
     if (!probeRun) return;
     workingModels = probeRun.workingModels;
   }
@@ -1414,7 +1444,7 @@ async function handleInit(
     const action = ranProbe
       ? "Check API keys, network, and credits; no configuration was changed."
       : "Run /bifrost init -f after checking access. Configuration unchanged.";
-    log(ctx, `No usable models found in ${source}. ${action}`, "error");
+    initLog(ctx, `No usable models found in ${source}. ${action}`, "error");
     return;
   }
 
@@ -1430,9 +1460,9 @@ async function handleInit(
   }
 
   if (ranProbe) {
-    log(ctx, `Using ${workingModels.length} working models from this check.`);
+    initLog(ctx, `Using ${workingModels.length} working models from this check.`);
   } else {
-    log(ctx, `Using ${workingModels.length} saved probe results (${probeAge} old). Run /bifrost init -f to check again.`);
+    initLog(ctx, `Using ${workingModels.length} saved probe results (${probeAge} old). Run /bifrost init -f to check again.`);
   }
 
   const models: Record<string, string[]> = {};
@@ -1457,7 +1487,7 @@ async function handleInit(
   }
 
   if (Object.values(models).every((pool) => pool.length === 0)) {
-    log(ctx, "No usable models remain in Pi's current catalog; no configuration was changed.", "error");
+    initLog(ctx, "No usable models remain in Pi's current catalog; no configuration was changed.", "error");
     return;
   }
   const probeVerified = new Set(Object.values(models).flat());
@@ -1472,7 +1502,7 @@ async function handleInit(
   let source: ReconciliationSourceSnapshot;
   try { source = readReconciliationSource(selectedSource); }
   catch {
-    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+    initLog(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
     return;
   }
   let sourceConfig: Record<string, unknown> = {};
@@ -1482,7 +1512,7 @@ async function handleInit(
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid config root");
       sourceConfig = parsed as Record<string, unknown>;
     } catch {
-      log(ctx, "Init could not safely read the selected config; no files were changed.", "error");
+      initLog(ctx, "Init could not safely read the selected config; no files were changed.", "error");
       return;
     }
   }
@@ -1497,11 +1527,11 @@ async function handleInit(
       inheritedTiers = inherited.tierNames;
       const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
       if (shadowedTiers.length > 0) {
-        log(ctx, `Init would shadow inherited model pools (${shadowedTiers.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
+        initLog(ctx, `Init would shadow inherited model pools (${shadowedTiers.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
         return;
       }
     } catch {
-      log(ctx, "Init could not safely read inherited config; no configuration was changed.", "error");
+      initLog(ctx, "Init could not safely read inherited config; no configuration was changed.", "error");
       return;
     }
   }
@@ -1541,7 +1571,7 @@ async function handleInit(
       ? `${probeChoices[0].provider}/${probeChoices[0].model}`
       : undefined;
     if (!classifierModel) {
-      log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
+      initLog(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
     }
   }
   const effectiveClassifierSummary = !classifierEnabled ? "off"
@@ -1640,7 +1670,7 @@ async function handleInit(
           const ownershipBytes = source.ownershipBytes ?? Buffer.from(JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n", "utf8");
           if (nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
             || !prospectiveConfigInstallable(source.source, nextConfigBytes, state)) {
-            log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+            initLog(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
             return;
           }
           transaction = {
@@ -1655,7 +1685,7 @@ async function handleInit(
           changes = [];
         } else {
           if (source.ownershipBytes !== null) {
-            log(ctx, "The refreshed catalog has no safe membership or settings changes; no files were changed.");
+            initLog(ctx, "The refreshed catalog has no safe membership or settings changes; no files were changed.");
             return;
           }
           // Empty ownership claims make existing entries explicitly manual without rewriting config.
@@ -1672,11 +1702,7 @@ async function handleInit(
           changes = [];
         }
       } else {
-      log(ctx, plan.status === "advisory"
-        ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
-        : plan.reason === "no_changes"
-          ? "The refreshed catalog has no safe membership changes; no files were changed."
-          : "Init could not safely prepare a membership update (" + (plan.reason ?? "unknown source state") + "); no files were changed.",
+      initLog(ctx, initMembershipFailureMessage(plan.status, plan.reason),
       plan.reason === "no_changes" ? undefined : "warning");
       return;
       }
@@ -1691,7 +1717,7 @@ async function handleInit(
       const nextConfigBytes = Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8");
       if (nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
         || !prospectiveConfigInstallable(source.source, nextConfigBytes, state)) {
-        log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+        initLog(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
         return;
       }
       transaction = { ...plan.transaction, nextConfigBytes };
@@ -1699,12 +1725,12 @@ async function handleInit(
     }
   } else {
     if (source.ownershipBytes !== null) {
-      log(ctx, "Init found an ownership receipt without its config and cannot safely replace it.", "error");
+      initLog(ctx, "Init found an ownership receipt without its config and cannot safely replace it.", "error");
       return;
     }
     const ownership = buildInitOwnershipReceipt(models);
     if (!ownership) {
-      log(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
+      initLog(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
       return;
     }
     const installProposal = Object.fromEntries(Object.entries(proposal)
@@ -1714,7 +1740,7 @@ async function handleInit(
     if (configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
       || ownershipBytes.byteLength > 5_000_000
       || !prospectiveConfigInstallable(source.source, configBytes, state)) {
-      log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+      initLog(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
       return;
     }
     transaction = {
@@ -1757,12 +1783,12 @@ async function handleInit(
   ].filter(Boolean));
 
   if (uncategorized.length > 0) {
-    log(ctx, `${uncategorized.length} model(s) uncategorized — edit ${source.configPath} to assign them.`);
+    initLog(ctx, `${uncategorized.length} model(s) uncategorized — edit ${source.configPath} to assign them.`);
   }
 
   const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
   if (!ctx.hasUI && !writeWithoutPrompt) {
-    log(ctx, "run in TUI or use --write to persist", "warning");
+    initLog(ctx, "run in TUI or use --write to persist", "warning");
     return;
   }
 
@@ -1771,12 +1797,12 @@ async function handleInit(
     `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
   );
   if (!ok) {
-    log(ctx, "config not written");
+    initLog(ctx, "config not written");
     return;
   }
 
   if (ctx.signal?.aborted) {
-    log(ctx, "Init was cancelled before the reviewed update could be saved.", "warning");
+    initLog(ctx, "Init was cancelled before the reviewed update could be saved.", "warning");
     return;
   }
   const currentKeys = ctx.modelRegistry.getAvailable().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
@@ -1794,28 +1820,28 @@ async function handleInit(
   }
   if (refreshReceiptChanged || currentKeys.length !== plannedKeys.length
     || currentKeys.some((key, index) => key !== plannedKeys[index])) {
-    log(ctx, "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.", "warning");
+    initLog(ctx, "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.", "warning");
     return;
   }
   let currentSource: ReconciliationSourceSnapshot;
   try { currentSource = readReconciliationSource(selectedSource); }
   catch {
-    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+    initLog(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
     return;
   }
   try {
     for (const { path, text } of inheritedSources) {
       if (readInheritedConfigSnapshot(path) !== text) {
-        log(ctx, "Inherited config changed while Init was awaiting confirmation; no files were changed. Retry to review the new configuration.", "warning");
+        initLog(ctx, "Inherited config changed while Init was awaiting confirmation; no files were changed. Retry to review the new configuration.", "warning");
         return;
       }
     }
   } catch {
-    log(ctx, "Inherited config could not be checked; no files were changed.", "warning");
+    initLog(ctx, "Inherited config could not be checked; no files were changed.", "warning");
     return;
   }
   if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {
-    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+    initLog(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
     return;
   }
   const targetDirectory = dirname(source.configPath);
@@ -1847,7 +1873,7 @@ async function handleInit(
       journalPath: transaction.journalPath,
       target: initSourceLabel(source),
       recoveryCommand: initRecoveryCommand(source.source),
-    });
+    }, initLog);
     return;
   }
 
@@ -1868,10 +1894,8 @@ async function handleInit(
     cwd: process.cwd(),
     enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
-  log(ctx, `updated ${initSourceLabel(source)} and reloaded config`);
-  log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
   const classifier = state.effectiveClassifierBackend(state.config, ctx);
-  log(ctx, `Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`);
+  initLog(ctx, `Updated ${initSourceLabel(source)} and reloaded config. Routing ${state.enabled ? "enabled" : "disabled"} with ${Object.keys(state.config.models ?? {}).length} tier(s). Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`);
 
   // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
@@ -3450,8 +3474,23 @@ export function createCommandRouter(
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
 
-      const probeRun = await runProbe(ctx, { ...probeOptionsFromConfig(state.config.probe), signal: ctx.signal });
-      uiDone(ctx);
+      let okCount = 0;
+      let errCount = 0;
+      let probeRun: Awaited<ReturnType<typeof runProbe>>;
+      try {
+        probeRun = await runProbe(ctx, {
+          ...probeOptionsFromConfig(state.config.probe),
+          signal: ctx.signal,
+          onProgress: (done, total, last) => {
+            if (last.status === "ok") okCount++;
+            else if (last.status === "error" || last.status === "timeout") errCount++;
+            setProbeProgress(ctx, { done, total, okCount, errCount });
+          },
+        });
+      } finally {
+        uiDone(ctx);
+        if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+      }
       if (probeRun.cancelled || ctx.signal?.aborted) {
         log(ctx, "Probe was cancelled; partial results were not saved.", "warning");
         return;
@@ -3499,13 +3538,13 @@ export function createCommandRouter(
       uiOutput(ctx, lines);
 
       if (ok.length < results.length) {
-        log(
-          ctx,
-          `${ok.length}/${results.length} models responded. Check ${path} for details.`,
-          "warning",
-        );
+        const message = `${ok.length}/${results.length} models responded. Check ${path} for details.`;
+        if (ctx.hasUI && ctx.mode === "tui") initNotice(ctx, "Probe", message, "warning");
+        else log(ctx, message, "warning");
       } else if (ok.length > 0) {
-        log(ctx, `All ${ok.length} models responded successfully.`);
+        const message = `All ${ok.length} models responded successfully.`;
+        if (ctx.hasUI && ctx.mode === "tui") initNotice(ctx, "Probe", message, "success");
+        else log(ctx, message);
       }
 
       // Clear the probe widget so results don't persist in the TUI.

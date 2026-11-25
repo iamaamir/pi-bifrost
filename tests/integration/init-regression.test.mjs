@@ -125,6 +125,31 @@ function runInit({ home, work, args, extensionPath = EXTENSION, prompt = `/bifro
   });
 }
 
+async function runRpcInit(env, args, command = "init") {
+  const base = Object.fromEntries(["PATH", "TMPDIR", "LANG", "TERM"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
+  const child = spawn(PI, ["-e", env.extensionPath, "--approve", "--no-tools", "--no-session", "--mode", "rpc"], {
+    cwd: env.work, env: { ...base, HOME: env.home, PI_CODING_AGENT_DIR: join(env.home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.address().port}`, BIFROST_TEST_NETWORK_VIOLATIONS: join(env.home, "network-violations.log") }, stdio: ["pipe", "pipe", "pipe"],
+  });
+  const records = [];
+  let buffer = "", stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stdout.on("data", (chunk) => {
+    const lines = (buffer + chunk).split("\n"); buffer = lines.pop();
+    for (const line of lines) { try { records.push(JSON.parse(line)); } catch {} }
+  });
+  try {
+    child.stdin.write(`${JSON.stringify({ id: "init", type: "prompt", message: `/bifrost ${command} ${args}` })}\n`);
+    const deadline = Date.now() + 30000;
+    while (!records.some((r) => r.type === "response" && r.id === "init")) {
+      if (Date.now() > deadline || child.exitCode !== null) throw new Error(`RPC init failed: ${stderr} ${JSON.stringify(records)}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(records.find((r) => r.id === "init" && r.type === "response").success, true);
+    assert.equal(existsSync(join(env.home, "network-violations.log")) ? readFileSync(join(env.home, "network-violations.log"), "utf8") : "", "");
+    return records;
+  } finally { child.kill(); await new Promise((resolve) => child.once("close", resolve)); }
+}
+
 function globalPrivateSettings(revision = "BEFORE") {
   return {
     classifier: {
@@ -462,6 +487,44 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
+  it("shows RPC progress then clears it before the init outcome, including cached and forced runs", async () => {
+    const env = fixture(port, ["healthy", "credits-exhausted"]);
+    try {
+      requests = [];
+      const fresh = await runRpcInit(env, "--write");
+      const check = (records) => {
+        const progress = records.findIndex((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.some((line) => /Probing models:/.test(line)));
+        const clear = records.findIndex((r, i) => i > progress && r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.length === 0);
+        assert.ok(progress >= 0 && clear > progress, JSON.stringify(records));
+        assert.ok(records.slice(clear + 1).some((r) => r.method === "notify"), JSON.stringify(records));
+      };
+      check(fresh);
+      requests = [];
+      const cached = await runRpcInit(env, "--write");
+      assert.deepEqual(requests, []);
+      assert.ok(!cached.some((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.some((line) => /Probing models:/.test(line))));
+      assert.ok(cached.some((r) => r.method === "notify" && /saved probe results/i.test(r.message)));
+      requests = [];
+      const forced = await runRpcInit(env, "-f --write");
+      assert.deepEqual([...new Set(requests)].sort(), ["credits-exhausted", "healthy"]);
+      check(forced);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
+  it("shows standalone probe progress and clears it before the outcome", async () => {
+    const env = fixture(port, ["healthy", "credits-exhausted"]);
+    try {
+      requests = [];
+      const records = await runRpcInit(env, "", "probe");
+      assert.deepEqual([...new Set(requests)].sort(), ["credits-exhausted", "healthy"]);
+      const progress = records.findIndex((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.some((line) => /Probing models:/.test(line)));
+      const clear = records.findIndex((r, i) => i > progress && r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.length === 0);
+      assert.ok(progress >= 0 && clear > progress, JSON.stringify(records));
+      assert.ok(records.slice(clear + 1).some((r) => r.method === "notify" && /responded/.test(r.message)), JSON.stringify(records));
+      assert.ok(existsSync(join(env.work, ".pi", "bifrost-probe.json")));
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   it("uses a complete recent probe cache on ordinary init and refreshes it on forced init", async () => {
     requests = [];
     const env = fixture(port, ["healthy", "credits-exhausted"]);
@@ -747,15 +810,20 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     const journalPath = join(env.work, ".pi", "bifrost-reconcile.journal");
     const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
     try {
+      writeFileSync(join(env.work, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fake", model: "healthy", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 8 },
+      ]));
       const result = await runInit({
         ...env,
         args: "--write",
         env: { BIFROST_TEST_FAIL_OWNERSHIP_RENAME: "1" },
       });
       const output = result.stdout + result.stderr;
+      assert.deepEqual(requests, [], "commit fault must use cached probes");
+      assert.equal((output.match(/\[bifrost\] Init:/gu) ?? []).length, 1, output);
       assert.equal(result.timedOut, false);
       assert.equal(result.violations, "");
-      assert.match(output, /could not finish the reviewed membership update/u);
+      assert.match(output, /\[bifrost\] Init:[\s\S]*could not finish the reviewed membership update/u);
       assert.match(output, /already holds the planned configuration/u);
       assert.match(output, /a reconciliation journal is pending/u);
       assert.match(output, /\/bifrost config reconcile --recover/u);

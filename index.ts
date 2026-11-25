@@ -1,3 +1,4 @@
+import { registerBifrostNotices } from "./ui/notice.ts";
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent, AgentBeforeSettleEvent, SessionMessageEntry, ModelRouteRequest, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -646,6 +647,7 @@ function classifierRetryAt(value: string, now: number): number | undefined {
 }
 
 export default function bifrostExtension(pi: ExtensionAPI) {
+  registerBifrostNotices(pi);
   const extensionDir = fileURLToPath(new URL(".", import.meta.url));
 
   // Setup debug logging first — so startup errors are captured.
