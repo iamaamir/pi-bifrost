@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, test } from "node:test";
 import { acquirePackLock } from "./fixtures/pack-lock.mjs";
-import { moduleSourceFiles } from "../scripts/module-tests.mjs";
 
 const require = createRequire(import.meta.url);
 const typescriptCompiler = require.resolve("typescript/bin/tsc");
@@ -100,6 +99,28 @@ function packageJsonOf(packageRoot) {
   return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 }
 
+/** Publication inventory: runtime TS including declarations, never test artifacts. */
+function modulePublishedFiles(root) {
+  const files = [];
+  const walk = (directory, prefix) => {
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      const rel = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name !== "tests") walk(join(directory, entry.name), rel);
+      } else if (entry.isFile() && entry.name.endsWith(".ts") && !/\.test\.(?:ts|mjs)$/u.test(entry.name)) {
+        files.push(rel);
+      }
+    }
+  };
+  try {
+    walk("modules", "modules");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return files.sort();
+}
+
 const TYPES_CONSUMER = `
   import { createRouter, type RouterSnapshot, type RouterResolveResult } from "pi-bifrost/router";
   const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
@@ -152,7 +173,7 @@ describe("packed experimental router consumer", () => {
       const archivePaths = packed.files.map((file) => file.path);
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const uiSources = readdirSync(join(process.cwd(), "ui")).filter((path) => path.endsWith(".ts")).map((path) => `ui/${path}`);
-      const moduleSources = moduleSourceFiles(process.cwd());
+      const moduleSources = modulePublishedFiles(process.cwd());
       assert.deepEqual(packageJsonOf(packageRoot).exports["./router"], {
         types: "./dist/router/router.d.ts",
         import: "./dist/router/router.js",
@@ -421,6 +442,7 @@ test("native packlist ships module runtime TS recursively and excludes module-lo
   const tree = {
     "index.ts": "export const root = 1;\n",
     "modules/alpha/widget.ts": "export const widget = 1;\n",
+    "modules/alpha/types.d.ts": "export declare const typed: number;\n",
     "modules/alpha/nested/deep.ts": "export const deep = 1;\n",
     "modules/alpha/tests/widget.test.ts": "test('x', () => {});\n",
     "modules/alpha/tests/fixtures/helper.ts": "export const helper = 1;\n",
@@ -433,9 +455,16 @@ test("native packlist ships module runtime TS recursively and excludes module-lo
   let fault;
   try {
     packed = packFixture(manifest.files, tree);
-    for (const required of ["index.ts", "modules/alpha/widget.ts", "modules/alpha/nested/deep.ts", "modules/beta/thing.ts"]) {
+    for (const required of [
+      "index.ts", "modules/alpha/widget.ts", "modules/alpha/types.d.ts",
+      "modules/alpha/nested/deep.ts", "modules/beta/thing.ts",
+    ]) {
       assert.ok(packed.paths.includes(required), `archive must ship runtime source ${required}`);
     }
+    assert.deepEqual(modulePublishedFiles(packed.directory), [
+      "modules/alpha/nested/deep.ts", "modules/alpha/types.d.ts",
+      "modules/alpha/widget.ts", "modules/beta/thing.ts",
+    ]);
     for (const forbidden of [
       "modules/alpha/tests/widget.test.ts", "modules/alpha/tests/fixtures/helper.ts",
       "modules/alpha/README.md", "modules/alpha/widget.test.ts",

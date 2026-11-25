@@ -404,6 +404,15 @@ test("module production cannot import a dev dependency or a colocated test", () 
   assert.deepEqual(tooling.map((finding) => finding.rule), ["production-no-repository-tooling"]);
 });
 
+test("module production cannot import a helper from a nested tests subtree", () => {
+  const findings = cruiseFixture({
+    "modules/alpha/widget.ts": 'import { helper } from "./internal/tests/helper.mjs";\nexport const value = helper;\n',
+    "modules/alpha/internal/tests/helper.mjs": "export const helper = 1;\n",
+  });
+  assert.deepEqual(findings.map((finding) => finding.rule), ["production-no-repository-tooling"],
+    "the repository-tooling boundary must cover every tests/ subtree under modules");
+});
+
 test("a module test importing its production source is a legal edge", () => {
   const findings = cruiseFixture({
     "modules/alpha/widget.ts": "export const widget = 1;\n",

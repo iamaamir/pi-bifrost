@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, matchesGlob } from "node:path";
@@ -11,6 +12,9 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const knipSource = readFileSync(join(root, "knip.jsonc"), "utf8");
 const tsconfig = JSON.parse(readFileSync(join(root, "tsconfig.json"), "utf8"));
+// Launch TypeScript's JS entrypoint directly: node_modules/.bin/tsc is an
+// extensionless shim on Windows that execFileSync cannot start without a shell.
+const tsCompiler = createRequire(join(root, "package.json")).resolve("typescript/bin/tsc");
 const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
 const workflowDirectory = join(root, ".github", "workflows");
 const workflows = readdirSync(workflowDirectory)
@@ -343,7 +347,7 @@ test("a type error in an orphan module file is invisible without the include and
         compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", noEmit: true, skipLibCheck: true, types: [] },
         include,
       }));
-      return spawnSync(join(root, "node_modules", ".bin", "tsc"), ["--noEmit", "-p", dir], { encoding: "utf8" });
+      return spawnSync(process.execPath, [tsCompiler, "--noEmit", "-p", dir], { encoding: "utf8" });
     };
     const without = run(tsconfig.include.filter((glob) => glob !== "modules/**/*.ts"));
     assert.equal(without.status, 0, `unscoped module file must be outside the program: ${without.stderr}`);

@@ -56,7 +56,8 @@ export function moduleSourceFiles(root) {
         const rel = `${prefix}/${entry.name}`;
         if (entry.isDirectory()) {
           if (entry.name !== "tests") walk(join(directory, entry.name), rel);
-        } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
+        } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")
+          && !/\.test\.(?:ts|mjs)$/u.test(entry.name)) {
           files.push(rel);
         }
       }

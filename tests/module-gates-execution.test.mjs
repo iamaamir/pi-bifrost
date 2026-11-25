@@ -57,7 +57,12 @@ function run(dir, command, args) {
   // c8 defaults its temp directory to NODE_V8_COVERAGE. Point the fixture at
   // its own path so a child c8 cannot race the outer coverage run's temp dir.
   env.NODE_V8_COVERAGE = join(dir, "v8-coverage");
-  return execFileSync(command, args, { cwd: dir, encoding: "utf8", timeout: 120_000, stdio: "pipe", env });
+  return execFileSync(command, args, {
+    cwd: dir, encoding: "utf8", timeout: 120_000, stdio: "pipe", env,
+    // npm is npm.cmd on Windows; Node refuses .cmd without a shell. Args are
+    // constants, so the shell adds no injection surface.
+    shell: command === "npm" && process.platform === "win32",
+  });
 }
 
 function assertNamedOnce(output, label) {

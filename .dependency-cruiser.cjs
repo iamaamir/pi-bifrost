@@ -16,7 +16,7 @@ const ADAPTER_OWNERS = "^(index|commands)\\.ts$";
 // Capability production files join the shipped-root protections. The reserved
 // `tests/` subtree stays a test location and never becomes production.
 const PRODUCTION_ROOTS = "^(?:[^/]+|ui/[^/]+|modules/(?!.*(?:^|/)tests/).+)\\.ts$";
-const REPOSITORY_TOOLING = "^(?:scripts|tests)/|^modules/[^/]+/tests/";
+const REPOSITORY_TOOLING = "^(?:scripts|tests)/|^modules/[^/]+/tests/|^modules/[^/]+/.+/tests/";
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
