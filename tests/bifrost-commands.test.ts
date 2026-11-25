@@ -4943,3 +4943,62 @@ it("reports unexpected init errors once without exposing exception text", async 
   assert.match(String(notices[0].value), /failed unexpectedly/);
   assert.doesNotMatch(String(notices[0].value), /secret-token/);
 });
+
+describe("progress terminal cancellation", () => {
+  for (const phase of ["refresh", "init probe", "standalone probe"] as const) {
+    it(`consumes Escape during ${phase} and removes the listener`, async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "bifrost-terminal-cancel-"));
+      const previousCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        mkdirSync(join(tempDir, ".pi"));
+        const paths = ["bifrost.json", "bifrost-probe.json", "bifrost-reliability.json"].map((name) => join(tempDir, ".pi", name));
+        const original = [Buffer.from('{"models":{}}\n'), Buffer.from('{"results":[]}\n'), Buffer.from('{"version":1,"models":{}}\n')];
+        paths.forEach((path, index) => writeFileSync(path, original[index]));
+        const model = makeModel("fixture", "chat");
+        const { ctx, calls } = makeCtx([model]);
+        const host = ctx as any;
+        host.ui.confirm = async () => true;
+        let listener: ((data: string) => unknown) | undefined;
+        let removals = 0;
+        host.ui.onTerminalInput = (callback: typeof listener) => {
+          assert.equal(listener, undefined);
+          listener = callback;
+          return () => { listener = undefined; removals++; };
+        };
+        let ready!: (signal: AbortSignal) => void;
+        const started = new Promise<AbortSignal>((resolve) => { ready = resolve; });
+        const registry = host.modelRegistry;
+        registry.getAll = () => [model];
+        registry.getProviderAuthStatus = () => ({ configured: true });
+        registry.refresh = ({ signal }: { signal: AbortSignal }) => {
+          if (phase !== "refresh") return Promise.resolve({ aborted: false, errors: new Map() });
+          ready(signal);
+          return new Promise(() => {});
+        };
+        registry.streamSimple = (_model: unknown, _context: unknown, options: { signal: AbortSignal }) => {
+          ready(options.signal);
+          return { result: () => new Promise((_resolve, reject) => {
+            options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }) };
+        };
+        const state = makeState() as any;
+        const pending = createCommandRouter(state)(phase === "standalone probe" ? "probe" : "init -f", ctx);
+        const signal = await started;
+        assert.ok(listener);
+        assert.equal(listener("x"), undefined);
+        assert.equal(signal.aborted, false);
+        assert.deepEqual(listener("\x1b"), { consume: true });
+        assert.equal(signal.aborted, true);
+        await pending;
+        assert.equal(listener, undefined);
+        assert.equal(removals, phase === "init probe" ? 2 : 1);
+        assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("cancelled")));
+        paths.forEach((path, index) => assert.deepEqual(readFileSync(path), original[index], `${path} must remain byte-for-byte unchanged`));
+      } finally {
+        process.chdir(previousCwd);
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  }
+});

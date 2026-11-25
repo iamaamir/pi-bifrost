@@ -1,5 +1,6 @@
 import { log as initNotice } from "./ui/notice.ts";
-import { setProbeProgress } from "./ui/probe-progress.ts";
+import { clearProbeProgress, setProbeProgress } from "./ui/probe-progress.ts";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
@@ -284,12 +285,12 @@ async function uiResult(ctx: ExtensionContext, title: string, lines: string[]): 
 export function clearBifrostWidgets(ctx: ExtensionContext) {
   if (ctx.mode === "tui" && ctx.hasUI) {
     ctx.ui.setWidget("bifrost-output", []);
-    ctx.ui.setWidget("bifrost-probe", []);
+    clearProbeProgress(ctx);
   }
 }
 
 function clearProbeWidget(ctx: ExtensionContext) {
-  if (ctx.hasUI && typeof ctx.ui.setWidget === "function") ctx.ui.setWidget("bifrost-probe", []);
+  clearProbeProgress(ctx);
 }
 
 export function syncBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeStatusState) {
@@ -525,6 +526,18 @@ export function buildInitProposal(
 
 const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
 
+async function withProgressCancellation<T>(ctx: ExtensionContext, run: (signal: AbortSignal | undefined, cancellable: boolean) => Promise<T>): Promise<T> {
+  if (ctx.mode !== "tui" || !ctx.hasUI || typeof ctx.ui.onTerminalInput !== "function") return run(ctx.signal, false);
+  const controller = new AbortController();
+  const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+  const unsubscribe = ctx.ui.onTerminalInput((data) => {
+    if (!matchesKey(data, Key.escape)) return undefined;
+    controller.abort();
+    return { consume: true };
+  });
+  try { return await run(signal, true); } finally { unsubscribe(); }
+}
+
 async function runInitProbe(
   ctx: ExtensionContext,
   state: BifrostState,
@@ -535,20 +548,20 @@ async function runInitProbe(
   let okCount = 0;
   let errCount = 0;
   uiBusy(ctx, `Probing ${available.length} models...`);
-  setProbeProgress(ctx, { done: 0, total: available.length, okCount, errCount });
   let probeRun: Awaited<ReturnType<typeof runProbe>>;
+  let probeSignal = ctx.signal;
   try {
-    probeRun = await runProbe(ctx, {
+    probeRun = await withProgressCancellation(ctx, (signal, cancellable) => { probeSignal = signal; setProbeProgress(ctx, { done: 0, total: available.length, okCount, errCount }, cancellable); return runProbe(ctx, {
       ...probeOptionsFromConfig(initConfig.probe),
-      signal: ctx.signal,
+      signal,
       onProgress: (done, total, last) => {
         if (last.status === "ok") okCount++;
         else if (last.status === "error" || last.status === "timeout") errCount++;
-        setProbeProgress(ctx, { done, total, okCount, errCount });
+        setProbeProgress(ctx, { done, total, okCount, errCount }, cancellable);
       },
-    });
+    }); });
   } catch {
-    initLog(ctx, ctx.signal?.aborted ? "Init probing was cancelled; no configuration was changed." : "Init probing failed; no configuration was changed.", ctx.signal?.aborted ? "warning" : "error");
+    initLog(ctx, probeSignal?.aborted ? "Init probing was cancelled; no configuration was changed." : "Init probing failed; no configuration was changed.", probeSignal?.aborted ? "warning" : "error");
     return undefined;
   } finally {
     uiDone(ctx);
@@ -1375,7 +1388,6 @@ async function handleInitInner(
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
-  setProbeProgress(ctx, { phase: "preparing" });
   let initRefreshReceipt: { catalogKeys: string[]; evidence: Map<string, object> } | undefined;
   let refreshedCatalogKeys: string[] | undefined;
   let refreshedProviders: string[] = [];
@@ -1385,9 +1397,9 @@ async function handleInitInner(
     ));
     uiBusy(ctx, "Refreshing Pi's model catalog...");
     try {
-      const outcome = await waitForRegistryRefresh(
+      const outcome = await withProgressCancellation(ctx, (cancelSignal, cancellable) => { setProbeProgress(ctx, { phase: "preparing" }, cancellable); return waitForRegistryRefresh(
         (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, ...(signal ? { signal } : {}) }),
-        ctx.signal,
+        cancelSignal,
         (result) => {
           let knownProviders: string[] = [];
           try {
@@ -1406,7 +1418,7 @@ async function handleInitInner(
             });
           }
         },
-      );
+      ); });
       if (outcome === "aborted") {
         state.forceRegistryRefresh = true;
         initLog(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
@@ -3489,18 +3501,19 @@ export function createCommandRouter(
       let okCount = 0;
       let errCount = 0;
       let probeRun: Awaited<ReturnType<typeof runProbe>>;
+      let probeSignal = ctx.signal;
       try {
-        probeRun = await runProbe(ctx, {
+        probeRun = await withProgressCancellation(ctx, (signal, cancellable) => { probeSignal = signal; setProbeProgress(ctx, { done: 0, total: available.length, okCount, errCount }, cancellable); return runProbe(ctx, {
           ...probeOptionsFromConfig(state.config.probe),
-          signal: ctx.signal,
+          signal,
           onProgress: (done, total, last) => {
             if (last.status === "ok") okCount++;
             else if (last.status === "error" || last.status === "timeout") errCount++;
-            setProbeProgress(ctx, { done, total, okCount, errCount });
+            setProbeProgress(ctx, { done, total, okCount, errCount }, cancellable);
           },
-        });
+        }); });
       } catch {
-        log(ctx, ctx.signal?.aborted ? "Probe was cancelled; partial results were not saved." : "Probe failed unexpectedly; check the configuration before retrying.", ctx.signal?.aborted ? "warning" : "error");
+        log(ctx, probeSignal?.aborted ? "Probe was cancelled; partial results were not saved." : "Probe failed unexpectedly; check the configuration before retrying.", probeSignal?.aborted ? "warning" : "error");
         return;
       } finally {
         uiDone(ctx);
