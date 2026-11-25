@@ -3,6 +3,7 @@
 // no production capability is added to the checkout.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,7 +128,26 @@ test("misplaced test-suffix paths are rejected while legitimate locations are ac
   assert.equal(isExecutableTest("modules\\alpha\\tests\\checks.test.mjs"), true, "Windows separators normalize");
 });
 
-test("full, coverage, quick, and acceptance unit gates all include module tests", () => {
+test("every test-suffix file in the repository inventory sits in a reserved location", () => {
+  const { misplacedTestFiles } = moduleHelper;
+  // The real inventory, not a path example: an untracked file must fail locally
+  // before review, and a tracked one must fail CI.
+  const inventory = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+    cwd: ROOT, encoding: "utf8",
+  }).split("\0").filter(Boolean);
+  const tests = inventory.filter((path) => /\.test\.(?:ts|mjs)$/u.test(path));
+  assert.ok(tests.length > 100, `the inventory must enumerate the existing suite, found ${tests.length}`);
+  assert.deepEqual(misplacedTestFiles(tests), [], "every test-suffix file must be runnable by a reserved gate glob");
+  assert.deepEqual(misplacedTestFiles([
+    "tests/routing.test.ts",
+    "modules/alpha/tests/case.test.ts",
+    "modules/alpha/widget.test.ts",
+    "modules/alpha/tests/fixtures/deep/case.test.ts",
+  ]), ["modules/alpha/widget.test.ts", "modules/alpha/tests/fixtures/deep/case.test.ts"],
+  "the same rejection must go red for a misplaced inventory entry");
+});
+
+test("full, coverage, quick, and acceptance unit gates all include module tests", async () => {
   const pkg = JSON.parse(readFileSync(new URL("package.json", ROOT), "utf8"));
   for (const script of ["test", "test:coverage"]) {
     assert.match(pkg.scripts[script], /modules\/\*\/tests\/\*\.test\.ts/u, `${script} must include TS module tests`);
@@ -141,11 +161,13 @@ test("full, coverage, quick, and acceptance unit gates all include module tests"
   assert.match(quick, /rootFiles\.length < 90/u, "the root-only canary must remain");
   assert.match(quick, /const HEAVY = new Set\(\[/u, "heavy root exclusions must remain");
 
-  const acceptance = readFileSync(new URL("scripts/acceptance.mjs", ROOT), "utf8");
-  const gate = acceptance.match(/\["test", \{ paths: \[([\s\S]*?)\] \}\]/u);
-  assert.ok(gate, "the acceptance unit gate must exist");
-  assert.match(gate[1], /modules\/\*\/tests\/\*\.test\.ts/u);
-  assert.match(gate[1], /modules\/\*\/tests\/\*\.test\.mjs/u);
-  assert.match(acceptance, /\["test:integration", \{ paths: \["tests\/integration\/\*\.test\.mjs"\] \}\]/u,
+  // Assert the executor's real gate definition rather than scraping its source;
+  // tests/module-gates-execution.test.mjs then runs the identical argv.
+  const { NODE_TEST_GATES } = await import(new URL("scripts/acceptance.mjs", ROOT).href);
+  const unit = NODE_TEST_GATES.get("test");
+  assert.ok(unit, "the acceptance unit gate must exist");
+  assert.ok(unit.paths.includes("modules/*/tests/*.test.ts"));
+  assert.ok(unit.paths.includes("modules/*/tests/*.test.mjs"));
+  assert.deepEqual(NODE_TEST_GATES.get("test:integration").paths, ["tests/integration/*.test.mjs"],
     "the integration gate must stay separate");
 });

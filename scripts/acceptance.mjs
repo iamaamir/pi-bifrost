@@ -17,10 +17,22 @@ const MAX_CAPTURE_BYTES = 256 * 1024;
 const MAX_REPORTER_LINE_BYTES = 1024 * 1024;
 const MAX_REPORTER_EVENTS = 20_000;
 const MAX_REPORTER_EVENT_BYTES = 16 * 1024 * 1024;
-const NODE_TEST_GATES = new Map([
+export const NODE_TEST_GATES = new Map([
   ["test", { paths: ["tests/*.test.ts", "tests/*.test.mjs", "modules/*/tests/*.test.ts", "modules/*/tests/*.test.mjs"] }],
   ["test:integration", { paths: ["tests/integration/*.test.mjs"] }],
 ]);
+
+/** Exact argv for a structured-reporting unit gate; shared with its test so the
+ *  suite exercises the executor's real selection rather than a copy of it. */
+export function nodeTestArgs({ gate, reporterPath }) {
+  return [
+    "--test",
+    "--experimental-strip-types",
+    `--test-reporter=${reporterPath}`,
+    ...(gate.pattern ? [`--test-name-pattern=${gate.pattern}`] : []),
+    ...gate.paths,
+  ];
+}
 let receivedSignal;
 // Per-child termination state so concurrent gates can each be signalled and
 // awaited independently. The single-child path is unchanged.
@@ -318,13 +330,7 @@ async function executeVerificationGate({ root, script, testEvents, artifactDir }
   }
   const reporterPath = join(root, "scripts", "acceptance", "test-event-reporter.mjs");
   let malformedEvent = false;
-  const result = await runChild(process.execPath, [
-    "--test",
-    "--experimental-strip-types",
-    `--test-reporter=${reporterPath}`,
-    ...(testGate.pattern ? [`--test-name-pattern=${testGate.pattern}`] : []),
-    ...testGate.paths,
-  ], {
+  const result = await runChild(process.execPath, nodeTestArgs({ gate: testGate, reporterPath }), {
     cwd: root,
     env: gateEnvironment.env,
     onStdoutLine(line) {

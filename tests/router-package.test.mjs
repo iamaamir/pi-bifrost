@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import { after, before, describe, it, test } from "node:test";
+import ts from "typescript";
 import { acquirePackLock } from "./fixtures/pack-lock.mjs";
 
 const require = createRequire(import.meta.url);
@@ -64,18 +65,49 @@ function installPackedPackage(cache, consumer) {
   return packed;
 }
 
-function installedRouterFiles(consumer) {
-  const packageRoot = join(consumer, "node_modules", "pi-bifrost");
-  const routerFiles = [];
-  const walk = (directory, prefix) => {
-    for (const entry of readdirSync(join(packageRoot, directory), { withFileTypes: true })) {
-      const relative = `${prefix}/${entry.name}`;
-      if (entry.isDirectory()) walk(relative, relative);
-      else if (entry.isFile()) routerFiles.push(relative);
+function listFiles(directory, prefix = "") {
+  const files = [];
+  const walk = (relative) => {
+    for (const entry of readdirSync(join(directory, relative), { withFileTypes: true })) {
+      const child = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.isFile()) files.push(prefix ? `${prefix}/${child}` : child);
     }
   };
-  walk("dist/router", "dist/router");
-  return { packageRoot, routerFiles: routerFiles.sort() };
+  walk("");
+  return files.sort();
+}
+
+function installedRouterFiles(consumer) {
+  const packageRoot = join(consumer, "node_modules", "pi-bifrost");
+  return { packageRoot, routerFiles: listFiles(join(packageRoot, "dist", "router"), "dist/router") };
+}
+
+/**
+ * Compiled JS and declaration inventory derived from the entry's source import
+ * closure, not from the emitted directory. An output the build failed to write
+ * therefore shows up as a gap instead of silently shrinking the expectation.
+ */
+function expectedRouterInventory(entry, root) {
+  const sources = new Set();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.shift();
+    if (sources.has(file)) continue;
+    sources.add(file);
+    for (const imported of ts.preProcessFile(readFileSync(join(root, file), "utf8"), true, true).importedFiles) {
+      if (!imported.fileName.startsWith("./")) continue;
+      const resolved = normalize(join(dirname(file), imported.fileName)).split("\\").join("/");
+      if (resolved.endsWith(".ts")) queue.push(resolved);
+    }
+  }
+  return [...sources]
+    .flatMap((file) => [`dist/router/${file.slice(0, -3)}.js`, `dist/router/${file.slice(0, -3)}.d.ts`])
+    .sort();
+}
+
+function inventoryGaps(expected, actual) {
+  return expected.filter((file) => !actual.includes(file));
 }
 
 /** Host-neutral guarantee: nothing shipped for the router API may reference the Pi packages. */
@@ -174,6 +206,13 @@ describe("packed experimental router consumer", () => {
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const uiSources = readdirSync(join(process.cwd(), "ui")).filter((path) => path.endsWith(".ts")).map((path) => `ui/${path}`);
       const moduleSources = modulePublishedFiles(process.cwd());
+      const expectedRouterFiles = expectedRouterInventory("router.ts", process.cwd());
+      // The installed walk and the source-derived expectation are independent;
+      // a compiled file the archive lost cannot satisfy both.
+      assert.deepEqual(routerFiles, expectedRouterFiles,
+        "compiled router output must match the entry's source import closure");
+      assert.deepEqual(inventoryGaps(expectedRouterFiles, archivePaths), [],
+        "every compiled router JS and declaration must ship");
       assert.deepEqual(packageJsonOf(packageRoot).exports["./router"], {
         types: "./dist/router/router.d.ts",
         import: "./dist/router/router.js",
@@ -193,7 +232,7 @@ describe("packed experimental router consumer", () => {
         "skills/configure-bifrost/SKILL.md",
         "skills/configure-bifrost/references/configuration-reference.md",
       ];
-      for (const required of [...rootSources, ...uiSources, ...moduleSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
+      for (const required of [...rootSources, ...uiSources, ...moduleSources, ...expectedRouterFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
       assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
@@ -425,6 +464,46 @@ test("installed router inspection is recursive and rejects a nested host referen
   }
 });
 
+test("nested router sources compile to an independent JS and declaration inventory", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-bifrost-router-nested-build-"));
+  const { compilerOptions } = JSON.parse(readFileSync(join(process.cwd(), "tsconfig.router-build.json"), "utf8"));
+  for (const [name, body] of Object.entries({
+    "router.ts": 'import { inner } from "./nested/inner.ts";\nexport const router = inner;\n',
+    "nested/inner.ts": 'import { leaf } from "./deeper/leaf.ts";\nexport const inner: number = leaf;\n',
+    "nested/deeper/leaf.ts": "export const leaf = 1;\n",
+  })) {
+    const file = join(directory, name);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, body);
+  }
+  // The real build settings name the `node` type library, which resolves from
+  // this checkout's install; the nested sources use no host APIs.
+  symlinkSync(join(process.cwd(), "node_modules"), join(directory, "node_modules"), "dir");
+  // The real package is an ES module, which `verbatimModuleSyntax` requires.
+  writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "router-nested-build", version: "1.0.0", type: "module", private: true }));
+  writeFileSync(join(directory, "tsconfig.json"), JSON.stringify({
+    compilerOptions: { ...compilerOptions, outDir: "out" },
+    include: ["router.ts"],
+  }));
+  const expected = [
+    "nested/deeper/leaf.d.ts", "nested/deeper/leaf.js",
+    "nested/inner.d.ts", "nested/inner.js",
+    "router.d.ts", "router.js",
+  ];
+  try {
+    const build = spawnSync(process.execPath, [typescriptCompiler, "-p", directory], { encoding: "utf8" });
+    assert.equal(build.status, 0, build.stdout + build.stderr);
+    const compiled = listFiles(join(directory, "out"));
+    assert.deepEqual(compiled, expected, "nested sources must emit JS and declarations in the mirrored tree");
+    // Omission control: the same inventory comparison used for the packed
+    // archive must name a compiled file the build did not produce.
+    rmSync(join(directory, "out", "nested", "inner.js"));
+    assert.deepEqual(inventoryGaps(expected, listFiles(join(directory, "out"))), ["nested/inner.js"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function packFixture(filesPatterns, tree) {
   const directory = mkdtempSync(join(tmpdir(), "pi-bifrost-module-pack-"));
   writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "module-pack-fixture", version: "1.0.0", files: filesPatterns }));
@@ -450,21 +529,23 @@ test("native packlist ships module runtime TS recursively and excludes module-lo
     "modules/alpha/widget.test.ts": "test('misplaced', () => {});\n",
     "modules/beta/thing.ts": "export const thing = 1;\n",
   };
+  // Written independently of both the fixture tree walk and the archive, so an
+  // unmet expectation cannot shrink to match whatever the packer shipped.
+  const expectedModuleRuntime = [
+    "modules/alpha/nested/deep.ts", "modules/alpha/types.d.ts",
+    "modules/alpha/widget.ts", "modules/beta/thing.ts",
+  ];
   let packed;
   let empty;
   let fault;
+  let omitted;
   try {
     packed = packFixture(manifest.files, tree);
-    for (const required of [
-      "index.ts", "modules/alpha/widget.ts", "modules/alpha/types.d.ts",
-      "modules/alpha/nested/deep.ts", "modules/beta/thing.ts",
-    ]) {
+    for (const required of ["index.ts", ...expectedModuleRuntime]) {
       assert.ok(packed.paths.includes(required), `archive must ship runtime source ${required}`);
     }
-    assert.deepEqual(modulePublishedFiles(packed.directory), [
-      "modules/alpha/nested/deep.ts", "modules/alpha/types.d.ts",
-      "modules/alpha/widget.ts", "modules/beta/thing.ts",
-    ]);
+    assert.deepEqual(inventoryGaps(expectedModuleRuntime, packed.paths), [],
+      "the archive must contain the independent module runtime inventory");
     for (const forbidden of [
       "modules/alpha/tests/widget.test.ts", "modules/alpha/tests/fixtures/helper.ts",
       "modules/alpha/README.md", "modules/alpha/widget.test.ts",
@@ -476,9 +557,14 @@ test("native packlist ships module runtime TS recursively and excludes module-lo
     fault = packFixture(manifest.files.filter((pattern) => !pattern.startsWith("!modules/")), tree);
     assert.ok(fault.paths.includes("modules/alpha/tests/widget.test.ts"),
       "fault control: removing the module exclusions must ship module tests");
+    assert.ok(manifest.files.includes("modules/**/*.ts"), "the runtime pattern under test must be configured");
+    omitted = packFixture(manifest.files.filter((pattern) => pattern !== "modules/**/*.ts"), tree);
+    assert.deepEqual(inventoryGaps(expectedModuleRuntime, omitted.paths), expectedModuleRuntime,
+      "omission fault control: dropping the module runtime pattern must be detected, not absorbed");
   } finally {
     rmSync(packed?.directory, { recursive: true, force: true });
     rmSync(empty?.directory, { recursive: true, force: true });
     rmSync(fault?.directory, { recursive: true, force: true });
+    rmSync(omitted?.directory, { recursive: true, force: true });
   }
 });
