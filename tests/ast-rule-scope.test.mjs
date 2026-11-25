@@ -69,7 +69,20 @@ test("the rule-directory check reports a missing or empty configured directory",
   }
 });
 
-// `ast-grep test` does not apply a rule's `files` filter, so the rule
+test("committed rule scopes separate module source from module-local tests", () => {
+  const read = (name) => readFileSync(join(root, "rules", name), "utf8");
+  const production = [
+    "no-as-any-in-extension.yml", "no-debugger-in-extension.yml",
+    "no-console-log-in-extension.yml", "no-process-exit-in-extension.yml",
+  ];
+  for (const name of production) {
+    const source = read(name);
+    assert.match(source, /^\s+- "modules\/\*\*\/tests\/\*\*"$/mu, `${name} must exclude module tests`);
+  }
+  assert.match(read("no-focused-or-skipped-test-typescript.yml"), /^\s+- "modules\/\*\*\/tests\/\*\.ts"$/mu);
+  assert.match(read("no-focused-or-skipped-test-javascript.yml"), /^\s+- "modules\/\*\*\/tests\/\*\.mjs"$/mu);
+});
+
 // Best effort without a Windows host: run the exact helper the scan assertion
 // uses, over paths built with the Windows separator. Only a real Windows CI leg
 // can also prove ast-grep's own output shape there.
@@ -90,10 +103,23 @@ test("committed ast-grep rules match their intended scope through the real scann
     );
     mkdirSync(join(dir, "tests"));
     writeFileSync(join(dir, "tests", "probe.test.mjs"), 'test.skip("x", () => {});\n');
+    writeFileSync(join(dir, "tests", "probe.test.ts"), 'test.skip("x", () => {});\n');
     mkdirSync(join(dir, "ui"));
     writeFileSync(join(dir, "ui", "probe.ts"), "export const bad = value as any;\n");
     mkdirSync(join(dir, "scripts"));
     writeFileSync(join(dir, "scripts", "probe.mjs"), 'console.log("x");\n');
+    // Adopted capability fixtures: production source is scanned by production
+    // rules; direct tests are scanned by test rules only; a nested fixture is
+    // deliberately not an executable test.
+    mkdirSync(join(dir, "modules", "alpha", "tests"), { recursive: true });
+    writeFileSync(
+      join(dir, "modules", "alpha", "widget.ts"),
+      'export const bad = value as any;\ndebugger;\nconsole.log("x");\nprocess.exit(1);\n',
+    );
+    writeFileSync(join(dir, "modules", "alpha", "tests", "widget.test.ts"), 'export const bad = value as any;\ntest.skip("x", () => {});\n');
+    mkdirSync(join(dir, "modules", "beta", "tests", "fixtures"), { recursive: true });
+    writeFileSync(join(dir, "modules", "beta", "tests", "probe.test.mjs"), 'test.skip("x", () => {});\n');
+    writeFileSync(join(dir, "modules", "beta", "tests", "fixtures", "helper.test.mjs"), 'test.skip("x", () => {});\n');
 
     const result = spawnSync(binary, ["scan", "--config", "sgconfig.yml", "--json"], {
       cwd: dir,
@@ -116,9 +142,13 @@ test("committed ast-grep rules match their intended scope through the real scann
       "no-console-log-in-extension",
       "no-process-exit-in-extension",
     ]) {
-      assert.deepEqual(filesFor(ruleId), ["probe.ts"], `${ruleId} must scan only extension sources`);
+      assert.deepEqual(filesFor(ruleId), ["modules/alpha/widget.ts", "probe.ts"], `${ruleId} must scan root and module sources only`);
     }
-    assert.deepEqual(filesFor("no-focused-or-skipped-test-javascript"), ["tests/probe.test.mjs"]);
+    assert.deepEqual(filesFor("no-focused-or-skipped-test-typescript"), ["modules/alpha/tests/widget.test.ts", "tests/probe.test.ts"],
+      "the TypeScript skipped-test rule must reach module-local tests and not nested fixtures");
+    assert.deepEqual(filesFor("no-focused-or-skipped-test-javascript"), [
+      "modules/beta/tests/fixtures/helper.test.mjs", "modules/beta/tests/probe.test.mjs", "tests/probe.test.mjs",
+    ], "the JavaScript skipped-test rule must reach module-local test-suffix files; misplacement is rejected by the focused discovery test");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

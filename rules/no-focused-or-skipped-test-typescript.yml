@@ -16,3 +16,4 @@ rule:
     - pattern: describe.only($$$ARGS)
 files:
   - "tests/**/*.ts"
+  - "modules/**/tests/*.ts"
