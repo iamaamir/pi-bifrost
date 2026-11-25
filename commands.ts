@@ -2609,8 +2609,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       reportInitOutcome(
         ctx,
         "blocked",
-        "Nothing was saved; no model update is safe with the current inventory.",
-        "Refresh the provider catalog, then rerun /bifrost init.",
+        "Nothing was saved. Bifrost could not confirm that the provider model list is complete and current.",
+        "Run /bifrost init -f to refresh it and try again. If the problem continues, check your provider sign-in and connection.",
         "warning",
       );
       return;
@@ -2755,8 +2755,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           reportInitOutcome(
             ctx,
             "paused",
-            "Nothing was saved; the model inventory is incomplete or stale.",
-            "Run /bifrost init -f to refresh the catalog, then retry.",
+            "Nothing was saved. Bifrost could not confirm that the provider model list is complete and current.",
+            "Run /bifrost init -f to refresh it and try again. If the problem continues, check your provider sign-in and connection.",
             "warning",
           );
         } else if (plan.reason === "no_changes") {
@@ -2977,8 +2977,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
     );
     if (!inventoryStillSafe()) {
-      reportInitOutcome(ctx, "blocked", "Nothing was saved; the model inventory is incomplete or stale.",
-        "Refresh the provider catalog, then rerun /bifrost init.", "warning");
+      reportInitOutcome(ctx, "blocked", "Nothing was saved. Bifrost could not confirm that the provider model list is complete and current.",
+        "Run /bifrost init -f to refresh it and try again. If the problem continues, check your provider sign-in and connection.", "warning");
       return;
     }
   }
