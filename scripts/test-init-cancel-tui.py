@@ -11,13 +11,13 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+sys.dont_write_bytecode = True
 from tui_server_process import server_port, stop_server
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ui_smoke', ROOT / 'scripts/ui-smoke.py')
 ui = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = ui
-sys.dont_write_bytecode = True
 spec.loader.exec_module(ui)
 
 with tempfile.TemporaryDirectory(prefix='bifrost-init-cancel-') as tmp:

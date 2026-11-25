@@ -125,11 +125,96 @@ function runInit({ home, work, args, extensionPath = EXTENSION, prompt = `/bifro
   });
 }
 
+function observeChild(child) {
+  const state = { error: undefined, closed: undefined };
+  state.closed = new Promise((resolve) => {
+    child.once("error", (error) => { state.error = error; });
+    child.once("close", resolve);
+  });
+  return state;
+}
+
+async function cleanupChild(child, closed) {
+  child.kill("SIGTERM");
+  const killTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+  try { await closed; } finally { clearTimeout(killTimer); }
+}
+
+it("cleans up an already closed child and handles spawn errors", async () => {
+  const exited = spawn(process.execPath, ["-e", "process.exit(0)"]);
+  const exitState = observeChild(exited);
+  await exitState.closed;
+  await cleanupChild(exited, exitState.closed);
+
+  const missing = spawn(join(tmpdir(), "bifrost-missing-executable", "missing"));
+  const missingState = observeChild(missing);
+  await missingState.closed;
+  assert.equal(missingState.error?.code, "ENOENT");
+  await cleanupChild(missing, missingState.closed);
+});
+
+function waitForChildOutput(child, timeoutMs = 5_000) {
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      clearTimeout(timer);
+      child.stdout.removeListener("data", onData);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+      if (error) reject(error); else resolve();
+    };
+    const onData = () => finish();
+    const onError = (error) => finish(error);
+    const onClose = (code, signal) => finish(new Error(`Child closed before output (code: ${code}, signal: ${signal})`));
+    const timer = setTimeout(() => finish(new Error("Timed out waiting for child output")), timeoutMs);
+    child.stdout.once("data", onData);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
+}
+
+it("rejects readiness when a child exits or fails to spawn before output", async () => {
+  for (const start of [
+    () => spawn(process.execPath, ["-e", "process.exit(1)"]),
+    () => spawn(join(tmpdir(), "bifrost-missing-executable", "missing")),
+  ]) {
+    const child = start();
+    const state = observeChild(child);
+    try {
+      await assert.rejects(waitForChildOutput(child), /Child closed before output|ENOENT/);
+    } finally {
+      await cleanupChild(child, state.closed);
+    }
+  }
+});
+
+it("times out waiting for a silent child", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+  const state = observeChild(child);
+  try {
+    await assert.rejects(waitForChildOutput(child, 100), /Timed out waiting for child output/);
+  } finally {
+    await cleanupChild(child, state.closed);
+  }
+});
+
+it("escalates cleanup when a child ignores SIGTERM", async () => {
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"]);
+  const state = observeChild(child);
+  try {
+    await waitForChildOutput(child);
+  } finally {
+    await cleanupChild(child, state.closed);
+  }
+  assert.equal(child.signalCode, "SIGKILL");
+});
+
 async function runRpcInit(env, args, command = "init") {
   const base = Object.fromEntries(["PATH", "TMPDIR", "LANG", "TERM"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
   const child = spawn(PI, ["-e", env.extensionPath, "--approve", "--no-tools", "--no-session", "--mode", "rpc"], {
     cwd: env.work, env: { ...base, HOME: env.home, PI_CODING_AGENT_DIR: join(env.home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.address().port}`, BIFROST_TEST_NETWORK_VIOLATIONS: join(env.home, "network-violations.log") }, stdio: ["pipe", "pipe", "pipe"],
   });
+  const childState = observeChild(child);
+  child.stdin.on("error", () => {});
   const records = [];
   let buffer = "", stderr = "";
   child.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -141,13 +226,15 @@ async function runRpcInit(env, args, command = "init") {
     child.stdin.write(`${JSON.stringify({ id: "init", type: "prompt", message: `/bifrost ${command} ${args}` })}\n`);
     const deadline = Date.now() + 30000;
     while (!records.some((r) => r.type === "response" && r.id === "init")) {
-      if (Date.now() > deadline || child.exitCode !== null) throw new Error(`RPC init failed: ${stderr} ${JSON.stringify(records)}`);
+      if (childState.error || Date.now() > deadline || child.exitCode !== null || child.signalCode !== null) throw new Error(`RPC init failed: ${childState.error ?? ""} ${stderr} ${JSON.stringify(records)}`);
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal(records.find((r) => r.id === "init" && r.type === "response").success, true);
     assert.equal(existsSync(join(env.home, "network-violations.log")) ? readFileSync(join(env.home, "network-violations.log"), "utf8") : "", "");
     return records;
-  } finally { child.kill(); await new Promise((resolve) => child.once("close", resolve)); }
+  } finally {
+    await cleanupChild(child, childState.closed);
+  }
 }
 
 function globalPrivateSettings(revision = "BEFORE") {
