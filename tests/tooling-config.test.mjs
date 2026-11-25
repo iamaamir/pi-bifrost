@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, matchesGlob } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHECKS } from "../scripts/toolbox.mjs";
@@ -9,6 +10,7 @@ import { CHECKS } from "../scripts/toolbox.mjs";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const knipSource = readFileSync(join(root, "knip.jsonc"), "utf8");
+const tsconfig = JSON.parse(readFileSync(join(root, "tsconfig.json"), "utf8"));
 const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
 const workflowDirectory = join(root, ".github", "workflows");
 const workflows = readdirSync(workflowDirectory)
@@ -206,12 +208,17 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+// A zero-module revision is a valid state, so module globs are the one set
+// allowed to match no tracked file. They are still checked whenever modules
+// exist, and no other glob gets this treatment.
+const KNIP_MODULE_GLOBS = new Set(["modules/**/*.ts", "modules/**/*.mjs"]);
+
 function globProblems(config, files) {
   return ["entry", "project"].flatMap((field) => {
     const globs = Array.isArray(config[field]) ? config[field] : [];
     if (globs.length === 0) return [`missing ${field} globs`];
     return globs
-      .filter((glob) => !files.some((file) => matchesGlob(file, glob)))
+      .filter((glob) => !KNIP_MODULE_GLOBS.has(glob) && !files.some((file) => matchesGlob(file, glob)))
       .map((glob) => `${field} glob ${glob} matches no tracked file`);
   });
 }
@@ -314,4 +321,50 @@ test("the toolbox constructs pinned-tool commands for security checks", () => {
   assert.equal(secrets.args.includes(".gitleaks.toml"), true);
   assert.equal(CHECKS["secrets-history"].command("/tmp").args[0], "git");
   assert.equal(CHECKS.deps.command("/tmp").args.includes("package-lock.json"), true);
+});
+
+test("typecheck program includes nested capability TypeScript", () => {
+  assert.ok(tsconfig.include.includes("modules/**/*.ts"), "tsconfig must include module source and tests");
+  assert.equal(matchesGlob("modules/alpha/widget.ts", "modules/**/*.ts"), true);
+  const without = tsconfig.include.filter((glob) => glob !== "modules/**/*.ts");
+  assert.equal(without.some((glob) => matchesGlob("modules/alpha/widget.ts", glob)), false,
+    "fault control: no other include glob reaches the module file");
+});
+
+test("a type error in an orphan module file is invisible without the include and red with it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-module-ts-"));
+  try {
+    mkdirSync(join(dir, "modules", "alpha"), { recursive: true });
+    writeFileSync(join(dir, "root.ts"), "export const root: number = 1;\n");
+    writeFileSync(join(dir, "modules", "alpha", "widget.ts"), "export const widget: number = \"nope\";\n");
+    const run = (include) => {
+      writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", noEmit: true, skipLibCheck: true, types: [] },
+        include,
+      }));
+      return spawnSync(join(root, "node_modules", ".bin", "tsc"), ["--noEmit", "-p", dir], { encoding: "utf8" });
+    };
+    const without = run(tsconfig.include.filter((glob) => glob !== "modules/**/*.ts"));
+    assert.equal(without.status, 0, `unscoped module file must be outside the program: ${without.stderr}`);
+    const withModule = run(tsconfig.include);
+    assert.notEqual(withModule.status, 0, "the module type error must fail the program");
+    assert.match(withModule.stdout + withModule.stderr, /modules\/alpha\/widget\.ts/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Knip entry and project cover module sources and module-owned test entrypoints", () => {
+  const config = knipConfigFrom(knipSource);
+  for (const field of ["entry", "project"]) {
+    assert.ok(config[field].includes("modules/**/*.ts"), `${field} must cover module TypeScript`);
+    assert.ok(config[field].includes("modules/**/*.mjs"), `${field} must cover module test entrypoints`);
+  }
+  assert.deepEqual(globProblems({ ...config, project: [...config.project, "*.nope"] }, trackedFiles()), ["project glob *.nope matches no tracked file"],
+    "the module-glob exception must not excuse unrelated dead globs");
+  assert.deepEqual(globProblems(config, [
+    "index.ts", "scripts/toolbox.mjs", "mutation/targets.mjs",
+    "tests/routing.test.ts", "tests/acceptance-runner.test.mjs",
+    "modules/alpha/widget.ts", "modules/alpha/tests/widget.test.mjs",
+  ]), [], "module globs must still be audited when modules exist");
 });
