@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { moduleSourceFiles } from "../../module-tests.mjs";
 
 const LIVE_PROMPT = "Reply with exactly BIFROST-LIVE-OK.";
 const LIVE_RESPONSE = "BIFROST-LIVE-OK";
@@ -127,6 +128,14 @@ function clonePluginSources(root, pluginDir) {
     // schema.json is the structural contract the runtime reads next to its
     // sources, so an isolated extension copy needs it as well.
     if (name.endsWith(".ts") || name === "schema.json") copyFileSync(join(root, name), join(pluginDir, name));
+  }
+  // Capability runtime lives under modules/<capability>/. The isolated copy must
+  // mirror the shipped layout because the extension imports it by relative path;
+  // module-local tests and documentation are not runtime sources and stay out.
+  for (const file of moduleSourceFiles(root)) {
+    const destination = join(pluginDir, file);
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+    copyFileSync(join(root, file), destination);
   }
   cpSync(join(root, "ui"), join(pluginDir, "ui"), { recursive: true });
   symlinkSync(join(root, "node_modules"), join(pluginDir, "node_modules"), "dir");
