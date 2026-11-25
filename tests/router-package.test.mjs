@@ -5,8 +5,9 @@ import { createRequire } from "node:module";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it, test } from "node:test";
 import { acquirePackLock } from "./fixtures/pack-lock.mjs";
+import { archRoots } from "../scripts/toolbox.mjs";
 
 const require = createRequire(import.meta.url);
 const typescriptCompiler = require.resolve("typescript/bin/tsc");
@@ -66,8 +67,16 @@ function installPackedPackage(cache, consumer) {
 
 function installedRouterFiles(consumer) {
   const packageRoot = join(consumer, "node_modules", "pi-bifrost");
-  const routerFiles = readdirSync(join(packageRoot, "dist", "router")).map((name) => `dist/router/${name}`);
-  return { packageRoot, routerFiles };
+  const routerFiles = [];
+  const walk = (directory, prefix) => {
+    for (const entry of readdirSync(join(packageRoot, directory), { withFileTypes: true })) {
+      const relative = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(relative, relative);
+      else if (entry.isFile()) routerFiles.push(relative);
+    }
+  };
+  walk("dist/router", "dist/router");
+  return { packageRoot, routerFiles: routerFiles.sort() };
 }
 
 /** Host-neutral guarantee: nothing shipped for the router API may reference the Pi packages. */
@@ -143,6 +152,7 @@ describe("packed experimental router consumer", () => {
       const archivePaths = packed.files.map((file) => file.path);
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const uiSources = readdirSync(join(process.cwd(), "ui")).filter((path) => path.endsWith(".ts")).map((path) => `ui/${path}`);
+      const moduleSources = archRoots(process.cwd()).filter((path) => path !== "*.ts");
       assert.deepEqual(packageJsonOf(packageRoot).exports["./router"], {
         types: "./dist/router/router.d.ts",
         import: "./dist/router/router.js",
@@ -162,15 +172,16 @@ describe("packed experimental router consumer", () => {
         "skills/configure-bifrost/SKILL.md",
         "skills/configure-bifrost/references/configuration-reference.md",
       ];
-      for (const required of [...rootSources, ...uiSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
+      for (const required of [...rootSources, ...uiSources, ...moduleSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
       assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
         || ["bifrost.json", "schema.json", "README.md", "CHANGELOG.md", "LICENSE", "package.json", "docs/router-api.md"].includes(path)
         || routerFiles.includes(path)
         || uiSources.includes(path)
+        || moduleSources.includes(path)
         || path.startsWith("examples/")
-        || agentSkill.includes(path)), "release contains files outside source, UI, router API, examples, and agent skill allowlists");
+        || agentSkill.includes(path)), "release contains files outside source, UI, router API, module runtime, examples, and agent skill allowlists");
       assert.ok(archivePaths.includes("dist/router/router.js"), "the package must contain built JS");
       assert.ok(archivePaths.includes("dist/router/router.d.ts"), "the package must contain API declarations");
       assertNoPackageReferences(packageRoot, routerFiles);
@@ -372,4 +383,73 @@ describe("packed experimental router consumer", () => {
       t.diagnostic(JSON.stringify({ target: "dist/router/router.js", sourceSha256: hash(source), faultSha256: hash(mutant), restoredSha256: hash(readFileSync(target, "utf8")), phases: ["GREEN", "named dependency AssertionError RED", "restored GREEN"] }));
     } finally { rmSync(temporary, { recursive: true, force: true }); }
   });
+});
+
+test("installed router inspection is recursive and rejects a nested host reference", () => {
+  const consumer = mkdtempSync(join(tmpdir(), "pi-bifrost-nested-router-"));
+  try {
+    const router = join(consumer, "node_modules", "pi-bifrost", "dist", "router");
+    mkdirSync(join(router, "nested"), { recursive: true });
+    writeFileSync(join(router, "router.js"), "export const router = 1;\n");
+    writeFileSync(join(router, "nested", "inner.js"), 'import "@earendil-works/pi-ai";\n');
+    const { routerFiles } = installedRouterFiles(consumer);
+    assert.ok(routerFiles.includes("dist/router/nested/inner.js"), "nested build output must be inspected");
+    assert.throws(() => assertNoPackageReferences(join(consumer, "node_modules", "pi-bifrost"), routerFiles),
+      (error) => error.name === "AssertionError" && error.message.includes("dist/router/nested/inner.js references the Pi packages"),
+      "a forbidden nested host reference must fail the published-graph assertion");
+    writeFileSync(join(router, "nested", "inner.js"), "export const inner = 1;\n");
+    assertNoPackageReferences(join(consumer, "node_modules", "pi-bifrost"), routerFiles);
+  } finally {
+    rmSync(consumer, { recursive: true, force: true });
+  }
+});
+
+function packFixture(filesPatterns, tree) {
+  const directory = mkdtempSync(join(tmpdir(), "pi-bifrost-module-pack-"));
+  writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "module-pack-fixture", version: "1.0.0", files: filesPatterns }));
+  for (const [name, body] of Object.entries(tree)) {
+    const target = join(directory, name);
+    mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(target, body);
+  }
+  const packed = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json"], { cwd: directory, encoding: "utf8", timeout: 60_000 }))[0];
+  return { directory, paths: packed.files.map((file) => file.path) };
+}
+
+test("native packlist ships module runtime TS recursively and excludes module-local artifacts", () => {
+  const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+  const tree = {
+    "index.ts": "export const root = 1;\n",
+    "modules/alpha/widget.ts": "export const widget = 1;\n",
+    "modules/alpha/nested/deep.ts": "export const deep = 1;\n",
+    "modules/alpha/tests/widget.test.ts": "test('x', () => {});\n",
+    "modules/alpha/tests/fixtures/helper.ts": "export const helper = 1;\n",
+    "modules/alpha/README.md": "# local guide\n",
+    "modules/alpha/widget.test.ts": "test('misplaced', () => {});\n",
+    "modules/beta/thing.ts": "export const thing = 1;\n",
+  };
+  let packed;
+  let empty;
+  let fault;
+  try {
+    packed = packFixture(manifest.files, tree);
+    for (const required of ["index.ts", "modules/alpha/widget.ts", "modules/alpha/nested/deep.ts", "modules/beta/thing.ts"]) {
+      assert.ok(packed.paths.includes(required), `archive must ship runtime source ${required}`);
+    }
+    for (const forbidden of [
+      "modules/alpha/tests/widget.test.ts", "modules/alpha/tests/fixtures/helper.ts",
+      "modules/alpha/README.md", "modules/alpha/widget.test.ts",
+    ]) {
+      assert.ok(!packed.paths.includes(forbidden), `archive must exclude ${forbidden}`);
+    }
+    empty = packFixture(manifest.files, { "index.ts": "export const root = 1;\n" });
+    assert.deepEqual(empty.paths.filter((path) => path.startsWith("modules/")), [], "zero modules add no archive entries");
+    fault = packFixture(manifest.files.filter((pattern) => !pattern.startsWith("!modules/")), tree);
+    assert.ok(fault.paths.includes("modules/alpha/tests/widget.test.ts"),
+      "fault control: removing the module exclusions must ship module tests");
+  } finally {
+    rmSync(packed?.directory, { recursive: true, force: true });
+    rmSync(empty?.directory, { recursive: true, force: true });
+    rmSync(fault?.directory, { recursive: true, force: true });
+  }
 });
