@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { Box, Key, matchesKey, Text } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { progressBar } from "./progress-bar.ts";
 
@@ -72,4 +72,16 @@ export function setProbeProgress(ctx: ExtensionContext, stats: ProbeProgress, ca
   } else {
     ctx.ui.setWidget("bifrost-probe", "phase" in stats ? ["Refreshing model catalog"] : [`Probing models: ${stats.done}/${stats.total}`, `  ok: ${stats.okCount}  errors: ${stats.errCount}`]);
   }
+}
+
+export async function withProgressCancellation<T>(ctx: ExtensionContext, run: (signal: AbortSignal | undefined, cancellable: boolean) => Promise<T>): Promise<T> {
+  if (ctx.mode !== "tui" || !ctx.hasUI || typeof ctx.ui.onTerminalInput !== "function") return run(ctx.signal, false);
+  const controller = new AbortController();
+  const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+  const unsubscribe = ctx.ui.onTerminalInput((data) => {
+    if (!matchesKey(data, Key.escape)) return undefined;
+    controller.abort();
+    return { consume: true };
+  });
+  try { return await run(signal, true); } finally { unsubscribe(); }
 }
