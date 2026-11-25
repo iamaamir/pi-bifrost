@@ -53,7 +53,11 @@ function childEnv() {
 }
 
 function run(dir, command, args) {
-  return execFileSync(command, args, { cwd: dir, encoding: "utf8", timeout: 120_000, stdio: "pipe", env: childEnv() });
+  const env = childEnv();
+  // c8 defaults its temp directory to NODE_V8_COVERAGE. Point the fixture at
+  // its own path so a child c8 cannot race the outer coverage run's temp dir.
+  env.NODE_V8_COVERAGE = join(dir, "v8-coverage");
+  return execFileSync(command, args, { cwd: dir, encoding: "utf8", timeout: 120_000, stdio: "pipe", env });
 }
 
 function assertNamedOnce(output, label) {
