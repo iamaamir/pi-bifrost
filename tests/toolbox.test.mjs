@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CHECKS,
+  archRoots,
   parseActionlint,
   parseAstGrep,
   parseDependencyCruiser,
@@ -354,6 +355,75 @@ test("the type-only allowance is load-bearing: removing it turns the passing fix
     },
   );
   assert.deepEqual(mutated.map((finding) => finding.rule), ["router-no-runtime-host-sdk"]);
+});
+
+function archFixture(files) {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-module-arch-roots-"));
+  for (const [name, source] of Object.entries(files)) {
+    const target = join(dir, name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, source);
+  }
+  return dir;
+}
+
+test("arch roots add nested module production files without a permanent capability", () => {
+  const dir = archFixture({
+    "modules/alpha/widget.ts": "export const widget = 1;\n",
+    "modules/alpha/nested/deep.ts": "export const deep = 1;\n",
+    "modules/alpha/tests/widget.test.mjs": "// fixture\n",
+    "modules/beta/thing.ts": "export const thing = 1;\n",
+    "modules/beta/README.md": "# fixture\n",
+  });
+  try {
+    assert.deepEqual(archRoots(dir), [
+      "*.ts", "modules/alpha/nested/deep.ts", "modules/alpha/widget.ts", "modules/beta/thing.ts",
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("arch roots stay at the root glob when no module exists", () => {
+  const dir = archFixture({ "index.ts": "export const value = 1;\n" });
+  try {
+    assert.deepEqual(archRoots(dir), ["*.ts"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("module production cannot import a dev dependency or a colocated test", () => {
+  const dev = cruiseFixture({ "modules/alpha/widget.ts": 'import { version } from "typescript";\nexport const value = version;\n' });
+  assert.deepEqual(dev.map((finding) => finding.rule), ["production-no-dev-dependency"]);
+
+  const tooling = cruiseFixture({
+    "modules/alpha/widget.ts": 'import { helper } from "./tests/helper.mjs";\nexport const value = helper;\n',
+    "modules/alpha/tests/helper.mjs": "export const helper = 1;\n",
+  });
+  assert.deepEqual(tooling.map((finding) => finding.rule), ["production-no-repository-tooling"]);
+});
+
+test("a module test importing its production source is a legal edge", () => {
+  const findings = cruiseFixture({
+    "modules/alpha/widget.ts": "export const widget = 1;\n",
+    "modules/alpha/tests/widget.test.mjs": 'import { widget } from "../widget.js";\nexport const value = widget;\n',
+  });
+  assert.deepEqual(findings, []);
+});
+
+test("fault control: a root-only production scope hides the module violation", () => {
+  const findings = cruiseFixture(
+    { "modules/alpha/widget.ts": 'import { version } from "typescript";\nexport const value = version;\n' },
+    {
+      mutateConfig: (config) => {
+        const narrowed = config.replace(/^const PRODUCTION_ROOTS = .*$/mu, 'const PRODUCTION_ROOTS = "^(?:[^/]+|ui/[^/]+)\\\\.ts$";');
+        assert.notEqual(narrowed, config, "the scope fault must apply");
+        return narrowed;
+      },
+    },
+  );
+  assert.deepEqual(findings, [], "a root-only scope must stop enforcing the module edge");
 });
 
 test("reports unavailable tools with install hints instead of a false pass", () => {
