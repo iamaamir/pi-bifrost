@@ -14,8 +14,10 @@ const HEAVY = new Set([
   "router-package.test.mjs",
 ]);
 
-const rootFiles = readdirSync("tests").filter((f) => /\.test\.(ts|mjs)$/.test(f) && !HEAVY.has(f));
-const files = [...rootFiles, ...moduleTestFiles(process.cwd())];
+const files = [
+  ...readdirSync("tests").filter((f) => /\.test\.(ts|mjs)$/.test(f) && !HEAVY.has(f)).map((f) => `tests/${f}`),
+  ...moduleTestFiles(process.cwd()),
+];
 // Canary against silent selection drift: ~100 root files today; a big drop
 // means the glob or exclusions regressed. Module tests are additive, so this
 // bound cannot be satisfied by module files alone.
@@ -34,7 +36,7 @@ if (check.status !== 0) {
   console.error("test:quick: typecheck failed — skipping tests");
   process.exit(check.status ?? 1);
 }
-const result = spawnSync(process.execPath, ["--test", "--experimental-strip-types", ...files.map((f) => `tests/${f}`)], {
+const result = spawnSync(process.execPath, ["--test", "--experimental-strip-types", ...files], {
   stdio: "inherit",
 });
 process.exit(result.status ?? 1);
