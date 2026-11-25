@@ -48,13 +48,16 @@ Ties keep the earliest candidate. An unknown strategy name keeps the legacy
 first-candidate fallback; callers validate names elsewhere. `random` is total for
 draws outside `[0, 1)` and for `NaN`, selecting the last candidate.
 
-Numeric edge characterization: metrics are assumed finite. The scan seeds its
-minimum with `+Infinity` and only lets a score win when it is strictly lower, so
-on malformed input the observable rules are:
+Numeric contract: the lowest comparable score wins, and equal scores keep the
+earliest candidate, so tie-breaking is stable. Callers pass validated finite
+metrics, but arithmetic on finite inputs can still leave the finite domain — an
+`input + output` or `best_value` ratio can overflow to `+Infinity` — so the
+observable rules are:
 
+- the lowest comparable score wins; equal scores keep the earliest candidate;
 - a finite score wins over `NaN` and `+Infinity`, wherever each appears;
-- `NaN` scores never win;
-- `+Infinity` scores, including an overflowing `input + output` sum, never win;
+- `NaN` is never comparable, so a `NaN` score never wins;
+- `+Infinity` never wins, including a sum of finite inputs that overflows to it;
 - `-Infinity` always wins, keeping the earliest such candidate;
 - when every score is `NaN` or `+Infinity` (including `0 / 0` for `best_value`)
   there is no comparable minimum and the result is `undefined` rather than a

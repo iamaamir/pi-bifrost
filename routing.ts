@@ -11,16 +11,28 @@ import {
   modelCost as measureCost,
   modelInputCost as measureInputCost,
   modelOutputCost as measureOutputCost,
-  selectModel,
+  selectModel as selectFromPool,
   type RoutingStrategy,
 } from "./modules/strategies/selection.ts";
 
 // The built-in selection contract lives in the strategies capability. The
-// metric accessors stay defined here, over `RoutingModelBase`, so the published
-// signatures compiled consumers import do not change with the capability's
-// wider structural input.
-export { selectModel };
+// metric accessors and `selectModel` stay declared here over
+// `RoutingModelBase`, so the published signatures compiled consumers import do
+// not change with the capability's wider structural input; the generic keeps
+// the caller's candidate type (and its extra fields) through inference.
 export type { RoutingStrategy };
+
+/**
+ * Pick one candidate for the configured strategy. Thin host-typed delegate to
+ * the capability's `selectModel`; the body is not duplicated here.
+ */
+export function selectModel<M extends RoutingModelBase>(
+  candidates: M[],
+  strategy: RoutingStrategy,
+  random: () => number = Math.random,
+): M | undefined {
+  return selectFromPool(candidates, strategy, random);
+}
 
 /** Sum of input + output token costs per 1M tokens. Does not include cache read/write costs. */
 export function modelCost(model: RoutingModelBase): number {

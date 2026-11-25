@@ -155,7 +155,7 @@ const TYPES_CONSUMER = `
   import { createRouter, type RouterSnapshot, type RouterResolveResult } from "pi-bifrost/router";
   import {
     modelContextSize, modelCost, modelInputCost, modelOutputCost, selectModel,
-    type RoutingModelBase,
+    type RoutingModelBase, type RoutingStrategy,
   } from "pi-bifrost/dist/router/routing.js";
   const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
   // The metric accessors stay declared over the published RoutingModelBase, not
@@ -170,7 +170,17 @@ const TYPES_CONSUMER = `
   const routingModel: RoutingModelBase = model;
   const metricTotal: number = modelCost(routingModel) + modelInputCost(routingModel)
     + modelOutputCost(routingModel) + modelContextSize(routingModel);
-  const selected = selectModel([routingModel], "cheapest");
+  // selectModel stays host-typed as well: the declared generic must bind to the
+  // caller's candidate type, so widening it to the capability's structural input
+  // or changing the return type fails to compile here.
+  type SelectModelSignature = <M extends RoutingModelBase>(
+    candidates: M[], strategy: RoutingStrategy, random?: () => number,
+  ) => M | undefined;
+  expectExactType<Same<typeof selectModel, SelectModelSignature>>();
+  interface HostModel extends RoutingModelBase { readonly hostField: "preserved" }
+  const hostModels: HostModel[] = [];
+  const selected = selectModel(hostModels, "cheapest");
+  expectExactType<Same<typeof selected, HostModel | undefined>>();
   void (selected ?? routingModel);
   void metricTotal;
   const snapshot: RouterSnapshot = {
