@@ -17,3 +17,4 @@ rule:
 files:
   - "tests/**/*.mjs"
   - "tests/**/*.js"
+  - "modules/**/tests/*.mjs"

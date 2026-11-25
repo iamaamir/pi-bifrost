@@ -11,6 +11,7 @@ files:
   - "*.ts"
 ignores:
   - "tests/**"
+  - "modules/**/tests/**"
   - "ui/**"
   - "scripts/**"
   - ".worktrees/**"
