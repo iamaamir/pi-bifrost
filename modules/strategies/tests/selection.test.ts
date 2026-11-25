@@ -27,14 +27,15 @@ const model = (id: string, input: number, output: number, contextWindow = 1_000)
 const NO_DRAW = (): number => { throw new Error("selection must not draw"); };
 
 describe("built-in strategy selection", () => {
-  it("declares exactly the eight documented strategies, in one order", () => {
-    // Independent expectation: a removed or added name fails here, and the
-    // schema drift guard compares the JSON enums against this same capability.
+  it("declares exactly the eight documented strategies, in canonical order", () => {
+    // Independent expectation in the published order: a removed, added or
+    // reordered name fails here, and the schema drift guard compares the JSON
+    // enums against this same capability.
     const documented: readonly RoutingStrategy[] = [
-      "first", "fastest", "cheapest", "cheapest_input",
-      "cheapest_output", "largest_context", "random", "best_value",
+      "first", "cheapest", "cheapest_input", "cheapest_output",
+      "largest_context", "random", "best_value", "fastest",
     ];
-    assert.deepEqual([...ALL_STRATEGIES].sort(), [...documented].sort());
+    assert.deepEqual([...ALL_STRATEGIES], documented);
   });
 
   it("returns the first candidate for first and fastest regardless of metadata", () => {
@@ -146,6 +147,42 @@ describe("built-in strategy selection", () => {
     assert.equal(selectModel(infiniteCost, "cheapest"), undefined);
     assert.equal(selectModel(overflowing, "cheapest"), undefined);
     assert.equal(selectModel(zeroOverZero, "best_value"), undefined);
+  });
+
+  it("prefers a finite score over NaN and +Infinity wherever they appear", () => {
+    const nanThenFinite = [model("nan", NaN, 0), model("finite", 2, 0)];
+    const finiteThenNan = [model("finite", 2, 0), model("nan", NaN, 0)];
+    assert.equal(selectModel(nanThenFinite, "cheapest"), nanThenFinite[1]);
+    assert.equal(selectModel(finiteThenNan, "cheapest"), finiteThenNan[0]);
+
+    const infiniteThenFinite = [model("inf", Infinity, 0), model("finite", 5, 0)];
+    assert.equal(selectModel(infiniteThenFinite, "cheapest"), infiniteThenFinite[1]);
+
+    const overflowThenFinite = [
+      model("overflow", Number.MAX_VALUE, Number.MAX_VALUE),
+      model("finite", 1, 1),
+    ];
+    assert.equal(selectModel(overflowThenFinite, "cheapest"), overflowThenFinite[1]);
+    // An overflowing best_value ratio behaves like +Infinity, not like a best pick.
+    const overflowRatio = [
+      model("overflow", Number.MAX_VALUE, Number.MAX_VALUE, 1),
+      model("finite", 1, 1, 1),
+    ];
+    assert.equal(selectModel(overflowRatio, "best_value"), overflowRatio[1]);
+  });
+
+  it("lets negative infinity win and never lets NaN win when both are present", () => {
+    const finiteThenNegative = [model("finite", 3, 0), model("negative", -Infinity, 0)];
+    assert.equal(selectModel(finiteThenNegative, "cheapest"), finiteThenNegative[1]);
+
+    const nanThenNegative = [model("nan", NaN, 0), model("negative", -Infinity, 0)];
+    assert.equal(selectModel(nanThenNegative, "cheapest"), nanThenNegative[1]);
+
+    const negativeTie = [
+      model("first-negative", -Infinity, 0),
+      model("second-negative", -Infinity, 0),
+    ];
+    assert.equal(selectModel(negativeTie, "cheapest"), negativeTie[0]);
   });
 
   it("propagates a missing cost as a caller error on multi-candidate pools", () => {

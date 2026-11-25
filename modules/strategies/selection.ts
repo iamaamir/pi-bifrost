@@ -13,18 +13,12 @@
  * allocation of candidates, reordering or dispatch.
  */
 
-export type RoutingStrategy =
-  | "first"
-  | "cheapest"
-  | "cheapest_input"
-  | "cheapest_output"
-  | "largest_context"
-  | "random"
-  | "best_value"
-  | "fastest";
-
-/** The single ordered definition of the built-in strategies. */
-export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
+/**
+ * The canonical order of the built-in strategy names. This array is the single
+ * definition: the union below is derived from it, so a name cannot exist in one
+ * place and not the other.
+ */
+const STRATEGY_NAMES = [
   "first",
   "cheapest",
   "cheapest_input",
@@ -33,7 +27,12 @@ export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
   "random",
   "best_value",
   "fastest",
-];
+] as const;
+
+export type RoutingStrategy = (typeof STRATEGY_NAMES)[number];
+
+/** The single ordered definition of the built-in strategies. */
+export const ALL_STRATEGIES: readonly RoutingStrategy[] = STRATEGY_NAMES;
 
 /**
  * The minimal shape a selection candidate must expose. Hosts keep their own
@@ -64,9 +63,19 @@ export function modelContextSize(model: StrategyCandidate): number {
   return model.contextWindow;
 }
 
-/** First element achieving the minimum score — matches stable-sort[0] tie-breaking.
- * Precondition: scores are finite numbers (Model cost/contextWindow are typed finite).
- * Unlike sort, the score function is not invoked for a single candidate. */
+/**
+ * First element with the lowest score. The running minimum starts at
+ * `+Infinity` and a score only wins when it is strictly below that minimum, so
+ * the observable rules for non-finite scores follow from the comparison:
+ *
+ * - `-Infinity` always wins (the earliest such element);
+ * - `NaN` never wins, because every comparison against it is false;
+ * - `+Infinity` (including an overflowed cost sum) never wins;
+ * - a finite score wins over `NaN` and `+Infinity` wherever they appear.
+ *
+ * Ties keep the earliest element — matches stable-sort[0] tie-breaking. When no
+ * score is below `+Infinity` the result is undefined. Unlike sort, the score
+ * function is not invoked for a single candidate. */
 function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefined {
   let best: T | undefined;
   let bestScore = Infinity;
@@ -84,10 +93,13 @@ function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefine
  * Pick one candidate for the configured strategy.
  *
  * Empty input yields undefined, and a single candidate is returned without
- * scoring or drawing. Beyond that the result is a member of the supplied pool
- * when the metric scores are finite; non-finite scores (NaN, Infinity, an
- * overflowing cost sum, or 0/0 for best_value) leave no comparable minimum and
- * yield undefined rather than an invented candidate. Callers supply validated
+ * scoring or drawing. Otherwise the scan keeps the first candidate whose score
+ * is strictly below the running minimum, which starts at `+Infinity`: a finite
+ * score wins over `NaN` and `+Infinity` (including an overflowing cost sum),
+ * `NaN` never wins, and `-Infinity` always wins. If every score is `NaN` or
+ * `+Infinity` (including 0/0 for best_value) nothing is below the running
+ * minimum and the result is undefined rather than an invented candidate;
+ * otherwise it is a member of the supplied pool. Callers supply validated
  * finite metrics; missing cost objects are a caller error and throw.
  */
 export function selectModel<M extends StrategyCandidate>(
