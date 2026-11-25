@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import {
+  ALL_STRATEGIES,
   BUNDLED_PUBLIC_INIT_DEFAULTS,
   DEFAULT_RULES,
   DYNAMIC_CONFIG_MAP_PATHS,
@@ -499,6 +500,37 @@ describe("config schema contract", () => {
     });
     for (const path of DYNAMIC_CONFIG_MAP_PATHS) {
       assert.ok(path.length > 0, "dynamic map paths stay addressed");
+    }
+  });
+});
+
+describe("strategy enum parity", () => {
+  interface EnumSite {
+    readonly enum: readonly string[];
+  }
+  interface SchemaShape {
+    readonly properties: {
+      readonly strategy: EnumSite;
+      readonly categoryStrategies: { readonly additionalProperties: EnumSite };
+    };
+    readonly allOf: readonly { readonly then?: { readonly properties?: { readonly categoryStrategies?: { readonly properties?: { readonly description?: EnumSite } } } } }[];
+  }
+
+  it("keeps every shipped schema strategy enum aligned with the canonical list", () => {
+    // schema.json must declare the enum statically for tooling. The canonical
+    // list lives in the strategies capability; this guard fails if either side
+    // drifts, so a renamed or added strategy cannot ship inconsistently.
+    const schema = JSON.parse(readFileSync(join(REPO_ROOT, "schema.json"), "utf-8")) as SchemaShape;
+    assert.ok(schema.allOf.length > 8, "the schemaVersion 3 branch is present");
+    const sites = [
+      ["strategy", schema.properties.strategy.enum],
+      ["categoryStrategies", schema.properties.categoryStrategies.additionalProperties.enum],
+      ["schemaVersion 3 categoryStrategies.description", schema.allOf[8].then?.properties?.categoryStrategies?.properties?.description?.enum],
+    ] as const;
+    const expected = [...ALL_STRATEGIES].sort();
+    for (const [label, site] of sites) {
+      assert.ok(site, `${label} declares the strategy enum`);
+      assert.deepEqual([...site].sort(), expected, label);
     }
   });
 });

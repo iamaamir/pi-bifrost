@@ -10,6 +10,7 @@ import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type Class
 import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, schemaVersionAtLeast } from "./schema-version.ts";
 import { mergeRoutingScope, routingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
+import { ALL_STRATEGIES } from "./modules/strategies/selection.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
@@ -227,16 +228,9 @@ export const DEFAULT_RULES: RouteRule[] = [
   },
 ];
 
-export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
-  "first",
-  "cheapest",
-  "cheapest_input",
-  "cheapest_output",
-  "largest_context",
-  "random",
-  "best_value",
-  "fastest",
-];
+// The canonical list lives in the strategies capability. It is re-exported
+// here because config.ts is the module configuration callers import.
+export { ALL_STRATEGIES };
 
 // The schema-version primitives live in a leaf module so routing.ts can use the
 // gate without creating a config.ts <-> routing.ts import cycle. They are

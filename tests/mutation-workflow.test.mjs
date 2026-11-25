@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
 import { ROOT, allTestFiles, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
 import {
@@ -315,12 +315,15 @@ test("binding is derived from real test imports, not hand-written", () => {
     assert.ok(binding.length > 0, `${target} must have consumers`);
     for (const file of binding) {
       const source = readFileSync(join(ROOT, file), "utf8");
-      const specifier = `/${target.replace(/\.ts$/u, "")}.ts`;
-      assert.match(source, /from\s+["'][^"']*["']/u, `${file} must import modules`);
-      assert.ok(
-        source.includes(specifier) || source.includes(`"../${target}"`) || source.includes(`'../${target}'`),
-        `${file} is bound to ${target} but does not import it`,
-      );
+      assert.match(source, /from\s+["'][^"']+["']/u, `${file} must import modules`);
+      // Resolve each relative specifier from the test file's own directory, so a
+      // nested module test importing `../selection.ts` is verified as faithfully
+      // as a root test importing `../routing.ts`.
+      const imported = [...source.matchAll(/from\s+["']([^"']+)["']/gu)]
+        .map((match) => match[1])
+        .filter((specifier) => specifier.startsWith("."))
+        .map((specifier) => relative(ROOT, resolve(ROOT, dirname(file), specifier)).replaceAll("\\", "/"));
+      assert.ok(imported.includes(target), `${file} is bound to ${target} but does not import it`);
     }
   }
 

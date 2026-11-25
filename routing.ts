@@ -6,16 +6,19 @@ import { projectBillingPreference, type BillingPreferenceProjection } from "./ec
 import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation, type PiAffinityModeSource } from "./affinity.ts";
 import { spawnSync } from "node:child_process";
 import { checkProviderScope, compileRoutingScope, type CompiledRoutingScope, type RoutingScope, type RoutingScopeOrigin } from "./routing-scope.ts";
+import {
+  modelContextSize,
+  modelCost,
+  modelInputCost,
+  modelOutputCost,
+  selectModel,
+  type RoutingStrategy,
+} from "./modules/strategies/selection.ts";
 
-export type RoutingStrategy =
-  | "first"
-  | "cheapest"
-  | "cheapest_input"
-  | "cheapest_output"
-  | "largest_context"
-  | "random"
-  | "best_value"
-  | "fastest";
+// The built-in selection contract lives in the strategies capability. These
+// re-exports keep every existing root subpath import working.
+export { modelContextSize, modelCost, modelInputCost, modelOutputCost, selectModel };
+export type { RoutingStrategy };
 
 export interface RouteRule {
   pattern: string;
@@ -49,26 +52,6 @@ export interface RoutingHostContext<M extends RoutingModelBase = RoutingModelBas
 export function modelKey(model: RoutingModelBase | undefined): string {
   if (!model) return "none";
   return `${model.provider}/${model.id}`;
-}
-
-/** Sum of input + output token costs per 1M tokens. Does not include cache read/write costs. */
-export function modelCost(model: RoutingModelBase): number {
-  return model.cost.input + model.cost.output;
-}
-
-/** Input token cost only. */
-export function modelInputCost(model: RoutingModelBase): number {
-  return model.cost.input;
-}
-
-/** Output token cost only. */
-export function modelOutputCost(model: RoutingModelBase): number {
-  return model.cost.output;
-}
-
-/** Context window size. */
-export function modelContextSize(model: RoutingModelBase): number {
-  return model.contextWindow;
 }
 
 export function findOneModel<M extends RoutingModelBase>(
@@ -201,68 +184,6 @@ export function lastModelFallbackAllowed<M extends RoutingModelBase>(input: {
   if (input.excludedBySignIn?.(input.lastPhysical) === true) return false;
   const key = modelKey(input.lastPhysical);
   return input.candidates.some((candidate) => modelKey(candidate) === key);
-}
-
-/** First element achieving the minimum score — matches stable-sort[0] tie-breaking.
- * Precondition: scores are finite numbers (Model cost/contextWindow are typed finite).
- * Unlike sort, the score function is not invoked for a single candidate. */
-function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefined {
-  let best: T | undefined;
-  let bestScore = Infinity;
-  for (const item of items) {
-    const s = score(item);
-    if (s < bestScore) {
-      best = item;
-      bestScore = s;
-    }
-  }
-  return best;
-}
-
-/**
- * Pick one candidate for the configured strategy.
- *
- * Total for every strategy: an empty list yields undefined and every other
- * input, including rng values outside [0, 1) and NaN, yields a candidate.
- */
-export function selectModel<M extends RoutingModelBase>(
-  candidates: M[],
-  strategy: RoutingStrategy,
-  random: () => number = Math.random,
-): M | undefined {
-  if (candidates.length === 0) return undefined;
-  // Single candidate — return without scoring, matching the old sort's
-  // behavior of never invoking the comparator (cost-less models stay safe).
-  if (candidates.length === 1) return candidates[0];
-
-  switch (strategy) {
-    case "cheapest":
-      return minBy(candidates, modelCost);
-    case "cheapest_input":
-      return minBy(candidates, modelInputCost);
-    case "cheapest_output":
-      return minBy(candidates, modelOutputCost);
-    case "largest_context":
-      // Descending sort picks the first maximum under stable tie-breaking.
-      return minBy(candidates, (m) => -modelContextSize(m));
-    case "random": {
-      // The rng seam is injectable, so selection must stay total for whatever
-      // it returns: any value outside [0, 1) (including NaN) picks the last
-      // candidate instead of indexing past the array into undefined.
-      const pick = random();
-      if (!(pick >= 0 && pick < 1)) {
-        return candidates[candidates.length - 1];
-      }
-      return candidates[Math.floor(pick * candidates.length)];
-    }
-
-    case "best_value":
-      // Maximize context per dollar: minimize cost per context token.
-      return minBy(candidates, (m) => modelCost(m) / m.contextWindow);
-    default:
-      // "first", "fastest" — list order is assumed meaningful.
-      return candidates[0];
-  }
 }
 
 export function resolveModel<M extends RoutingModelBase>(
