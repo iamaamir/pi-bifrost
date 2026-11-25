@@ -288,8 +288,8 @@ export function clearBifrostWidgets(ctx: ExtensionContext) {
   }
 }
 
-function setInitProbeWidget(ctx: ExtensionContext, lines: string[]) {
-  if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-probe", lines);
+function clearProbeWidget(ctx: ExtensionContext) {
+  if (ctx.hasUI && typeof ctx.ui.setWidget === "function") ctx.ui.setWidget("bifrost-probe", []);
 }
 
 export function syncBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeStatusState) {
@@ -552,7 +552,7 @@ async function runInitProbe(
     return undefined;
   } finally {
     uiDone(ctx);
-    if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+    clearProbeWidget(ctx);
   }
   if (probeRun.cancelled || ctx.signal?.aborted) {
     initLog(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
@@ -1375,7 +1375,7 @@ async function handleInitInner(
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
-  setInitProbeWidget(ctx, ["Preparing init; refreshing Pi's model catalog..."]);
+  setProbeProgress(ctx, { phase: "preparing" });
   let initRefreshReceipt: { catalogKeys: string[]; evidence: Map<string, object> } | undefined;
   let refreshedCatalogKeys: string[] | undefined;
   let refreshedProviders: string[] = [];
@@ -1425,9 +1425,13 @@ async function handleInitInner(
     } catch {
       state.forceRegistryRefresh = true;
       initLog(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
-    } finally { uiDone(ctx); }
+    } finally {
+      uiDone(ctx);
+      clearProbeWidget(ctx);
+    }
+  } else {
+    clearProbeWidget(ctx);
   }
-  setInitProbeWidget(ctx, []);
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
@@ -3500,7 +3504,7 @@ export function createCommandRouter(
         return;
       } finally {
         uiDone(ctx);
-        if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+        clearProbeWidget(ctx);
       }
       if (probeRun.cancelled || ctx.signal?.aborted) {
         log(ctx, "Probe was cancelled; partial results were not saved.", "warning");

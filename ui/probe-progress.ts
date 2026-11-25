@@ -20,7 +20,15 @@ type ProgressTheme = {
   bold(text: string): string;
 };
 
-export function probeProgressComponent(theme: ProgressTheme, stats: ProbeProgressStats): Component {
+export type ProbeProgress = ProbeProgressStats | { phase: "preparing" };
+
+export function probeProgressComponent(theme: ProgressTheme, stats: ProbeProgress): Component {
+  if ("phase" in stats) {
+    const box = new Box(0, 0, (text) => text);
+    box.addChild(new Text(theme.bold("◆ Bifrost") + theme.fg("dim", "  Refreshing model catalog"), 0, 0));
+    box.addChild(new Text(`  ${theme.fg("dim", "─".repeat(24))}`, 0, 0));
+    return box;
+  }
   const header =
     theme.bold("◆ Bifrost") + theme.fg("dim", `  Probing models · ${stats.done}/${stats.total}`);
   const counts =
@@ -36,10 +44,11 @@ export function probeProgressComponent(theme: ProgressTheme, stats: ProbeProgres
 }
 
 /** Renders progress for UI hosts, using plain lines outside the TUI. */
-export function setProbeProgress(ctx: ExtensionContext, stats: ProbeProgressStats): void {
-  if (ctx.hasUI && ctx.mode === "tui") {
+export function setProbeProgress(ctx: ExtensionContext, stats: ProbeProgress): void {
+  if (!ctx.hasUI || typeof ctx.ui.setWidget !== "function") return;
+  if (ctx.mode === "tui") {
     ctx.ui.setWidget("bifrost-probe", (_tui, theme) => probeProgressComponent(theme, stats));
-  } else if (ctx.hasUI) {
-    ctx.ui.setWidget("bifrost-probe", [`Probing models: ${stats.done}/${stats.total}`, `  ok: ${stats.okCount}  errors: ${stats.errCount}`]);
+  } else {
+    ctx.ui.setWidget("bifrost-probe", "phase" in stats ? ["Refreshing model catalog"] : [`Probing models: ${stats.done}/${stats.total}`, `  ok: ${stats.okCount}  errors: ${stats.errCount}`]);
   }
 }
