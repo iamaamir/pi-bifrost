@@ -268,22 +268,28 @@ export async function runProbe(
   });
   let cursor = 0;
   let completed = 0;
+  let workerFailed = false;
 
   const { onProgress, promptWithSession = promptWithMinimalSession, sessionFallback = true, persist = true, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
 
   async function worker() {
-    while (cursor < total && !signal?.aborted) {
-      const i = cursor++;
-      const model = available[i];
-      let eligible = true;
-      try { eligible = shouldProbe?.(model) ?? true; }
-      catch { eligible = false; }
-      results[i] = eligible
-        ? await probeOne(ctx, model, promptWithSession, timeoutMs, signal, sessionFallback)
-        : { provider: model.provider, model: model.id, cost_input: model.cost?.input ?? 0, cost_output: model.cost?.output ?? 0, status: "skipped", duration_ms: 0, error: "model is no longer eligible" };
-      completed++;
-      reportProbeResult(runId, results[i]);
-      onProgress?.(completed, total, results[i]);
+    try {
+      while (cursor < total && !signal?.aborted && !workerFailed) {
+        const i = cursor++;
+        const model = available[i];
+        let eligible = true;
+        try { eligible = shouldProbe?.(model) ?? true; }
+        catch { eligible = false; }
+        results[i] = eligible
+          ? await probeOne(ctx, model, promptWithSession, timeoutMs, signal, sessionFallback)
+          : { provider: model.provider, model: model.id, cost_input: model.cost?.input ?? 0, cost_output: model.cost?.output ?? 0, status: "skipped", duration_ms: 0, error: "model is no longer eligible" };
+        completed++;
+        reportProbeResult(runId, results[i]);
+        onProgress?.(completed, total, results[i]);
+      }
+    } catch (error) {
+      workerFailed = true;
+      throw error;
     }
   }
 

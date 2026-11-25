@@ -603,6 +603,49 @@ describe("probe debug evidence", () => {
     }
   });
 
+  for (const simultaneousFailure of [false, true]) {
+    it(`stops admission after worker failure (second failure: ${simultaneousFailure})`, async () => {
+      const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-admission-"));
+      const path = join(cwd, "cache.json");
+      const oldCache = Buffer.from("old cache bytes\n");
+      writeFileSync(path, oldCache);
+      const failure = new Error("first worker failure");
+      const models = ["one", "two", "three"].map((id) => ({ provider: "fixture", id, api: "openai-completions" }));
+      const dispatched: string[] = [];
+      let release!: () => void;
+      const survivor = new Promise<void>((resolve) => { release = resolve; });
+      let failed!: () => void;
+      const failureSeen = new Promise<void>((resolve) => { failed = resolve; });
+      const ctx = { modelRegistry: { getAvailable: () => models, streamSimple: (model: { id: string }) => {
+        dispatched.push(model.id);
+        return { result: async () => {
+          if (model.id === "two") await survivor;
+          return { stopReason: "stop", content: [{ type: "text", text: "2" }], usage: { totalTokens: 1 } };
+        } };
+      } } } as never;
+      let settled = false;
+      let calls = 0;
+      try {
+        const pending = runProbe(ctx, { path, concurrency: 2, onProgress: () => {
+          if (++calls === 1) { failed(); throw failure; }
+          if (simultaneousFailure) throw new Error("second worker failure");
+        } });
+        const outcome = pending.then(() => { settled = true; return undefined; }, (error: unknown) => { settled = true; return error; });
+        await failureSeen;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(settled, false);
+        release();
+        assert.equal(await outcome, failure);
+        assert.deepEqual(dispatched, ["one", "two"]);
+        assert.equal(calls, 2);
+        assert.deepEqual(readFileSync(path), oldCache);
+      } finally {
+        release();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("records callback failures before preserving the original rejection", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-debug-callback-"));
     const logPath = join(cwd, "probe.jsonl");
