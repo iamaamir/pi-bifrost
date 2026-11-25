@@ -4,25 +4,42 @@
 // against the headings of the file it points at.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, posix, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ROOT_DOCUMENTS = ["README.md", "AGENTS.md", "PRODUCT.md", "ROADMAP.md", "DEVELOPMENT.md", "CONTEXT.md", "CHANGELOG.md"];
 
-function markdownFiles(directory) {
+function markdownFiles(directory, base = ROOT, skipped = new Set(["node_modules"])) {
   const found = [];
-  for (const entry of readdirSync(join(ROOT, directory), { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+  let entries;
+  try {
+    entries = readdirSync(join(base, directory), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return found;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || skipped.has(entry.name)) continue;
     const path = posix.join(directory, entry.name);
-    if (entry.isDirectory()) found.push(...markdownFiles(path));
+    if (entry.isDirectory()) found.push(...markdownFiles(path, base, skipped));
     else if (entry.name.endsWith(".md")) found.push(path);
   }
   return found.sort();
 }
 
-const DOCUMENTS = [...markdownFiles("docs"), ...ROOT_DOCUMENTS.filter((name) => existsSync(join(ROOT, name)))];
+function documentFiles(base = ROOT) {
+  return [
+    ...markdownFiles("docs", base),
+    // Module-owned tests hold fixtures, not repository documentation.
+    ...markdownFiles("modules", base, new Set(["node_modules", "tests"])),
+    ...ROOT_DOCUMENTS.filter((name) => existsSync(join(base, name))),
+  ];
+}
+
+const DOCUMENTS = documentFiles();
 
 /**
  * Text where a link is real: fenced code and HTML comments are inert on GitHub.
@@ -189,6 +206,39 @@ function linkProblems({ documents, read = (file) => readFileSync(join(ROOT, file
 test("every relative link and heading anchor in the documents resolves", () => {
   assert.equal(DOCUMENTS.length > 50, true, `expected the document set, found ${DOCUMENTS.length}`);
   assert.deepEqual(linkProblems({ documents: DOCUMENTS }), []);
+});
+
+test("module-local README and AGENTS join the documentation set; fixtures do not", () => {
+  const base = mkdtempSync(join(tmpdir(), "bifrost-module-docs-"));
+  try {
+    mkdirSync(join(base, "modules", "alpha", "tests"), { recursive: true });
+    mkdirSync(join(base, "modules", "beta"), { recursive: true });
+    writeFileSync(join(base, "modules", "alpha", "README.md"), "# Alpha\n\nSee [the guide](../beta/README.md).\n");
+    writeFileSync(join(base, "modules", "alpha", "AGENTS.md"), "# Alpha rules\n");
+    writeFileSync(join(base, "modules", "beta", "README.md"), "# Beta\n\nSee [gone](missing.md).\n");
+    writeFileSync(join(base, "modules", "alpha", "tests", "fixture.md"), "[gone](missing.md)\n");
+
+    const documents = documentFiles(base).filter((file) => file.startsWith("modules/"));
+    assert.deepEqual(documents, [
+      "modules/alpha/AGENTS.md", "modules/alpha/README.md", "modules/beta/README.md",
+    ]);
+    const read = (file) => readFileSync(join(base, file), "utf8");
+    const exists = (file) => existsSync(join(base, file));
+    const isDirectory = (file) => statSync(join(base, file)).isDirectory();
+    assert.deepEqual(linkProblems({ documents, read, exists, isDirectory }), [
+      "modules/beta/README.md: missing.md does not exist",
+    ]);
+
+    const empty = mkdtempSync(join(tmpdir(), "bifrost-empty-docs-"));
+    try {
+      assert.deepEqual(documentFiles(empty).filter((file) => file.startsWith("modules/")), [],
+        "absent modules/ is not an error");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("a document outside the set still resolves its links through the same rules", () => {
