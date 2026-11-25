@@ -4779,3 +4779,41 @@ describe("bifrost init probe ordering", () => {
     }
   });
 });
+
+describe("init probe cleanup", () => {
+  for (const cancelled of [false, true]) {
+    it(cancelled ? "clears progress after cancellation" : "clears progress after probe rejection", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "bifrost-init-cleanup-"));
+      const cwd = process.cwd();
+      process.chdir(dir);
+      try {
+        const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+        const context = ctx as any;
+        const controller = new AbortController();
+        context.signal = controller.signal;
+        let reads = 0;
+        context.modelRegistry.getAvailable = () => {
+          if (++reads === 2) {
+            if (cancelled) controller.abort();
+            else throw new Error("probe failed");
+          }
+          return [{ provider: "fixture", id: "chat" }];
+        };
+        await createCommandRouter(makeState() as never)("init -f", ctx);
+        assert(calls.some((call) => call.kind === "widget" && call.value === "bifrost-probe:0"));
+        assert(calls.some((call) => call.kind === "notify" && String(call.value).includes(cancelled ? "cancelled" : "failed")));
+        assert.equal(existsSync(join(dir, ".pi", "bifrost.json")), false);
+      } finally { process.chdir(cwd); }
+    });
+  }
+});
+
+it("reports unexpected init errors once without exposing exception text", async () => {
+  const { ctx, calls } = makeCtx();
+  (ctx as any).modelRegistry.getAvailable = () => { throw new Error("secret-token"); };
+  await createCommandRouter(makeState() as never)("init", ctx);
+  const notices = calls.filter((call) => call.kind === "notify");
+  assert.equal(notices.length, 1);
+  assert.match(String(notices[0].value), /failed unexpectedly/);
+  assert.doesNotMatch(String(notices[0].value), /secret-token/);
+});
