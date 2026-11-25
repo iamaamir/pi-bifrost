@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
+import { copyModuleSources } from "../../scripts/module-tests.mjs";
 import { startFakeProviderServer } from "../fixtures/http-pi-harness.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -610,6 +611,7 @@ describe("cache lifecycle acceptance", { timeout: 600_000, concurrency: 1 }, () 
       for (const file of readdirSync(ROOT)) {
         if (file.endsWith(".ts") || file === "schema.json" || file === "package.json") copyFileSync(join(ROOT, file), join(copy, file));
       }
+      copyModuleSources(ROOT, copy);
       cpSync(join(ROOT, "ui"), join(copy, "ui"), { recursive: true });
       symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"));
       writeFileSync(join(copy, "cache.ts"), mutated);
