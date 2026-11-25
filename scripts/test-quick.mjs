@@ -5,6 +5,7 @@
 // `node --test tests/<file>`.
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { moduleTestFiles } from "./module-tests.mjs";
 
 const HEAVY = new Set([
   "acceptance-runner.test.mjs",
@@ -13,9 +14,11 @@ const HEAVY = new Set([
   "router-package.test.mjs",
 ]);
 
-const files = readdirSync("tests").filter((f) => /\.test\.(ts|mjs)$/.test(f) && !HEAVY.has(f));
+const rootFiles = readdirSync("tests").filter((f) => /\.test\.(ts|mjs)$/.test(f) && !HEAVY.has(f));
+const files = [...rootFiles, ...moduleTestFiles(process.cwd())];
 // Canary against silent selection drift: ~100 root files today; a big drop
-// means the glob or exclusions regressed.
+// means the glob or exclusions regressed. Module tests are additive, so this
+// bound cannot be satisfied by module files alone.
 if (files.length < 90) {
   console.error(`test:quick: expected ~100 root test files, found ${files.length} — selection drifted, refusing to run`);
   process.exit(2);

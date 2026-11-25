@@ -18,7 +18,7 @@ const MAX_REPORTER_LINE_BYTES = 1024 * 1024;
 const MAX_REPORTER_EVENTS = 20_000;
 const MAX_REPORTER_EVENT_BYTES = 16 * 1024 * 1024;
 const NODE_TEST_GATES = new Map([
-  ["test", { paths: ["tests/*.test.ts", "tests/*.test.mjs"] }],
+  ["test", { paths: ["tests/*.test.ts", "tests/*.test.mjs", "modules/*/tests/*.test.ts", "modules/*/tests/*.test.mjs"] }],
   ["test:integration", { paths: ["tests/integration/*.test.mjs"] }],
 ]);
 let receivedSignal;
