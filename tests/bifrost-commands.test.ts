@@ -3555,11 +3555,16 @@ describe("command aliases", () => {
         writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["manual/keep"] } }));
         return true;
       };
+      const workingMessages: Array<string | undefined> = [];
+      (ctx as any).ui.setWorkingMessage = (message?: string) => workingMessages.push(message);
       await createCommandRouter(makeState() as never)("init", ctx as never);
       const probeWidgetCalls = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:"));
-      assert.ok(probeWidgetCalls.length > 0, "probe widget was never set");
-      const last = probeWidgetCalls[probeWidgetCalls.length - 1]!;
+      const last = probeWidgetCalls[probeWidgetCalls.length - 1];
+      assert.ok(last, "probe widget was never set");
+      assert.ok(probeWidgetCalls.slice(0, -1).some((call) => (call.lines?.length ?? 0) > 0), "probe widget was never populated before clearing");
       assert.equal(last.lines?.length, 0, "probe widget was not cleared after probing");
+      assert.ok(workingMessages.some((message) => message !== undefined), "working indicator was never set");
+      assert.equal(workingMessages.at(-1), undefined, "working indicator was not reset");
       assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
     } finally {
       process.chdir(previousCwd);
