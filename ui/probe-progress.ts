@@ -22,11 +22,12 @@ type ProgressTheme = {
 
 export type ProbeProgress = ProbeProgressStats | { phase: "preparing" };
 
-export function probeProgressComponent(theme: ProgressTheme, stats: ProbeProgress): Component {
+export function probeProgressComponent(theme: ProgressTheme, stats: ProbeProgress, cancellable = false, frame = 0): Component {
   if ("phase" in stats) {
     const box = new Box(0, 0, (text) => text);
     box.addChild(new Text(theme.bold("◆ Bifrost") + theme.fg("dim", "  Refreshing model catalog"), 0, 0));
-    box.addChild(new Text(`  ${theme.fg("dim", "─".repeat(24))}`, 0, 0));
+    box.addChild(new Text(`  ${theme.fg("dim", "─".repeat(frame % 20) + "◆" + "─".repeat(19 - frame % 20))}`, 0, 0));
+    if (cancellable) box.addChild(new Text(theme.fg("dim", "  Esc to cancel"), 0, 0));
     return box;
   }
   const header =
@@ -40,14 +41,34 @@ export function probeProgressComponent(theme: ProgressTheme, stats: ProbeProgres
   box.addChild(new Text(header, 0, 0));
   box.addChild(progressBar(theme, { value: stats.done, max: stats.total }));
   box.addChild(new Text(`  ${counts}`, 0, 0));
+  if (cancellable) box.addChild(new Text(theme.fg("dim", "  Esc to cancel"), 0, 0));
   return box;
 }
 
+const activeAnimations = new WeakMap<ExtensionContext, () => void>();
+
+export function clearProbeProgress(ctx: ExtensionContext): void {
+  activeAnimations.get(ctx)?.();
+  activeAnimations.delete(ctx);
+  if (ctx.hasUI && typeof ctx.ui.setWidget === "function") ctx.ui.setWidget("bifrost-probe", []);
+}
+
 /** Renders progress for UI hosts, using plain lines outside the TUI. */
-export function setProbeProgress(ctx: ExtensionContext, stats: ProbeProgress): void {
+export function setProbeProgress(ctx: ExtensionContext, stats: ProbeProgress, cancellable = false): void {
   if (!ctx.hasUI || typeof ctx.ui.setWidget !== "function") return;
+  activeAnimations.get(ctx)?.();
+  activeAnimations.delete(ctx);
   if (ctx.mode === "tui") {
-    ctx.ui.setWidget("bifrost-probe", (_tui, theme) => probeProgressComponent(theme, stats));
+    let active = true;
+    activeAnimations.set(ctx, () => { active = false; });
+    ctx.ui.setWidget("bifrost-probe", (tui, theme) => {
+      let frame = 0;
+      const timer = active && "phase" in stats && tui ? setInterval(() => { frame++; tui.requestRender(); }, 120) : undefined;
+      timer?.unref();
+      const dispose = () => { active = false; if (timer) clearInterval(timer); };
+      if (active) activeAnimations.set(ctx, dispose);
+      return { render: (width) => probeProgressComponent(theme, stats, cancellable, frame).render(width), invalidate() {}, dispose };
+    });
   } else {
     ctx.ui.setWidget("bifrost-probe", "phase" in stats ? ["Refreshing model catalog"] : [`Probing models: ${stats.done}/${stats.total}`, `  ok: ${stats.okCount}  errors: ${stats.errCount}`]);
   }

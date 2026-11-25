@@ -79,7 +79,7 @@
     "test:mutation:list": "node mutation/run.mjs --list",
     "test:mutation:report": "node mutation/report.mjs --dir reports/mutation",
     "test:integration": "node --test --experimental-strip-types tests/integration/*.test.mjs",
-    "test:ui": "python3 scripts/ui-smoke.py",
+    "test:ui": "python3 scripts/ui-smoke.py && python3 scripts/test-probe-cancel-tui.py && python3 scripts/test-init-cancel-tui.py && python3 scripts/test-tui-server-process.py",
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
     "verify:release": "node scripts/verify-release.mjs",
