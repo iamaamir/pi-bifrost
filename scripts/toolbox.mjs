@@ -21,6 +21,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { moduleSourceFiles } from "./module-tests.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
@@ -458,30 +459,7 @@ export function runAstGrep(runTool, { rules = loadRuleScopes(), files = trackedF
  * passing a nonexistent path when no capability is adopted yet.
  */
 export function archRoots(root = ROOT) {
-  const moduleRoots = [];
-  let capabilities;
-  try {
-    capabilities = readdirSync(join(root, "modules"), { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") return ["*.ts"];
-    throw error;
-  }
-  for (const capability of capabilities) {
-    if (!capability.isDirectory() || capability.name.startsWith(".")) continue;
-    const walk = (directory, prefix) => {
-      for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (entry.name.startsWith(".")) continue;
-        const rel = `${prefix}/${entry.name}`;
-        if (entry.isDirectory()) {
-          if (entry.name !== "tests") walk(join(directory, entry.name), rel);
-        } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
-          moduleRoots.push(rel);
-        }
-      }
-    };
-    walk(join(root, "modules", capability.name), `modules/${capability.name}`);
-  }
-  return ["*.ts", ...moduleRoots.sort()];
+  return ["*.ts", ...moduleSourceFiles(root)];
 }
 
 export const CHECKS = {

@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
-import { ROOT, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
+import { ROOT, allTestFiles, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
   MATRIX,
@@ -329,6 +329,47 @@ test("binding is derived from real test imports, not hand-written", () => {
   assert.ok(bindingFor("reliability.ts").length > 5, "reliability.ts must bind more than the old five-file set");
   assert.ok(bindingFor("routing.ts").length > 1, "routing.ts must bind more than routing.test.ts alone");
   assert.ok(consumers.size > 0);
+});
+
+test("mutation inventory adds direct module tests without moving legacy bindings", () => {
+  const root = mkdtempSync(join(tmpdir(), "bifrost-mutation-modules-"));
+  try {
+    mkdirSync(join(root, "tests", "integration"), { recursive: true });
+    mkdirSync(join(root, "modules", "alpha", "tests", "helpers"), { recursive: true });
+    mkdirSync(join(root, "modules", "beta", "tests"), { recursive: true });
+    const files = {
+      "cache.ts": "export const cache = 1;\n",
+      "tests/cache.test.mjs": 'import { cache } from "../cache.ts"; export const value = cache;\n',
+      "tests/integration/cache.test.mjs": 'import { cache } from "../../cache.ts"; export const value = cache;\n',
+      "modules/alpha/tests/widget.test.mjs": 'import { cache } from "../../../cache.ts"; export const value = cache;\n',
+      "modules/beta/tests/case.test.ts": 'import { cache } from "../../../cache.ts"; export const value = cache;\n',
+      "modules/alpha/tests/helpers/helper.test.mjs": 'import { cache } from "../../../../cache.ts"; export const value = cache;\n',
+      "modules/alpha/README.md": "# fixture\n",
+    };
+    for (const [name, body] of Object.entries(files)) {
+      const target = join(root, name);
+      mkdirSync(join(target, ".."), { recursive: true });
+      writeFileSync(target, body);
+    }
+    assert.deepEqual(allTestFiles(root), [
+      "modules/alpha/tests/widget.test.mjs", "modules/beta/tests/case.test.ts",
+      "tests/cache.test.mjs", "tests/integration/cache.test.mjs",
+    ]);
+    const consumers = directConsumers(root);
+    assert.ok(consumers.get("cache.ts").includes("tests/cache.test.mjs"), "legacy root binding stays");
+    assert.ok(consumers.get("cache.ts").includes("tests/integration/cache.test.mjs"), "legacy integration binding stays");
+    assert.ok(consumers.get("cache.ts").includes("modules/alpha/tests/widget.test.mjs"), "module test binds directly");
+    assert.ok(!JSON.stringify(consumers.get("cache.ts")).includes("helpers/helper.test.mjs"), "nested fixture is not a unit test");
+
+    // Fault control: the legacy tests-only subset is unchanged; the two module
+    // paths are additions, not replacements.
+    assert.deepEqual(allTestFiles(root).filter((file) => !file.startsWith("modules/")),
+      ["tests/cache.test.mjs", "tests/integration/cache.test.mjs"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  assert.deepEqual(allTestFiles().filter((file) => file.startsWith("modules/")), [],
+    "the current checkout has no adopted module");
 });
 
 test("no-coverage mutants count against both scores", () => {

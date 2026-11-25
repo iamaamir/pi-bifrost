@@ -38,6 +38,34 @@ export function moduleTestFiles(root) {
   return files.sort();
 }
 
+/** Repo-relative nested capability runtime TS, excluding the reserved tests subtree. */
+export function moduleSourceFiles(root) {
+  const files = [];
+  let capabilities;
+  try {
+    capabilities = readdirSync(join(root, "modules"), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return files;
+    throw error;
+  }
+  for (const capability of capabilities) {
+    if (!capability.isDirectory() || capability.name.startsWith(".")) continue;
+    const walk = (directory, prefix) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (entry.name.startsWith(".")) continue;
+        const rel = `${prefix}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (entry.name !== "tests") walk(join(directory, entry.name), rel);
+        } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
+          files.push(rel);
+        }
+      }
+    };
+    walk(join(root, "modules", capability.name), `modules/${capability.name}`);
+  }
+  return files.sort();
+}
+
 /** Whether a path is an executable unit test in one of the three reserved locations. */
 export function isExecutableTest(relativePath) {
   const normalized = relativePath.replace(/\\/g, "/");

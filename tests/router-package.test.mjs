@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, test } from "node:test";
 import { acquirePackLock } from "./fixtures/pack-lock.mjs";
-import { archRoots } from "../scripts/toolbox.mjs";
+import { moduleSourceFiles } from "../scripts/module-tests.mjs";
 
 const require = createRequire(import.meta.url);
 const typescriptCompiler = require.resolve("typescript/bin/tsc");
@@ -152,7 +152,7 @@ describe("packed experimental router consumer", () => {
       const archivePaths = packed.files.map((file) => file.path);
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const uiSources = readdirSync(join(process.cwd(), "ui")).filter((path) => path.endsWith(".ts")).map((path) => `ui/${path}`);
-      const moduleSources = archRoots(process.cwd()).filter((path) => path !== "*.ts");
+      const moduleSources = moduleSourceFiles(process.cwd());
       assert.deepEqual(packageJsonOf(packageRoot).exports["./router"], {
         types: "./dist/router/router.d.ts",
         import: "./dist/router/router.js",
