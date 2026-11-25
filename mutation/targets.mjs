@@ -29,16 +29,40 @@ import {
 /** Repository root, one level above this directory. */
 export const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
-function allTestFiles() {
+export function allTestFiles(root = ROOT) {
   const files = [];
   const walk = (directory) => {
-    for (const entry of readdirSync(join(ROOT, directory), { withFileTypes: true })) {
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) walk(path);
       else if (/\.test\.(?:ts|mjs)$/u.test(entry.name)) files.push(path);
     }
   };
   walk("tests");
+  // Module-owned tests live directly under modules/<capability>/tests/. Nested
+  // helpers are not executable tests; the legacy recursive `tests/` walk above
+  // stays the authority for integration bindings.
+  let capabilities;
+  try {
+    capabilities = readdirSync(join(root, "modules"), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    capabilities = [];
+  }
+  for (const capability of capabilities) {
+    if (!capability.isDirectory() || capability.name.startsWith(".")) continue;
+    const directory = `modules/${capability.name}/tests`;
+    let entries;
+    try {
+      entries = readdirSync(join(root, directory), { withFileTypes: true });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && /\.test\.(?:ts|mjs)$/u.test(entry.name)) files.push(`${directory}/${entry.name}`);
+    }
+  }
   return files.sort();
 }
 
@@ -48,8 +72,8 @@ const IMPORT_PATTERN = /\bfrom\s+["']([^"']+)["']/gu;
  * The repo-relative modules a test imports. Only relative specifiers resolve to
  * a mutated root module; a package specifier never does.
  */
-function importedModules(testFile) {
-  const source = readFileSync(join(ROOT, testFile), "utf8");
+function importedModules(testFile, root = ROOT) {
+  const source = readFileSync(join(root, testFile), "utf8");
   const modules = new Set();
   for (const match of source.matchAll(IMPORT_PATTERN)) {
     const specifier = match[1];
@@ -57,7 +81,7 @@ function importedModules(testFile) {
     // Target names use forward slashes. `relative()` uses the platform separator,
     // so a Windows checkout would key this consumer as `scripts\toolbox.mjs` and
     // find no binding for `scripts/toolbox.mjs`. The replace is a no-op on POSIX.
-    modules.add(relative(ROOT, join(dirname(join(ROOT, testFile)), specifier)).split(sep).join("/"));
+    modules.add(relative(root, join(dirname(join(root, testFile)), specifier)).split(sep).join("/"));
   }
   return modules;
 }
@@ -65,17 +89,17 @@ function importedModules(testFile) {
 let consumerCache;
 
 /** Map of repo-relative module -> sorted test files that import it directly. */
-export function directConsumers() {
-  if (consumerCache) return consumerCache;
+export function directConsumers(root = ROOT) {
+  if (root === ROOT && consumerCache) return consumerCache;
   const cache = new Map();
-  for (const testFile of allTestFiles()) {
-    for (const module of importedModules(testFile)) {
+  for (const testFile of allTestFiles(root)) {
+    for (const module of importedModules(testFile, root)) {
       if (!cache.has(module)) cache.set(module, []);
       cache.get(module).push(testFile);
     }
   }
   for (const [module, files] of cache) cache.set(module, files.sort());
-  consumerCache = cache;
+  if (root === ROOT) consumerCache = cache;
   return cache;
 }
 
