@@ -2332,6 +2332,19 @@ function prepareInitInheritedPools(
   return true;
 }
 
+function freshInheritedInventoriesComplete(
+  inventories: ReturnType<typeof buildInitInventories>,
+  inherited: ReadonlyMap<string, InheritedTierPool>, models: Record<string, string[]>, inheritedTiers: ReadonlySet<string>,
+): boolean {
+  const pools = new Map([...inherited].map(([tier, value]) => [tier, value.pool]));
+  const overrides = Object.fromEntries(Object.entries(models).filter(([tier]) => pools.has(tier)));
+  return affectedPoolsHaveCompleteInventories(inventories, {}, overrides, inheritedTiers, pools);
+}
+
+function initSourceDigest(bytes: Uint8Array | null): string | null {
+  return bytes ? createHash("sha256").update(bytes).digest("hex") : null;
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -2893,12 +2906,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       changes = plan.changes;
     }
   } else {
-    inventoryStillSafe = () => [...inheritedEffective].every(([tier, inherited]) => {
-      const generated = models[tier];
-      return !generated || JSON.stringify(generated) === JSON.stringify(inherited.pool) ||
-        initPoolHasCompleteInventory(inherited.pool, available, state, ctx,
-          initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), incompleteProbeProviders, initRefreshReceipt);
-    });
+    inventoryStillSafe = () => freshInheritedInventoriesComplete(
+      buildInitInventories(available, probeVerified, inheritedEffective, models, ownership, sourceModels, state, ctx,
+        initRefreshRemainsCurrent(ranProbe, initRefreshReceipt, ctx, state), initRefreshReceipt, incompleteProbeProviders),
+      inheritedEffective, models, inheritedTiers,
+    );
     if (source.configBytes === null && source.ownershipBytes !== null) {
       reportInitOutcome(
         ctx,
@@ -2909,8 +2921,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       return;
     }
-    const ownership = buildInitOwnershipReceipt(source.source, models);
-    if (!ownership) {
+    const freshOwnership = buildInitOwnershipReceipt(source.source, models);
+    if (!freshOwnership) {
       reportInitOutcome(
         ctx,
         "blocked",
@@ -2929,7 +2941,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ? installProposal
       : { ...installProposal, ...sourceConfig, models };
     const configBytes = Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8");
-    const ownershipBytes = Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8");
+    const ownershipBytes = Buffer.from(JSON.stringify(freshOwnership, null, 2) + "\n", "utf8");
     if (
       configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
       ownershipBytes.byteLength > 5_000_000 ||
@@ -2948,12 +2960,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       configPath: source.configPath,
       ownershipPath: source.ownershipPath,
       journalPath: source.journalPath,
-      expectedConfigDigest: source.configBytes
-        ? createHash("sha256").update(source.configBytes).digest("hex")
-        : null,
-      expectedOwnershipDigest: source.ownershipBytes
-        ? createHash("sha256").update(source.ownershipBytes).digest("hex")
-        : null,
+      expectedConfigDigest: initSourceDigest(source.configBytes),
+      expectedOwnershipDigest: initSourceDigest(source.ownershipBytes),
       nextConfigBytes: configBytes,
       nextOwnershipBytes: ownershipBytes,
     };
@@ -2963,6 +2971,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     changes = Object.entries(models).flatMap(([tier, keys]) =>
       keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
     );
+  }
+  if (!inventoryStillSafe()) {
+    reportInitOutcome(ctx, "blocked", "Nothing was saved; the model inventory is incomplete or stale.",
+      "Refresh the provider catalog, then rerun /bifrost init.", "warning");
+    return;
   }
   const savedPools = (
     JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
@@ -5053,8 +5066,7 @@ function persistBootstrapConfig(
     !Array.isArray(current.classifier)
       ? (current.classifier as Record<string, unknown>)
       : source.configBytes === null && state.config.classifier
-        // SAFETY: Classifier config is a plain object whose properties are copied below.
-        ? (state.config.classifier as unknown as Record<string, unknown>)
+        ? (state.config.classifier as unknown as Record<string, unknown>) // SAFETY: Classifier config is a plain object copied below.
         : {};
   if (classifierChoice)
     current.classifier = nextClassifierConfig(currentClassifier, classifierChoice);

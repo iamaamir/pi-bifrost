@@ -217,7 +217,44 @@ function registerInitialConfigCases1() {
 
 }
 
+function replacementEvidence(scenario: string) {
+  return scenario === "missing" ? {} : { other: { status: scenario === "stale" ? "stale" as const : "complete" as const, refreshedAt: Date.now() } };
+}
+
 function registerInitialConfigCases2() {
+  for (const scenario of ["missing", "stale", "complete", "auth change"] as const) {
+    it(`fresh inherited override checks replacement inventory: ${scenario}`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ default: "general", models: { general: ["openai/old-model"] } }));
+        const dir = join(cwd, ".pi");
+        fs.mkdirSync(dir, { recursive: true });
+        writeRecentProbeCache(join(dir, "bifrost-probe.json"), [
+          { status: "ok", provider: "other", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+          { status: "timeout", provider: "openai", model: "old-model", duration_ms: 10 },
+        ]);
+        const evidence: Record<string, { status: "complete" | "stale"; refreshedAt: number }> = {
+          openai: { status: "complete", refreshedAt: Date.now() },
+        };
+        Object.assign(evidence, replacementEvidence(scenario));
+        const h = makeHarness({ models: [makeModel("openai", "old-model", 1, 1), makeModel("other", "new-model", 1, 1)], evidence });
+        // Preserve missing or stale evidence instead of refreshing it to complete.
+        delete (h.registry as { refresh?: unknown }).refresh;
+        let authenticated = true;
+        let confirmations = 0;
+        h.registry.getProviderAuthStatus = () => ({ configured: authenticated });
+        const ctx = h.ctx as unknown as { hasUI: boolean; ui: { confirm: () => Promise<boolean>; notify: () => void } };
+        ctx.hasUI = true;
+        ctx.ui = { confirm: async () => { confirmations++; if (scenario === "auth change") authenticated = false; return true; }, notify: () => {} };
+        await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+        assert.equal(confirmations, scenario === "missing" || scenario === "stale" ? 0 : 1);
+        assert.equal(fs.existsSync(join(dir, "bifrost.json")), scenario === "complete");
+        if (scenario !== "complete") assert.equal(fs.existsSync(join(dir, "bifrost-reconcile-ownership.json")), false);
+      });
+    });
+  }
+
   for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
     it(`does not save a fresh inherited override after failed forced refresh (${initialConfig ? "settings-only" : "absent"} project config)`, async () => {
       await withCwd(async (cwd) => {
