@@ -2,7 +2,8 @@
 // Host-boundary config loading (agent-dir paths, bounded file reads) lives in
 // config-load.ts so the resolve-only router graph stays Pi-independent.
 
-import type { RoutingStrategy, RouteRule } from "./routing.ts";
+import type { RouteRule } from "./modules/rules/rules.ts";
+import type { RoutingStrategy } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";

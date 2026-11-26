@@ -37,7 +37,8 @@ import {
 import type { ClassifierBackend } from "./classifier-backends.ts";
 import { validateConfigSourceStructure } from "./config-schema.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
-import { compileRules, findCandidates } from "./routing.ts";
+import { compileRules } from "./modules/rules/rules.ts";
+import { findCandidates } from "./routing.ts";
 import { checkProviderScope, compileRoutingScope } from "./routing-scope.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";

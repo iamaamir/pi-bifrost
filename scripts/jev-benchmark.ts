@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_RULES } from "../config.ts";
-import { classifyCompiled, compileRules } from "../routing.ts";
+import { classifyCompiled, compileRules } from "../modules/rules/rules.ts";
 import { resolveTypeSafeApiKey, buildTypeSafeRequest, decodeTypeSafeJudgment, TYPESAFE_SYSTEMONE_URL, TYPESAFE_MODEL } from "../typesafe-classifier.ts";
 export { TYPESAFE_SYSTEMONE_URL, TYPESAFE_MODEL } from "../typesafe-classifier.ts";
 export const DEFAULT_TIMEOUT_MS = 10_000;

@@ -8,7 +8,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readJsonFile } from "./storage.ts";
-import type { RouteRule } from "./routing.ts";
+import type { RouteRule } from "./modules/rules/rules.ts";
 import { mergeRoutingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
 import {
   DEFAULT_RULES,
