@@ -260,6 +260,50 @@ function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions =
   });
 }
 
+// Cancellation is sent to real Pi RPC while the alternate's lease is owned,
+// not inferred from a timer or a simulated AbortController.
+async function runNativeFailoverAbort({ home, work, extension, observer, barrier }) {
+  const child = spawn(PI, ["-e", extension, "-e", observer.extension, "--approve", "--mode", "rpc",
+    "--no-session", "--no-tools", "--model", "experiment/controls-auto"], {
+    cwd: work, stdio: ["pipe", "pipe", "pipe"],
+    env: { PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+      PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+      BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+      BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log") },
+  });
+  let stdout = "", stderr = "", partial = "";
+  const records = [];
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", chunk => {
+    stdout = appendBounded(stdout, chunk);
+    const lines = (partial + chunk).split("\n");
+    partial = lines.pop();
+    for (const line of lines) { try { records.push(JSON.parse(line)); } catch { /* RPC only */ } }
+  });
+  child.stderr.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
+  const send = command => new Promise((resolve, reject) => child.stdin.write(JSON.stringify(command) + "\n", error => error ? reject(error) : resolve()));
+  const wait = async (name, condition) => {
+    const deadline = Date.now() + 20_000;
+    while (!condition() && child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(condition(), `${name} not observed: ${stderr}\n${stdout}`);
+  };
+  try {
+    await send({ id: "control-prompt", type: "prompt", message: "one cancellation request" });
+    await wait("admitted alternate barrier", () => existsSync(barrier));
+    await send({ id: "control-abort", type: "abort" });
+    await wait("abort acknowledgement", () => records.some(r => r.id === "control-abort" && r.type === "response" && r.success === true));
+    await wait("agent settlement", () => records.some(r => r.type === "agent_settled"));
+    assert.equal(records.filter(r => r.type === "agent_settled").length, 1);
+    const closed = waitForClose(child);
+    child.stdin.end();
+    await closed;
+    assertNoBlockedNetwork(home);
+  } finally {
+    if (child.exitCode === null) await stopChild(child);
+  }
+}
+
 async function fakeStats(port) {
   const response = await fetch(`http://127.0.0.1:${port}/_stats`);
   assert.equal(response.ok, true);
@@ -467,6 +511,105 @@ export default pi => installReceiptExperiment(pi, ${JSON.stringify({ work, versi
         assert.ok(outcome.contextEdits.some(e => e.targetId === failures[0].id && e.isNull));
         assertNoBlockedNetwork(home);
         console.log("native receipt experiment", JSON.stringify({ version, mode, actual, routes: trace.routes, settled: trace.settled, promotions: trace.promotions }));
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const scenario of [
+    "no-alternate", "all-fail", "stale-settlement", "write-failure", "admission-contention",
+    "strict-tier", "exact-model", "branch-invalidated", "manual-invalidated", "cancel-after-admission", "post-tool",
+  ]) {
+    it(`native failover controls: ${scenario}`, async () => {
+      const home = mkdtempSync(join(tmpdir(), "bifrost-failover-control-home-"));
+      const work = mkdtempSync(join(tmpdir(), "bifrost-failover-control-work-"));
+      try {
+        const first = `failover-control-a-${scenario}`, alternate = `failover-control-b-${scenario}`;
+        const a = `fake/${first}`, b = `fake/${alternate}`;
+        const tracePath = join(work, "receipt-controls.json"), barrier = join(work, "admitted-alternate");
+        const extension = join(work, "receipt-controls.mjs");
+        writeFixture({ home, work, port: server.port,
+          models: [{ id: first, reasoning: false }, { id: alternate, reasoning: false }],
+          bifrost: { enabled: false },
+          retry: { enabled: true, maxRetries: scenario === "all-fail" ? 2 : 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
+        });
+        writeFileSync(extension, `import { installReceiptControls } from ${JSON.stringify(join(ROOT, "tests/fixtures/native-failover-controls-experiment.mjs"))};
+export default pi => installReceiptControls(pi, ${JSON.stringify({ work, scenario, first, alternate, tracePath, barrier })});`);
+        const observer = writeOutcomeObserver(work);
+        const before = await fakeStats(server.port);
+        if (scenario === "cancel-after-admission") {
+          await runNativeFailoverAbort({ home, work, extension, observer, barrier });
+        } else {
+          const result = await runPi({ home, work, extension, extraExtensions: [observer.extension],
+            noTools: scenario !== "post-tool", model: "experiment/controls-auto", messages: ["one control request"] });
+          assert.equal(result.timedOut, false, result.stderr);
+          assert.equal(result.code === 0, scenario === "post-tool", result.stderr);
+        }
+        const after = await fakeStats(server.port);
+        const actual = after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => e.model);
+        const expected = scenario === "all-fail" ? [first, alternate] : scenario === "exact-model" ? [first, first]
+          : scenario === "post-tool" ? [first, first, alternate] : [first];
+        assert.deepEqual(actual, expected, "exact physical request sequence");
+        const trace = JSON.parse(readFileSync(tracePath, "utf8"));
+        assert.equal(trace.hostSettlements.length, 1);
+        assert.equal(trace.liveReceipts, 0, "no live receipt after settlement");
+        assert.equal(trace.routes.every(r => r.entryId === trace.routes[0].entryId), true);
+        const expectedOutcomes = scenario === "all-fail" ? [[a, "failure"], [b, "failure"]]
+          : scenario === "cancel-after-admission" ? [[a, "failure"], [b, "cancelled"]]
+          : scenario === "post-tool" ? [[a, "failure"], [b, "success"]] : [[a, "failure"]];
+        assert.deepEqual(trace.settled.map(r => [r.model, r.kind]), expectedOutcomes, "each admitted owner settles exactly once");
+        assert.equal(new Set(trace.settled.map(r => r.dispatchId)).size, expectedOutcomes.length);
+        assert.equal(new Set(trace.settled.map(r => r.outcomeId)).size, expectedOutcomes.length);
+        for (const r of trace.settled) {
+          const durable = trace.state.dispatches[r.dispatchId];
+          assert.equal(durable.settledKind, r.kind);
+          assert.equal(durable.scopes[0].modelKey, r.model);
+        }
+        assert.equal(Object.keys(trace.state.dispatches).length, expectedOutcomes.length + (scenario === "admission-contention" ? 1 : 0));
+        assert.ok(Object.values(trace.state.scopes).every(scope => scope.lease === undefined), "all owned trial leases released");
+        assert.deepEqual(trace.promotions, scenario === "post-tool" ? [b] : []);
+        assert.deepEqual(trace.toolCalls, scenario === "post-tool" ? ["synthetic"] : []);
+        const expectedStops = { "no-alternate": "no-eligible-alternate", "all-fail": "no-eligible-alternate",
+          "stale-settlement": "settlement-unconfirmed", "write-failure": "settlement-unconfirmed",
+          "admission-contention": "admission-rejected", "strict-tier": "no-eligible-alternate",
+          "branch-invalidated": "authority-changed", "manual-invalidated": "authority-changed",
+          "cancel-after-admission": "cancelled-after-admission" };
+        assert.equal(trace.stop, expectedStops[scenario] ?? null);
+        if (scenario === "stale-settlement" || scenario === "write-failure") {
+          assert.deepEqual(trace.rejections, [scenario === "stale-settlement" ? "stale" : "state_write_failed"]);
+          assert.equal(trace.settled[0].cleanup, true, "fixture-only cleanup after rejected settlement");
+          assert.equal(trace.admissions.length, 1, "no alternate admission following unconfirmed settlement");
+        }
+        if (scenario === "admission-contention") {
+          assert.deepEqual(trace.admissions.map(r => r.status), ["admitted", "blocked"]);
+          assert.equal(trace.externalLeasePreserved, true);
+          assert.equal(trace.state.dispatches[trace.externalDispatchId].settledKind, "cancelled");
+        }
+        if (scenario === "branch-invalidated" || scenario === "manual-invalidated") {
+          assert.deepEqual(trace.epoch, scenario === "branch-invalidated" ? { branch: 1, manual: 0 } : { branch: 0, manual: 1 });
+          assert.equal(trace.admissions.length, 1);
+        }
+        if (scenario === "cancel-after-admission") {
+          assert.equal(trace.nativeSignalAborted, true);
+          assert.deepEqual(trace.hostSettlements, [{ aborted: true }]);
+          assert.equal(typeof trace.settled[1].leaseId, "string");
+        }
+        if (scenario === "exact-model") {
+          assert.equal(trace.explicitPreserved, true);
+          assert.deepEqual(trace.routes.map(r => r.reason), ["user", "retry"]);
+          assert.equal(trace.routes[0].dispatchId, trace.routes[1].dispatchId);
+        }
+        if (scenario === "post-tool") {
+          assert.deepEqual(trace.routes.map(r => [r.reason, r.model]), [["user", a], ["continuation", a], ["retry", b]]);
+          assert.equal(trace.routes[0].dispatchId, trace.routes[1].dispatchId);
+          assert.equal(trace.routes[2].toolsInProjection, 1, "committed tool result available to alternate");
+          assert.equal(typeof trace.settled[1].leaseId, "string");
+        }
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 1, "no synthetic user replay");
+        assertNoBlockedNetwork(home);
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(work, { recursive: true, force: true });

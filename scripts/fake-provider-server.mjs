@@ -129,6 +129,20 @@ function simpleFixture(response, model) {
   return false;
 }
 
+// Independent generation-only controls; model IDs isolate counters per scenario.
+function failoverControlFixture(response, model, generationAttempt) {
+  if (!generationAttempt) return false;
+  if (model === "failover-control-a-post-tool" && generationAttempt === 1) {
+    toolCallSse(response);
+    return true;
+  }
+  if (model.startsWith("failover-control-a-") || model === "failover-control-b-all-fail") {
+    json(response, 500, { error: { message: "synthetic server error for failover control" } });
+    return true;
+  }
+  return false;
+}
+
 const server = http.createServer((request, response) => {
   response.on("error", () => {});
   request.on("error", () => {});
@@ -216,6 +230,7 @@ const server = http.createServer((request, response) => {
       });
       return;
     }
+    if (failoverControlFixture(response, model, generationAttempt)) return;
     if (kind === "generation" && model.startsWith("affinity-failover-a-") && generationAttempt === 2) return json(response, 500, { error: { message: "simulated affinity failover server error" } });
     if (kind === "generation" && model.startsWith("affinity-failover-b-") && generationAttempt === 1) return toolCallSse(response);
     if (model === "partial-allowance") { stat.syntheticOutcome = "partial_output_then_usage_limit_reached"; return partialAllowanceSse(response); }
