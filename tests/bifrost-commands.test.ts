@@ -2260,9 +2260,9 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("Probing models")), false);
       assert.equal(calls.some((call) => call.kind === "select"), false);
-      const reusedNotice = calls.find((call) => call.kind === "notify" && String(call.value).includes("Model check: cached"));
+      const reusedNotice = calls.find((call) => call.kind === "notify" && String(call.value).includes("Using model check from"));
       assert.ok(reusedNotice, "expected saved probe provenance in init output");
-      assert.match(String(reusedNotice?.value), /Model check: cached \d+[smhd.]+ ago\. Run \/bifrost init -f to check again\./);
+      assert.match(String(reusedNotice?.value), /Using model check from \d+[smhd.]+ ago: 1 worked\. Run \/bifrost init -f to check again\./);
       assert.doesNotMatch(String(reusedNotice?.value), /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
     } finally {
       process.chdir(previousCwd);
@@ -3741,9 +3741,8 @@ describe("command aliases", () => {
       state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
       await createCommandRouter(state as never)("init -f", ctx as never);
       assert.equal(calls.some((call) => call.kind === "select" && call.title === "Bifrost commands"), false);
-      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Checking 1 models (forced by -f).")));
-      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Checking 1 models (forced by -f).")));
-      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("saved probe results")), false);
+      assert(calls.some((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:") && call.value !== "bifrost-probe:0"));
+      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("Using model check from")), false);
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });

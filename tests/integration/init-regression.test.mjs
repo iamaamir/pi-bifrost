@@ -597,7 +597,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const preparation = cached.findIndex((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.includes("Refreshing model catalog"));
       assert.ok(preparation >= 0 && cached.slice(preparation + 1).some((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.length === 0));
       assert.ok(!cached.some((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.some((line) => /Probing models:/.test(line))));
-      assert.ok(cached.some((r) => r.method === "notify" && /Model check: cached/i.test(r.message)));
+      assert.ok(cached.some((r) => r.method === "notify" && /Using model check from/i.test(r.message)));
       requests = [];
       const forced = await runRpcInit(env, "-f --write");
       assert.deepEqual([...new Set(requests)].sort(), ["credits-exhausted", "healthy"]);
@@ -634,7 +634,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(cached.code, 0, cached.stderr);
       assert.equal(cached.violations, "");
       assert.deepEqual(requests, [], "ordinary init must reuse a complete recent report without new provider requests");
-      assert.match(cached.stderr + cached.stdout, /Model check: cached \d+[smhd.]+ ago\. Run \/bifrost init -f to check again\./u);
+      assert.match(cached.stderr + cached.stdout, /Using model check from \d+[smhd.]+ ago: \d+ worked\./u);
       assert.doesNotMatch(cached.stderr + cached.stdout, /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
       const configPath = join(env.work, ".pi", "bifrost.json");
       const cachedConfigBytes = readFileSync(configPath);
@@ -653,9 +653,8 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(forced.code, 0, forced.stderr);
       assert.equal(forced.violations, "");
       assert.deepEqual([...new Set(requests)], ["healthy", "credits-exhausted"], "forced init must disregard even a complete recent cache");
-      assert.match(forced.stderr + forced.stdout, /Checking 2 models \(forced by -f\)\./u);
-      assert.match(forced.stderr + forced.stdout, /Using \d+ working models from this check\./u);
-      assert.doesNotMatch(forced.stderr + forced.stdout, /Model check: cached|file mtime|provider-data freshness/i);
+      assert.match(forced.stderr + forced.stdout, /1 model worked; 1 failed\./u);
+      assert.doesNotMatch(forced.stderr + forced.stdout, /Using model check from|file mtime|provider-data freshness/i);
       const forcedBytes = readFileSync(configPath);
       const forcedConfig = JSON.parse(forcedBytes);
       assert.equal(Object.values(forcedConfig.models).flat().includes("fake/credits-exhausted"), false);
