@@ -561,8 +561,10 @@ function makeCtx(
       setStatus: (key: string, value: string | undefined) => {
         calls.push({ kind: "status", value: `${key}:${value ?? ""}` });
       },
-      setWidget: (key: string, value: string[] | undefined) => {
-        calls.push({ kind: "widget", value: `${key}:${value?.length ?? 0}`, lines: value });
+      setWidget: (key: string, value: string[] | undefined | ((tui: unknown, theme: unknown) => { render(width: number): string[] })) => {
+        const theme = { fg: (_: string, text: string) => text, bg: (_: string, text: string) => text, bold: (text: string) => text };
+        const lines = typeof value === "function" && key === "bifrost-output" ? value(undefined, theme).render(200).map((line) => line.trimEnd()) : value;
+        calls.push({ kind: "widget", value: `${key}:${lines?.length ?? 0}`, lines: lines as string[] | undefined });
       },
       setWorkingMessage: (_message?: string) => {},
       setWorkingVisible: (_visible: boolean) => {},
@@ -1373,6 +1375,7 @@ describe("bifrost command ui", () => {
         title === "Classifier backend" ? options.find((option) => option.startsWith("typesafe")) : undefined,
       );
       const state = makeState() as any;
+      state.extensionDir = tempDir;
       state.bootstrapModelsInMemory = true;
       state.config.default = "quick";
       state.config.models = { quick: ["fixture/chat"] };
@@ -1384,6 +1387,10 @@ describe("bifrost command ui", () => {
       assert.equal(saved.default, "quick");
       assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
       assert.equal(saved.classifier.backend, "typesafe");
+      assert.equal(saved.$schema, join(tempDir, "schema.json"));
+      assert.ok(Array.isArray(saved.rules));
+      assert.ok(saved.rules.length > 0);
+      assert.ok(saved.rules.every((rule: { model?: string }) => rule.model === "quick"));
       assert.ok(existsSync(join(tempDir, ".pi", "bifrost-reconcile-ownership.json")));
     } finally {
       process.chdir(previousCwd);
@@ -1408,6 +1415,7 @@ describe("bifrost command ui", () => {
         title === "Classifier backend" ? options.find((option) => option.startsWith("typesafe")) : undefined,
       );
       const state = makeState() as any;
+      state.extensionDir = tempDir;
       state.bootstrapModelsInMemory = true;
       state.config.default = "quick";
       state.config.models = { quick: ["fixture/chat"] };
@@ -1418,6 +1426,10 @@ describe("bifrost command ui", () => {
       assert.equal(saved.default, "quick");
       assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
       assert.equal(saved.classifier.backend, "typesafe");
+      assert.equal(saved.$schema, join(tempDir, "schema.json"));
+      assert.ok(Array.isArray(saved.rules));
+      assert.ok(saved.rules.length > 0);
+      assert.ok(saved.rules.every((rule: { model?: string }) => rule.model === "quick"));
       assert.ok(existsSync(join(agentDir, "bifrost-reconcile-ownership.json")));
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
     } finally {
@@ -1532,6 +1544,43 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("reports inherited config layers without listing every inherited field", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-inheritance-summary-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeFileSync(join(tempDir, "bifrost.json"), JSON.stringify({ rules: [{ pattern: "tests", model: "quick" }] }));
+      writeFileSync(join(tempDir, ".pi", "bifrost.json"), "{}\n");
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const registry = (ctx as any).modelRegistry;
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      registry.getAll = () => [{ provider: "fixture", id: "chat" }];
+      registry.getProvider = () => ({ });
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      (ctx as any).ui.confirm = async () => true;
+      await createCommandRouter(makeState() as never)("init", ctx as never);
+      const outputLines = calls.flatMap((call) => Array.isArray(call.lines) ? call.lines : []);
+      assert.ok(outputLines.some((line: string) => line.includes("workspace (") && line.includes("/bifrost.json)")), JSON.stringify(calls));
+      assert.ok(outputLines.some((line: string) => line.trim().startsWith("Update") && line.includes("project")));
+      assert.ok(outputLines.some((line: string) => /\+1/.test(line)));
+      assert.ok(outputLines.some((line: string) => line.includes("1 working model found") && line.includes("cached 1m ago")));
+      assert.ok(outputLines.every((line: string) => !/-0\b/.test(line)));
+      assert.equal(outputLines.filter((line: string) => line.startsWith("inherited field:")).length, 0);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps inherited classifier settings out of a new project config", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-classifier-preserve-"));
     const previousCwd = process.cwd();
@@ -1565,7 +1614,7 @@ describe("bifrost command ui", () => {
       assert.equal(saved.classifier.typesafe, undefined);
       assert.equal(calls.some((call) => call.kind === "select"), false);
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
-      assert(calls.some((call) => call.kind === "widget" && Array.isArray(call.lines) && call.lines.some((line) => line.includes("classifier: off"))));
+      assert(calls.some((call) => call.kind === "widget" && Array.isArray(call.lines) && call.lines.some((line) => line.includes("Classifier  off"))));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3635,7 +3684,7 @@ describe("command aliases", () => {
     }
   });
 
-  it("shows the selected init destination in the confirmation and respects cancellation", async () => {
+  it("shows the selected init destination in the summary and respects cancellation", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-confirm-"));
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -3646,14 +3695,17 @@ describe("command aliases", () => {
       writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
         { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
       ]);
-      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
       const confirmations: string[] = [];
-      (ctx as any).ui.confirm = async (_title: string, message: string) => { confirmations.push(message); return false; };
+      (ctx as any).ui.confirm = async (title: string) => { confirmations.push(title); return false; };
       for (const args of ["init", "init -g"]) {
         await createCommandRouter(makeState() as never)(args, ctx);
       }
-      assert.match(confirmations[0], /project \(\.pi\/bifrost\.json\)/);
-      assert.match(confirmations[1], /user \(.+bifrost\.json\)/);
+      const summaries = calls.filter((call) => call.lines?.some((line) => line.includes("Bifrost · proposed configuration")));
+      assert.match(summaries[0]!.lines!.join("\n"), /Fields added\s+.*models/);
+      assert.match(summaries[0]!.lines!.join("\n"), /project \(\.pi\/bifrost\.json\)/);
+      assert.match(summaries[1]!.lines!.join("\n"), /user \(.+bifrost\.json\)/);
+      assert.deepEqual(confirmations, ["Apply this configuration?", "Apply this configuration?"]);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
       assert.equal(existsSync(join(tempDir, "bifrost.json")), false);
     } finally {
@@ -4350,7 +4402,7 @@ describe("route dispatch", () => {
       ]);
       await createCommandRouter(state as never)("init", ctx);
     });
-    const proposal = calls.findIndex((c) => Array.isArray(c.lines) && c.lines.includes("--- init ---"));
+    const proposal = calls.findIndex((c) => Array.isArray(c.lines) && c.lines.some((line: string) => line.trim() === "Bifrost · proposed configuration"));
     assert.ok(proposal >= 0);
     assert.ok(calls.slice(proposal + 1).some((c) => c.value === "bifrost-output:0"));
   });

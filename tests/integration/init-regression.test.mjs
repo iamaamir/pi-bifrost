@@ -297,7 +297,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /memberships: \+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /no model-to-tier assignment changes/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
@@ -490,7 +490,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
         const target = selected === "global" ? "user" : "project";
-        assert.match(result.stdout + result.stderr, new RegExp(`save target: ${target}`));
+        assert.match(result.stdout + result.stderr, new RegExp(`(?:Create|Update)\\s+${target}`));
         assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
         for (const layer of ["workspace", "user"]) {
           if (layer === "workspace" && selected === "default-global-only") {
@@ -540,6 +540,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(requests.filter((model) => model === "credits-exhausted").length, 1, "a provider error must not trigger a second session probe");
       const config = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
       assert.ok(Object.values(config.models).flat().includes("fake/healthy"));
+      assert.equal(config.$schema, `${env.home}/extension/schema.json`, "fresh init should write schema pointer to bundled schema");
       assert.equal(Object.values(config.models).flat().includes("fake/credits-exhausted"), false, JSON.stringify({ requests, stdout: result.stdout, stderr: result.stderr, config }));
       assert.equal(config.cache.threshold, 1);
       assert.equal(config.reliability.failureThreshold, 3);
@@ -676,6 +677,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
       const config = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(config.$schema, `${env.home}/extension/schema.json`, "init should add schema pointer when filling an existing empty config");
       assert.ok(config.models[config.default]?.includes("fake/healthy"));
       assert.equal(Object.values(config.models).flat().includes("fake/credits-exhausted"), false);
       assert.deepEqual(Object.keys(config.categoryStrategies), Object.keys(config.models));
