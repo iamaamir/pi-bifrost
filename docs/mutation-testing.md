@@ -169,13 +169,15 @@ whole files. As a result, a
 module bound to one heavy file does not pay that file's runtime for each mutant.
 This is the entire speed difference.
 
-`routing.ts` stays on TAP, for a different reason. Its rule tests deliberately
-let a catastrophic regex run in the process when a mutant bypasses the
-backtracking probe. The engines disagree. `^(a+)+$` against a 25-character
-canary took 475 ms under V8 and 66 ms under JavaScriptCore. A measured A/B left
-4 of 1,000 mutants with different verdicts, and all 4 are in that region. Only
-the production engine answers the question that production asks, so this module
-runs on Node. The cost is 13.5 planned minutes instead of 2.3.
+`routing.ts` stays on TAP as a deferred budget/CI decision: its rule-engine
+tests moved to `modules/rules/` in #273, and removing the override is a separate
+cost decision. The two moved targets stay on TAP because their bound tests still
+exercise the structural scan and verdict decode in the host process. The engines
+disagree. `^(a+)+$` against a 25-character canary took 475 ms under V8 and 66 ms
+under JavaScriptCore. A measured A/B left 4 of 1,000 mutants with different
+verdicts, and all 4 are in that region. Only the production engine answers the
+question that production asks, so those modules run on Node. The two potentially
+blocking match cases run in bounded children.
 
 The probe was also pinned. It spawned `process.execPath`, which is `bun` under
 Bun, so the probe ran a different regex engine than production. It now spawns
@@ -248,11 +250,12 @@ removed the earlier claim of "226 of 227 identical, one `ObjectLiteral` at line
 221 that Bun killed and TAP missed". On the current HEAD, both engines kill that
 mutant, and the specific figure is not reproducible.
 
-`routing.ts` is the case where the engine decides the verdict, and it is the
-only override. `^(a+)+$` against a 25-character canary takes 475 ms under V8 and
-66 ms under JavaScriptCore. The rule tests deliberately let that regex run in
-the host process when a mutant bypasses the backtracking probe. Only the
-production engine answers the question that production asks.
+The engine-decides-verdict cases are the two `modules/rules/` targets, not
+`routing.ts` alone. `^(a+)+$` against a 25-character canary takes 475 ms under V8
+and 66 ms under JavaScriptCore. Their bound tests still let that regex run in
+the host process when a scan mutant bypasses the textual check. Only the
+production engine answers the question that production asks. `routing.ts` keeps
+its TAP override pending the deferred budget decision.
 
 Remaining limitation. A measurement establishes equivalence, not a proof. A
 module trusts Bun because its verdicts match the production engine on that
@@ -304,8 +307,8 @@ file to tune:
 - `TEST_RUNNER`: the default runner (`bun`). See the section above. This is the
   setting that decides everything else.
 - `RUNNER_OVERRIDES`: per-target runner overrides with a stated reason. At this
-  time, `routing.ts` -> `tap`, because its verdict depends on the production regex
-  engine. Five modules use Bun.
+  time, `routing.ts` and the two `modules/rules/` targets use `tap`; the other
+  modules use Bun. Each override's reason is recorded in `mutation/config.mjs`.
 - `TAP_NODE_ARGS`: how the TAP runner invokes `node:test`.
 - `STRYKER_OPTIONS`: `checkers`, `thresholds`, reporters, `disableTypeChecks`.
 - `SHARDING`: overlap width, max shards, and the cost threshold that starts
