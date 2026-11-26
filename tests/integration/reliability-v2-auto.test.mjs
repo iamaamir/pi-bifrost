@@ -208,12 +208,12 @@ function assertNoBlockedNetwork(home) {
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
 
-function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [] }) {
+function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [], extension = EXTENSION }) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.TYPESAFE_API_KEY;
     const extensionArgs = extraExtensions.flatMap((extension) => ["-e", extension]);
-    const child = spawn(PI, ["-e", EXTENSION, ...extensionArgs, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
+    const child = spawn(PI, ["-e", extension, ...extensionArgs, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: work,
       env: {
@@ -296,6 +296,96 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   let server;
   before(async () => { server = await startFakeServer(); fakePort = server.port; });
   after(async () => { if (server?.child) await stopChild(server.child); });
+
+  // Research only: use Pi's public virtual-model API without loading Bifrost.
+  // A positive result establishes the host seam, not Bifrost receipt transfer.
+  for (const scenario of [
+    { name: "server failure", first: "fail", retry: true, expected: ["fail", "healthy"], reasons: ["user", "retry"] },
+    { name: "rate limit", first: "rate-limit-429", retry: true, expected: ["rate-limit-429", "healthy"], reasons: ["user", "retry"] },
+    { name: "TPM rejection", first: "tpm-request-too-large", retry: true, expected: ["tpm-request-too-large", "healthy"], reasons: ["user", "retry"] },
+    { name: "terminal billing rejection", first: "credits-exhausted", retry: true, expected: ["credits-exhausted"], reasons: ["user"] },
+    { name: "terminal continuation", first: "credits-exhausted", retry: true, continueTerminal: true, expected: ["credits-exhausted", "healthy"], reasons: ["user", "user"] },
+    { name: "native retry disabled", first: "fail", retry: false, expected: ["fail"], reasons: ["user"] },
+    { name: "failover disabled", first: "fail", retry: true, disableFailover: true, expected: ["fail", "fail"], reasons: ["user", "retry"] },
+    { name: "physical retry", first: "fail", retry: true, physical: true, expected: ["fail", "fail"], reasons: [] },
+  ]) {
+    it(`characterizes native Pi failover: ${scenario.name}`, async () => {
+      const home = mkdtempSync(join(tmpdir(), "bifrost-native-failover-home-"));
+      const work = mkdtempSync(join(tmpdir(), "bifrost-native-failover-work-"));
+      try {
+        writeFixture({ home, work, port: server.port,
+          models: [{ id: scenario.first, reasoning: false }, { id: "healthy", reasoning: false }],
+          bifrost: { enabled: false },
+          retry: { enabled: scenario.retry, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
+        });
+        const extension = join(work, "native-failover-experiment.mjs");
+        const tracePath = join(work, "native-failover-trace.json");
+        writeFileSync(extension, `import { writeFileSync } from "node:fs";
+export default function(pi) {
+  const scenario = ${JSON.stringify(scenario)};
+  const routes = [];
+  const settlements = [];
+  let continued = false;
+  pi.registerVirtualModel({
+    provider: "experiment", id: "auto", name: "Native failover experiment", thinkingLevels: ["off"],
+    route(request, ctx) {
+      const alternate = !scenario.disableFailover && (request.reason === "retry" || continued);
+      const id = alternate ? "healthy" : scenario.first;
+      routes.push({ reason: request.reason, failed: request.failed?.model.id ?? null,
+        failedContent: request.failed?.message.content.length ?? null,
+        selected: id, userCount: request.messages.filter(m => m.role === "user").length,
+        projectedError: request.messages.some(m => m.role === "assistant" && m.stopReason === "error") });
+      const model = ctx.modelRegistry.find("fake", id);
+      if (!model) throw new Error("experiment model unavailable");
+      return { model, thinkingLevel: "off" };
+    },
+  });
+  pi.on("agent_before_settle", (event, ctx) => {
+    settlements.push({ outcome: event.outcome, canContinue: event.context.canContinue });
+    if (!scenario.continueTerminal || continued || event.outcome !== "error" || ctx.signal?.aborted || event.context.pendingMessages.length) return;
+    const branch = ctx.sessionManager.getBranch();
+    const last = branch.at(-1);
+    if (last?.type !== "message" || last.message.role !== "assistant" || last.message.stopReason !== "error"
+      || last.message.model !== scenario.first || last.message.content.length !== 0) throw new Error("unexpected terminal fixture boundary");
+    continued = true;
+    return { entries: [{ type: "context_edit", targetId: last.id, replacement: null }], continue: true };
+  });
+  pi.on("session_shutdown", () => writeFileSync(${JSON.stringify(tracePath)}, JSON.stringify({ routes, settlements })));
+}`);
+        const observer = writeOutcomeObserver(work);
+        const before = await fakeStats(server.port);
+        const result = await runPi({ home, work, extension, extraExtensions: [observer.extension],
+          model: scenario.physical ? `fake/${scenario.first}` : "experiment/auto",
+          messages: ["respond with one word"] });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false, result.stderr);
+        const models = after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => e.model);
+        assert.deepEqual(models, scenario.expected, result.stderr);
+        assert.equal(result.code === 0, scenario.expected.at(-1) === "healthy", result.stderr);
+        const trace = JSON.parse(readFileSync(tracePath, "utf8"));
+        assert.deepEqual(trace.routes.map(r => r.reason), scenario.reasons);
+        assert.ok(trace.routes.every(r => r.userCount === 1 && !r.projectedError), "one user request and no failed response in projection");
+        for (const route of trace.routes.filter(r => r.reason === "retry")) {
+          assert.equal(route.failed, scenario.first);
+          assert.equal(route.failedContent, 0);
+        }
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 1);
+        const failed = outcome.assistants.filter(e => e.stopReason === "error");
+        assert.ok(failed.every(e => e.contentLength === 0));
+        for (const entry of failed.slice(0, scenario.expected.at(-1) === "healthy" ? failed.length : -1)) {
+          assert.ok(outcome.contextEdits.some(edit => edit.targetId === entry.id && edit.isNull), "exact failed entry omitted from projection");
+        }
+        assert.ok(trace.settlements.length >= 1);
+        if (scenario.continueTerminal) assert.equal(trace.settlements[0].outcome, "error");
+        assertNoBlockedNetwork(home);
+        console.log("native-failover experiment", JSON.stringify({ name: scenario.name, models, ...trace, userCount: outcome.userCount, exitCode: result.code }));
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("does not dispatch allowance alternate after abort at deterministic pre-settlement barrier", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-abort-home-"));
