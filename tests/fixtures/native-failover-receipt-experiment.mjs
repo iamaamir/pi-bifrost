@@ -81,7 +81,7 @@ function createOwners(work, version, alternate) {
       const entry = userBoundary(ctx);
       assert.equal(book.find(session, entry.id, entry.message), receipt, "settle exact live receipt");
       const result = await store.settle({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId,
-        outcomeId: receipt.outcomeId, leaseReferences: receipt.leases, settlement: { kind: outcome } });
+        outcomeId: receipt.outcomeId, settlement: { kind: outcome } });
       assert.equal(result.status, "settled");
       const persisted = store.readSnapshot().dispatches[receipt.dispatchId];
       assert.equal(persisted.settledKind, outcome);
