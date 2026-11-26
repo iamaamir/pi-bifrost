@@ -591,6 +591,10 @@ function unreliableSkipped(pool: HealthyModelResolution): number {
   return pool.skipped.filter((candidate) => candidate.reason === "open_circuit" || candidate.reason === "trial_active").length;
 }
 
+function requestAttempted(pool: HealthyModelResolution): boolean {
+  return pool.skipped.some(candidate => candidate.reason === "request_attempted");
+}
+
 function scopeRejected(pool: HealthyModelResolution): boolean {
   return pool.skipped.some((candidate) => candidate.reason === "provider_not_allowed");
 }
@@ -619,7 +623,7 @@ function tierExclusionReason(
   if (unreliableSkipped(pool) > 0) return "requested_tier_unhealthy";
   if (scopeRejected(pool)) return "requested_tier_provider_excluded";
   if (reserveExcludedPool) return "requested_tier_excluded";
-  if (pool.skipped.some(candidate => candidate.reason === "request_attempted")) return "request_candidates_exhausted";
+  if (requestAttempted(pool)) return "request_candidates_exhausted";
   return undefined;
 }
 
@@ -806,7 +810,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
           ? "requested_tier_provider_excluded"
           : anyReserveExcluded
             ? "requested_tier_excluded"
-            : attemptedTiers.some(({ resolution }) => resolution.skipped.some(candidate => candidate.reason === "request_attempted"))
+            : attemptedTiers.some(({ resolution }) => requestAttempted(resolution))
               ? "request_candidates_exhausted" : undefined;
   return {
     requestedTier: options.requestedTier,

@@ -290,6 +290,8 @@ Full configuration file, `.pi/bifrost.json`:
 
 `reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. `reliability.retryOnAllowanceExhausted` defaults to `false`; set it to `true` to opt in to the one bounded Auto retry while keeping the pause. See [reliability and local cache](reliability-and-cache.md#provider-pauses-are-not-account-checks) for status and reset commands.
 
+`reliability.failover` (default `false`) is the draft native Auto failover setting. It permits a different eligible configured model only at a proven empty native retry boundary, without adding retry requests or replacing Pi’s scheduling. Earlier attempted models are excluded for that user turn. Exact model bindings and ordinary continuation remain unchanged. The existing terminal allowance setting is separate until migration is approved. This feature is not release-authorized until the delivery gates in ADR 0030 pass.
+
 ## More examples
 
 See [`examples/`](../../examples/) and its [recipe guide](../../examples/README.md).

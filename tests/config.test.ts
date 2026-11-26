@@ -54,6 +54,12 @@ describe("validateConfig", () => {
       .some((issue) => issue.code === "config.reliability_allowance_retry_invalid"));
   });
 
+  it("accepts only a boolean native failover opt-in", () => {
+    for (const failover of [false, true]) assert.deepEqual(validateConfig({ ...baseConfig, reliability: { failover } }), []);
+    assert.ok(validateConfig({ ...baseConfig, reliability: { failover: "yes" } as never })
+      .some(issue => issue.code === "config.reliability_failover_invalid"));
+  });
+
   it("keeps version 2 legacy when no explicit tier policy exists", () => {
     assert.equal(validateConfig({ ...baseConfig, schemaVersion: 2 }).length, 0);
     assert.equal(validateConfig({ ...baseConfig, legacyUnknown: true } as BifrostConfig).length, 0);
