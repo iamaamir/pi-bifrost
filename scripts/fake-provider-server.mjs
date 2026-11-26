@@ -234,6 +234,11 @@ const server = http.createServer((request, response) => {
     });
     if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { code: "usage_limit_reached", message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
+    if (model === "tpm-request-too-large") return json(response, 429, {
+      error: {
+        message: "Request too large for tpm-request-too-large on tokens per min (TPM): Limit 60000, Requested 74499. The input or output tokens must be reduced in order to run successfully.",
+      },
+    });
     if (model === "rate-limit-429") return json(response, 429, { error: { code: "rate_limit_exceeded", message: "Too many requests" } }, { "retry-after": "60" });
     if (model === "rate-limit-then-ok" && generationAttempt === 1) return json(response, 429, { error: { message: "Too many requests" } });
     if (model === "spoofed-rate-limit" || model === "spoofed-rate-limit-space") {

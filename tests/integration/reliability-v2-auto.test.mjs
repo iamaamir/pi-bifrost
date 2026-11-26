@@ -678,6 +678,57 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   });
 
   for (const mode of ["v1", "v2"]) {
+    it(`keeps a terminal TPM rejection separate from allowance recovery in ${mode} Auto`, async () => {
+      const home = mkdtempSync(join(tmpdir(), `bifrost-tpm-${mode}-home-`));
+      const work = mkdtempSync(join(tmpdir(), `bifrost-tpm-${mode}-work-`));
+      try {
+        const bifrost = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/tpm-request-too-large", "fake-backup/healthy"] },
+          reliability: {
+            enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            allowanceCooldownScope: "provider", retryOnAllowanceExhausted: true,
+            ...(mode === "v2" ? { stateVersion: 2 } : {}),
+          },
+        };
+        writeFixture({
+          home, work, port: server.port,
+          models: [
+            { id: "tpm-request-too-large", reasoning: false },
+            { provider: "fake-backup", id: "healthy", reasoning: false },
+          ],
+          bifrost, retry: { enabled: false, provider: { maxRetries: 0 } },
+        });
+        const before = await fakeStats(server.port);
+        const observer = writeOutcomeObserver(work);
+        const result = await runPi({
+          home, work, extraExtensions: [observer.extension],
+          messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"],
+        });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false, result.stderr);
+        assert.notEqual(result.code, 0, "the existing allowance opt-in does not authorize replay of a TPM rejection");
+        assert.deepEqual(
+          after.stats.slice(before.stats.length).filter((entry) => entry.kind === "generation")
+            .map(({ provider, model }) => ({ provider, model })),
+          [{ provider: "fake", model: "tpm-request-too-large" }],
+          "the failed request must not reach the alternate under the existing allowance-only policy",
+        );
+        assert.match(result.stderr, /Request too large.*TPM.*Limit 60000, Requested 74499/i);
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 1, "the original user request is not re-enqueued");
+        assert.deepEqual(
+          outcome.assistants.map(({ provider, model, stopReason, contentLength }) => ({ provider, model, stopReason, contentLength })),
+          [{ provider: "fake", model: "tpm-request-too-large", stopReason: "error", contentLength: 0 }],
+        );
+        assertNoBlockedNetwork(home);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
     it(`retries one zero-effect allowance failure with a configured alternate in ${mode} Auto`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-home-`));
       const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-work-`));
