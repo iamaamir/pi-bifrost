@@ -198,7 +198,7 @@ describe("rule safety verification", () => {
       }
     });
 
-    it("does not spawn or verify again while matching compiled rules", () => {
+    it("keeps verifier observation active across compiled matching and cached verdicts", () => {
       const directory = mkdtempSync(join(tmpdir(), "bifrost-match-probe-"));
       try {
         const { probe, calls } = sequenceProbe(directory, ["0"], []);
@@ -206,15 +206,21 @@ describe("rule safety verification", () => {
         let compiled: ReturnType<typeof compileRules> = [];
         withEnv({ BIFROST_PROBE_NODE: probe }, () => {
           compiled = compileRules([{ pattern, model: "quick" }]);
+          assert.equal(calls(), 1);
+          for (let phase = 0; phase < 4; phase += 1) {
+            let hits = 0;
+            for (let index = 0; index < 500; index += 1) {
+              if (classifyCompiled(`prompt ${phase} ${index} ${pattern}`, compiled) === "quick") hits += 1;
+            }
+            assert.equal(hits, 500);
+            // The observation stays live through every match phase: a recompile
+            // or a re-verify that reaches the probe is visible immediately.
+            assert.equal(calls(), 1, `match phase ${phase} reached the verifier`);
+            verifyRulePatterns([pattern]);
+            assert.equal(calls(), 1, "a cached verdict caused another verifier call");
+          }
         });
         assert.deepEqual(compiled.map((rule) => rule.model), ["quick"]);
-        assert.equal(calls(), 1);
-        let hits = 0;
-        for (let index = 0; index < 2000; index += 1) {
-          if (classifyCompiled(`prompt ${index} ${pattern}`, compiled) === "quick") hits += 1;
-        }
-        assert.equal(hits, 2000);
-        assert.equal(calls(), 1, "matching must not reach the verifier again");
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }
@@ -275,18 +281,112 @@ setTimeout(() => {}, 5000);
       }
     });
 
-    it("rejects a pattern after a malformed verdict stream instead of assuming it safe", () => {
+    it("stops decoding at a malformed verdict and rejects the rest of the batch", () => {
       const directory = mkdtempSync(join(tmpdir(), "bifrost-malformed-probe-"));
       try {
-        const probe = join(directory, "malformed-node");
-        writeFileSync(probe, `#!${process.execPath}
-process.stdout.write("not-a-verdict" + String.fromCharCode(10));
-`, { mode: 0o755 });
+        // A valid-looking verdict follows the malformed line: accepting it would
+        // mean the decoder skipped the bad entry instead of stopping at it.
+        const { probe } = sequenceProbe(directory, ["0", "not-a-verdict", "0"], []);
+        const patterns = Array.from({ length: 3 }, (_, index) => freshPattern(`malformed-${index}`));
+        const messages: string[] = [];
+        const originalError = console.error;
+        console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
         let compiled: ReturnType<typeof compileRules> = [];
-        withEnv({ BIFROST_PROBE_NODE: probe }, () => {
-          compiled = compileRules([{ pattern: freshPattern("malformed"), model: "quick" }]);
+        try {
+          withEnv({ BIFROST_PROBE_NODE: probe }, () => {
+            compiled = compileRules(patterns.map((pattern) => ({ pattern, model: pattern })));
+          });
+        } finally {
+          console.error = originalError;
+        }
+        assert.deepEqual(compiled.map((rule) => rule.model), [patterns[0]]);
+        const rejected = messages.filter((line) => line.includes("rejecting rule pattern"));
+        assert.equal(rejected.length, 2);
+        assert.ok(rejected[0]!.includes(patterns[1]!));
+        assert.ok(rejected[1]!.includes(patterns[2]!));
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a pattern whose probe verdict is a rejection", () => {
+      const directory = mkdtempSync(join(tmpdir(), "bifrost-reject-verdict-"));
+      try {
+        const { probe } = sequenceProbe(directory, ["1", "0"], []);
+        const patterns = [freshPattern("verdict-reject"), freshPattern("verdict-accept")];
+        const messages: string[] = [];
+        const originalError = console.error;
+        console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
+        let compiled: ReturnType<typeof compileRules> = [];
+        try {
+          withEnv({ BIFROST_PROBE_NODE: probe }, () => {
+            compiled = compileRules(patterns.map((pattern) => ({ pattern, model: pattern })));
+          });
+        } finally {
+          console.error = originalError;
+        }
+        assert.deepEqual(compiled.map((rule) => rule.model), [patterns[1]]);
+        const rejected = messages.filter((line) => line.includes("rejecting rule pattern"));
+        assert.equal(rejected.length, 1);
+        assert.ok(rejected[0]!.includes(patterns[0]!));
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it("ignores verdicts beyond the batch size", () => {
+      const directory = mkdtempSync(join(tmpdir(), "bifrost-extra-verdict-"));
+      try {
+        const { probe } = sequenceProbe(directory, ["0", "0", "1"], []);
+        const patterns = Array.from({ length: 2 }, (_, index) => freshPattern(`extra-${index}`));
+        const messages: string[] = [];
+        const originalError = console.error;
+        console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
+        let compiled: ReturnType<typeof compileRules> = [];
+        try {
+          withEnv({ BIFROST_PROBE_NODE: probe }, () => {
+            compiled = compileRules(patterns.map((pattern) => ({ pattern, model: pattern })));
+          });
+        } finally {
+          console.error = originalError;
+        }
+        assert.deepEqual(compiled.map((rule) => rule.model), patterns);
+        assert.deepEqual(messages, [], "a verdict beyond the batch must not reject a pattern");
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it("clears NODE_OPTIONS for the verifier but forwards the ambient environment", () => {
+      const directory = mkdtempSync(join(tmpdir(), "bifrost-env-probe-"));
+      try {
+        const observed = join(directory, "env.json");
+        const probe = join(directory, "env-node");
+        const script = `#!${process.execPath}
+const { readFileSync, writeFileSync } = require("node:fs");
+JSON.parse(readFileSync(0, "utf8"));
+writeFileSync(${JSON.stringify(observed)}, JSON.stringify({
+  nodeOptions: process.env.NODE_OPTIONS ?? null,
+  path: process.env.PATH ?? null,
+  marker: process.env.BIFROST_TEST_ENV_MARKER ?? null,
+}));
+process.stdout.write("0" + String.fromCharCode(10));
+`;
+        writeFileSync(probe, script, { mode: 0o755 });
+        spawnSync(probe, [], { input: "{}", encoding: "utf8" });
+        rmSync(observed, { force: true });
+        const pattern = freshPattern("env-observation");
+        withEnv({
+          BIFROST_PROBE_NODE: probe,
+          NODE_OPTIONS: "--require /no/such/poison.cjs",
+          BIFROST_TEST_ENV_MARKER: "forwarded",
+        }, () => {
+          assert.equal(compileRules([{ pattern, model: "general" }]).length, 1);
         });
-        assert.deepEqual(compiled, []);
+        const env = JSON.parse(readFileSync(observed, "utf8"));
+        assert.equal(env.nodeOptions, "", "the verifier must not inherit NODE_OPTIONS");
+        assert.equal(env.marker, "forwarded", "ambient variables must reach the verifier");
+        assert.equal(env.path, process.env.PATH, "the verifier must inherit PATH");
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }

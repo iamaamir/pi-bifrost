@@ -238,7 +238,7 @@ export const IN_PLACE_TARGETS = new Set(["scripts/toolbox.mjs"]);
  */
 
 const RULE_ENGINE_RUNNER_REASON =
-  "its rule tests deliberately let a catastrophic regex run in-process when a mutant bypasses the backtracking probe, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). A verdict on that code is only faithful under the production engine, so this module runs on Node.";
+  "its bound tests exercise regex compilation, the structural scan and verdict decoding in the host process, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). The two potentially blocking match cases run in bounded children, but the scan and decode controls do not, so only the production Node engine gives a faithful verdict.";
 
 export const RUNNER_OVERRIDES = {
   "modules/rules/rules.ts": { runner: "tap", reason: RULE_ENGINE_RUNNER_REASON },
@@ -246,7 +246,7 @@ export const RUNNER_OVERRIDES = {
   "routing.ts": {
     runner: "tap",
     reason:
-      "its rule tests deliberately let a catastrophic regex run in-process when a mutant bypasses the backtracking probe, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). A verdict on that code is only faithful under the production engine, so this module runs on Node.",
+      "its resolver suite is measured on the production Node engine. Removing this override is a budget/CI decision deferred past #273, not a change to make here.",
   },
 };
 

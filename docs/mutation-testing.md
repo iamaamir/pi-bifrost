@@ -193,10 +193,10 @@ reason. The test now injects the fault by an edit of a private source copy, and
 this works on both runtimes.
 
 `RUNNER_OVERRIDES` in `mutation/config.mjs` carries the reason that a module
-deviates from the default runner. At this time it has exactly one entry:
-`routing.ts` uses `tap` because its verdict depends on the production regex
-engine. Five modules use Bun. A test asserts that any future override names a
-reason.
+deviates from the default runner. At this time three entries use `tap`:
+`routing.ts` keeps the production-engine verdict, and the two `modules/rules/`
+targets run their in-process scan and decode controls there. The other modules
+use Bun. A test asserts that any future override names a reason.
 
 Three properties hold for both runners, and a measurement covered all three:
 

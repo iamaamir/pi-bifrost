@@ -5,10 +5,14 @@ They define the capability contract, and the repository rules still apply in ful
 
 Local boundaries:
 
-- Never weaken fail-closed rejection. A probe that cannot complete rejects the unverified
-  remainder of its batch; a malformed, short or timed-out stream is never treated as safe.
-- Never resolve the verifier through `PATH` on a Node host, never remove the `NODE_OPTIONS`
-  clear, and never spawn on the match path.
+- Never weaken fail-closed rejection. A malformed or short stream rejects the un-decoded
+  remainder of its batch. A timeout rejects only the first still-pending pattern and continues;
+  no incomplete verdict is ever treated as safe.
+- `classifyCompiled` is the spawn-free match path. The deprecated `classify` verifies per call
+  and can spawn for a pattern without a cached verdict; describe it that way in docs.
+- Never resolve the verifier through `PATH` on a Node host: use `process.execPath`. On Bun/Deno
+  keep the `node` lookup, the hosting-runtime fallback when it is absent, and the
+  `BIFROST_PROBE_NODE` override. Never remove the `NODE_OPTIONS` clear.
 - Never persist verdicts. The cache is process memory only, and `safety.ts` stays internal.
 - Keep rule discovery, route-file precedence, the default rule set, probing for live model
   selection, tier resolution and dispatch out of this module.
