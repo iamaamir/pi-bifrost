@@ -33,13 +33,7 @@ export function probeProgressComponent(
     box.addChild(
       new Text(theme.bold("◆ Bifrost") + theme.fg("dim", "  Refreshing model catalog"), 0, 0),
     );
-    box.addChild(
-      new Text(
-        `  ${theme.fg("dim", "─".repeat(frame % 20) + "━" + "─".repeat(19 - (frame % 20)))}`,
-        0,
-        0,
-      ),
-    );
+    box.addChild(progressBar(theme, { frame }));
     if (cancellable) box.addChild(new Text(theme.fg("dim", "  Esc to cancel"), 0, 0));
     return box;
   }

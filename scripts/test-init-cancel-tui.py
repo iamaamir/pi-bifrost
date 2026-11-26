@@ -16,6 +16,8 @@ from tui_server_process import server_port, stop_server
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ui_smoke', ROOT / 'scripts/ui-smoke.py')
+if spec is None or spec.loader is None:
+    raise RuntimeError("Could not load UI smoke helpers")
 ui = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = ui
 spec.loader.exec_module(ui)
@@ -53,6 +55,8 @@ with tempfile.TemporaryDirectory(prefix='bifrost-init-cancel-') as tmp:
         child = subprocess.Popen([ui.PI, '--approve', '--no-session', '--no-tools', '--model', 'fake/probe-slow', '-e', str(ROOT), '-e', str(fixture)], cwd=work, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
         os.close(slave)
         threading.Thread(target=ui.reader, args=(master, stop), daemon=True).start()
+        assert child is not None
+        pi_child = child
         def screen():
             rendered = ui.Screen(48, 12)
             rendered.parse(log.read_text(errors='replace') if log.exists() else '')
@@ -70,8 +74,8 @@ with tempfile.TemporaryDirectory(prefix='bifrost-init-cancel-') as tmp:
                         (ui.OUT / f'{capture}.txt').write_text('\n'.join(rendered.lines()) + '\n')
                         rendered.draw(ui.OUT / f'{capture}.png')
                     return text
-                if child.poll() is not None:
-                    raise AssertionError(f'Pi exited {child.returncode}: {text}')
+                if pi_child.poll() is not None:
+                    raise AssertionError(f'Pi exited {pi_child.returncode}: {text}')
                 time.sleep(.05)
             raise AssertionError(f"Timeout waiting for {needle}: {' '.join(screen().lines())}")
         wait('Bifrost')
@@ -80,6 +84,9 @@ with tempfile.TemporaryDirectory(prefix='bifrost-init-cancel-') as tmp:
         ui.send(master, '/bifrost init\r')
         progress = wait('Refreshing model catalog', 'init-refresh-narrow')
         first = next(line for line in progress.splitlines() if '━' in line and '─' in line)
+        bar = ''.join(ch for ch in first if ch in '━─')
+        assert len(bar) == 24 and bar.count('━') == 1, first
+        assert '%' not in first, first
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             current = '\n'.join(screen().lines())
