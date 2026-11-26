@@ -54,9 +54,46 @@ Each **adopted capability module** MUST carry a concise developer-facing README.
 
 ### README.md: understand the capability
 
-Document its purpose, ownership, non-responsibilities, supported consumer entry points, input and output guarantees, relevant invariants, permitted dependencies, effects, lifecycle and failure behavior. Include a valid example where helpful, an exact isolated verification command, and safe extension or replacement guidance. Describe limitations and compatibility constraints. Follow the applicable accepted repository writing guidelines, adapted to developer documentation.
+**Context before implementation.** The README MUST be a self-contained introduction to the
+capability. A developer or coding agent unfamiliar with the module must be able to understand
+what problem it solves, how it contributes to Bifrost, its observable behavior, where and when
+it is used, its ownership boundaries and the rationale for its fundamental design decisions
+from the README alone. Understanding the module must not depend on reading its implementation,
+historical issues, pull requests or private planning documents.
 
-Document each invariant in one authoritative location and link to it elsewhere. Keep documentation aligned with actual behavior; do not reproduce implementation details or claim unimplemented features.
+Communicate the following information at a level proportionate to the capability:
+
+- Purpose and product context: the problem, the module's contribution to Bifrost, and relevant
+  user-facing features, configuration or internal workflows.
+- A representative, valid example connecting inputs to observable outcomes. Distinguish a
+  module result from a wider system decision; use an internal consumer example when there is
+  no direct user-facing feature.
+- Integration: the actual consumers, entry points, dependency direction and lifecycle stage
+  in which the capability participates. Explain its relationship to other owners.
+- Ownership and contract: responsibilities and non-responsibilities, input and output
+  guarantees, relevant invariants, permitted dependencies, effects, state and failure behavior.
+- Design rationale and trade-offs: why the chosen implementation is appropriate, important
+  alternatives or constraints where relevant, known limitations, risks and compatibility.
+- Verification and evolution: an exact isolated verification command and guidance for safely
+  extending or replacing the implementation.
+
+Use diagrams when they materially clarify integration, state transitions, execution boundaries
+or other relationships that prose alone would make difficult to follow. Keep examples and
+diagrams consistent with actual behavior, including precedence, failure cases and authority
+boundaries. Do not present illustrative examples as captured execution evidence.
+
+These are information requirements, not a mandatory template, heading order, diagram count or
+length target. Keep simple capabilities simple. Establish the mental model in the README;
+leave implementation detail to source code and consequential architectural decisions to ADRs.
+Link to authoritative contracts for depth, not as a substitute for essential context.
+
+Reviewers MUST apply the standalone README test as part of existing module review: can an
+unfamiliar reader explain the capability's purpose, contribution, integration, behavior and
+design rationale without following its links? Check the explanation against actual source and
+consumer contracts. File presence, headings and word count do not establish documentation
+quality; no new automated documentation gate is implied.
+
+Document each invariant in one authoritative location and link to it elsewhere. Keep documentation aligned with actual behavior; do not reproduce implementation details or claim unimplemented features. Follow the applicable accepted repository writing guidelines, adapted to developer documentation.
 
 ### AGENTS.md: govern changes
 
