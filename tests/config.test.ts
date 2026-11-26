@@ -54,12 +54,6 @@ describe("validateConfig", () => {
       .some((issue) => issue.code === "config.reliability_allowance_retry_invalid"));
   });
 
-  it("validates the independent request-budget recovery opt-in", () => {
-    assert.deepEqual(validateConfig({ ...baseConfig, reliability: { retryOnRequestBudgetExceeded: true } }), []);
-    assert.ok(validateConfig({ ...baseConfig, reliability: { retryOnRequestBudgetExceeded: "yes" } as never })
-      .some((issue) => issue.code === "config.reliability_request_budget_retry_invalid"));
-  });
-
   it("keeps version 2 legacy when no explicit tier policy exists", () => {
     assert.equal(validateConfig({ ...baseConfig, schemaVersion: 2 }).length, 0);
     assert.equal(validateConfig({ ...baseConfig, legacyUnknown: true } as BifrostConfig).length, 0);

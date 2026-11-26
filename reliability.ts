@@ -14,8 +14,6 @@ export interface ReliabilityConfig {
   cooldownOnAllowanceExhausted?: boolean;
   /** Opt in to one proven side-effect-free Auto generation retry on a different configured model after allowance exhaustion. */
   retryOnAllowanceExhausted?: boolean;
-  /** Opt in to one safe Auto alternate after a qualified request-budget rejection. */
-  retryOnRequestBudgetExceeded?: boolean;
   failureThreshold?: number;
   windowMinutes?: number;
   cooldownMinutes?: number;
@@ -52,7 +50,6 @@ export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "sta
   cooldownOnAllowanceExhausted: true,
   allowanceCooldownScope: "provider",
   retryOnAllowanceExhausted: false,
-  retryOnRequestBudgetExceeded: false,
   failureThreshold: 3,
   windowMinutes: 5,
   cooldownMinutes: 60,
@@ -64,7 +61,6 @@ export function resolveReliabilityConfig(config?: ReliabilityConfig): Required<O
     cooldownOnAllowanceExhausted: config?.cooldownOnAllowanceExhausted ?? DEFAULT_RELIABILITY.cooldownOnAllowanceExhausted,
     allowanceCooldownScope: config?.allowanceCooldownScope ?? DEFAULT_RELIABILITY.allowanceCooldownScope,
     retryOnAllowanceExhausted: config?.retryOnAllowanceExhausted ?? DEFAULT_RELIABILITY.retryOnAllowanceExhausted,
-    retryOnRequestBudgetExceeded: config?.retryOnRequestBudgetExceeded ?? DEFAULT_RELIABILITY.retryOnRequestBudgetExceeded,
     failureThreshold: config?.failureThreshold ?? DEFAULT_RELIABILITY.failureThreshold,
     windowMinutes: config?.windowMinutes ?? DEFAULT_RELIABILITY.windowMinutes,
     cooldownMinutes: config?.cooldownMinutes ?? DEFAULT_RELIABILITY.cooldownMinutes,

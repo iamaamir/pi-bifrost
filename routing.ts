@@ -234,7 +234,7 @@ export function resolveModel<M extends RoutingModelBase>(
 
 export interface SkippedCandidate {
   key: string;
-  reason: "open_circuit" | "trial_active" | "provider_not_allowed" | "sign_in_unavailable" | "request_rejected";
+  reason: "open_circuit" | "trial_active" | "provider_not_allowed" | "sign_in_unavailable";
   openUntil?: number;
   /** Which hard provider restriction rejected this candidate. */
   scope?: RoutingScopeOrigin;
@@ -400,7 +400,6 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   random?: () => number,
   affinity?: AffinityRoutingContext,
   excludedBySignIn?: (candidate: M) => boolean,
-  excludedRequestModel?: string,
 ): ConfiguredTierResolution<M> {
   const options = buildTierResolutionOptions(tier, config);
   const routeNow = now ?? Date.now();
@@ -408,8 +407,8 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   const scope = compileRoutingScope(config.routingScope);
   const policy = schemaVersionAtLeast(config.schemaVersion, 2) ? config.tierPolicies?.[tier] : undefined;
   const resolution = policy && Array.isArray(policy.fallbackTiers)
-    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random, scope, excludedBySignIn, excludedRequestModel)
-    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random, scope, excludedBySignIn, excludedRequestModel });
+    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random, scope, excludedBySignIn)
+    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random, scope, excludedBySignIn });
   const affinityMode = config.affinity?.mode ?? affinity?.effectiveMode;
   if (affinityMode !== undefined && affinity !== undefined) {
     if (affinityMode === "off") {
@@ -482,21 +481,14 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
   random: () => number = Math.random,
   scope?: RouteScopeContext,
   excludedBySignIn?: (candidate: M) => boolean,
-  excludedRequestModel?: string,
 ): HealthyModelResolution<M> {
   const pool = findCandidatePool(ctx, pattern);
   const configuredCandidates = pool.candidates;
   // Hard provider scope runs first: an excluded provider never reaches
   // economic admission, reliability, affinity, or strategy selection.
   const scopeSkipped: SkippedCandidate[] = [];
-  const requestCandidates = excludedRequestModel === undefined ? configuredCandidates : configuredCandidates.filter((candidate) => {
-    const key = modelKey(candidate);
-    if (key !== excludedRequestModel) return true;
-    scopeSkipped.push({ key, reason: "request_rejected" });
-    return false;
-  });
   const permittedCandidates = scope
-    ? requestCandidates.filter((candidate) => {
+    ? configuredCandidates.filter((candidate) => {
       const decision = checkProviderScope(scope.scope, candidate.provider, {
         tier: scope.evaluatedTier,
       });
@@ -504,7 +496,7 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
       scopeSkipped.push({ key: modelKey(candidate), reason: "provider_not_allowed", scope: decision.origin });
       return false;
     })
-    : requestCandidates;
+    : configuredCandidates;
   // A provider whose stored sign-in cannot be resolved is excluded before
   // economic admission and reliability: the request could never leave the
   // host. The reason is its own, so a dead credential is never reported as a
@@ -583,7 +575,8 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
 /** Reliability exclusions only; provider scope and sign-in rejections are
  * reported separately and must not be counted as evidence of unreliability. */
 function unreliableSkipped(pool: HealthyModelResolution): number {
-  return pool.skipped.filter((candidate) => candidate.reason === "open_circuit" || candidate.reason === "trial_active").length;
+  return pool.skipped.filter((candidate) => candidate.reason !== "provider_not_allowed"
+    && candidate.reason !== "sign_in_unavailable").length;
 }
 
 function scopeRejected(pool: HealthyModelResolution): boolean {
@@ -633,7 +626,6 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     random?: () => number;
     scope?: CompiledRoutingScope;
     excludedBySignIn?: (candidate: M) => boolean;
-    excludedRequestModel?: string;
   },
 ): RoutedModelResolution<M> {
   const now = options.now ?? Date.now();
@@ -650,7 +642,6 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
       ? { scope: options.scope, evaluatedTier: options.requestedTier }
       : undefined,
     options.excludedBySignIn,
-    options.excludedRequestModel,
   );
   if (primary.selected) {
     return {
@@ -725,7 +716,6 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
       ? { scope: options.scope, evaluatedTier: options.defaultTier }
       : undefined,
     options.excludedBySignIn,
-    options.excludedRequestModel,
   );
 
   return {
@@ -755,7 +745,6 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   random?: () => number,
   scope?: CompiledRoutingScope,
   excludedBySignIn?: (candidate: M) => boolean,
-  excludedRequestModel?: string,
 ): RoutedModelResolution<M> {
   const tierOptions = [options.requestedTier, ...fallbackTiers].map((tier) => ({
     tier,
@@ -766,7 +755,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   for (const { tier, pattern, strategy } of tierOptions) {
     const resolution = resolveHealthyModel(ctx, pattern, strategy, reliabilityState, reliabilityConfig, now,
       economic ? { ...economic, evaluatedTier: tier } : undefined, random,
-      scope ? { scope, evaluatedTier: tier } : undefined, excludedBySignIn, excludedRequestModel);
+      scope ? { scope, evaluatedTier: tier } : undefined, excludedBySignIn);
     attemptedTiers.push({ tier, strategy, pattern, resolution });
     if (resolution.selected) break;
   }

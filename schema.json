@@ -380,11 +380,6 @@
 "description": "Disabled by default. Set true to retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
           "default": false
         },
-        "retryOnRequestBudgetExceeded": {
-          "type": "boolean",
-          "description": "Disabled by default. Opt in to at most one alternate Auto attempt on a qualified over-budget TPM rejection, only when reliability is enabled and Pi proves the same terminal zero-effect boundary as allowance recovery. Generic 429 errors do not authorize this action. The failed model is excluded for this recovery, not placed on an immediate allowance cooldown.",
-          "default": false
-        },
         "stateVersion": {
           "type": "integer",
           "enum": [1, 2],

@@ -670,14 +670,14 @@ def capture(
     home = workspace / "isolated-home"
     agent_dir = home / ".pi" / "agent"
     assert FAKE_PORT is not None
-    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory, only_models, name in ("allowance-recovery", "tpm-recovery"))
+    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory, only_models, name == "allowance-recovery")
     if name in ("fresh-physical", "fresh-auto"):
         assert_fake_only_inventory(home, workspace, agent_dir, FAKE_PORT)
 
     before = fake_stats(FAKE_PORT)
     previous_attempts = before.get("attempts", {})
     attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
-    provider, model = ("bifrost", "auto") if launch_auto or name in ("allowance-recovery", "tpm-recovery", "auto-large-pool") else ("fake", "healthy")
+    provider, model = ("bifrost", "auto") if launch_auto or name in ("allowance-recovery", "auto-large-pool") else ("fake", "healthy")
     if name == "probe-consent-narrow":
         provider, model = "fake", "config-consent"
     proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model, enable_tools=enable_tools, size=size)
@@ -725,12 +725,11 @@ def capture(
             state_path = workspace / ".pi" / "bifrost-state.json"
             if state_path.read_text() != runtime_state_override:
                 raise AssertionError("classifier commands rewrote invalid runtime-state bytes")
-        if name in ("allowance-recovery", "tpm-recovery"):
-            failed_model = "usage-exhausted" if name == "allowance-recovery" else "tpm-request-too-large"
+        if name == "allowance-recovery":
             wait_for_model_attempts(
                 FAKE_PORT,
                 {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
-                (failed_model,),
+                ("usage-exhausted",),
             )
             wait_for_provider_request(FAKE_PORT, "fake-backup", "healthy")
         if name == "auto-large-pool":
@@ -945,19 +944,6 @@ def main() -> int:
                 "reliability": {"retryOnAllowanceExhausted": True},
             },
         ),
-        (
-            "tpm-recovery",
-            True,
-            [(1.0, "respond with one word\r")],
-            {
-                "strategy": "first",
-                "categoryStrategies": {"general": "first"},
-                "classifier": {"enabled": False},
-                "models": {"general": ["fake/tpm-request-too-large", "fake-backup/healthy"]},
-                "reliability": {"retryOnRequestBudgetExceeded": True, "retryOnAllowanceExhausted": False},
-            },
-            ["tpm-request-too-large"],
-        ),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("classifier-picker", True, [(0.5, "/bifrost classifier\r")], {"classifier": {"enabled": False, "backend": "prompt"}}),
         (
@@ -1158,8 +1144,8 @@ def main() -> int:
                 degradation_text = (OUT / "classifier-degradation.txt").read_text(errors="ignore").lower()
                 if "pi-native classifier" not in degradation_text or "prompt classifier" not in degradation_text:
                     raise AssertionError("classifier degradation UI did not show the primary failure and actual prompt fallback")
-            if name in ("allowance-recovery", "tpm-recovery"):
-                recovery_text = (OUT / f"{name}.txt").read_text(errors="ignore").lower()
+            if name == "allowance-recovery":
+                recovery_text = (OUT / "allowance-recovery.txt").read_text(errors="ignore").lower()
                 if "retrying once with fake-backup/healthy" not in recovery_text:
                     raise AssertionError("allowance recovery UI did not show the alternate model action")
                 if "fake-backup/healthy" not in recovery_text or "healthy" not in recovery_text:

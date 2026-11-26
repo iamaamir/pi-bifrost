@@ -111,6 +111,14 @@ function bifrostConfigCheckSse(response) {
  * Returns true when this call handled the response.
  */
 function simpleFixture(response, model) {
+  if (model === "tpm-request-too-large") {
+    json(response, 429, {
+      error: {
+        message: "Request too large for tpm-request-too-large on tokens per min (TPM): Limit 60000, Requested 74499. The input or output tokens must be reduced in order to run successfully.",
+      },
+    });
+    return true;
+  }
   if (model === "probe-background-slow-fail") {
     setTimeout(() => sse(response, "slow-generation-done"), 4_000);
     return true;
@@ -124,20 +132,6 @@ function simpleFixture(response, model) {
   // dialog. Every generation turn for this model returns the call again.
   if (model === "config-consent") {
     bifrostConfigCheckSse(response);
-    return true;
-  }
-  return false;
-}
-
-// Independent generation-only controls; model IDs isolate counters per scenario.
-function failoverControlFixture(response, model, generationAttempt) {
-  if (!generationAttempt) return false;
-  if (model === "failover-control-a-post-tool" && generationAttempt === 1) {
-    toolCallSse(response);
-    return true;
-  }
-  if (model.startsWith("failover-control-a-") || model === "failover-control-b-all-fail") {
-    json(response, 500, { error: { message: "synthetic server error for failover control" } });
     return true;
   }
   return false;
@@ -230,9 +224,6 @@ const server = http.createServer((request, response) => {
       });
       return;
     }
-    if (failoverControlFixture(response, model, generationAttempt)) return;
-    if (kind === "generation" && model.startsWith("affinity-failover-a-") && generationAttempt === 2) return json(response, 500, { error: { message: "simulated affinity failover server error" } });
-    if (kind === "generation" && model.startsWith("affinity-failover-b-") && generationAttempt === 1) return toolCallSse(response);
     if (model === "partial-allowance") { stat.syntheticOutcome = "partial_output_then_usage_limit_reached"; return partialAllowanceSse(response); }
     if (["tool-then-fail", "queue-tool-then-fail"].includes(model) && generationAttempt === 1) return toolCallSse(response);
     if (["tool-then-fail", "queue-tool-then-fail"].includes(model) && generationAttempt > 1) return json(response, 402, { error: { message: "You have no remaining credits; synthetic allowance failure after tool result." } });
@@ -251,11 +242,6 @@ const server = http.createServer((request, response) => {
     });
     if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { code: "usage_limit_reached", message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
-    if (model === "tpm-request-too-large") return json(response, 429, {
-      error: {
-        message: "Request too large for tpm-request-too-large on tokens per min (TPM): Limit 60000, Requested 74499. The input or output tokens must be reduced in order to run successfully.",
-      },
-    });
     if (model === "rate-limit-429") return json(response, 429, { error: { code: "rate_limit_exceeded", message: "Too many requests" } }, { "retry-after": "60" });
     if (model === "rate-limit-then-ok" && generationAttempt === 1) return json(response, 429, { error: { message: "Too many requests" } });
     if (model === "spoofed-rate-limit" || model === "spoofed-rate-limit-space") {

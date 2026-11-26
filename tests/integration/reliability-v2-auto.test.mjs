@@ -208,12 +208,12 @@ function assertNoBlockedNetwork(home) {
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
 
-function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [], extension = EXTENSION, noTools = true }) {
+function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [] }) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.TYPESAFE_API_KEY;
     const extensionArgs = extraExtensions.flatMap((extension) => ["-e", extension]);
-    const child = spawn(PI, ["-e", extension, ...extensionArgs, "--approve", "--no-session", ...(noTools ? ["--no-tools"] : []), "--model", model, "-p", ...messages], {
+    const child = spawn(PI, ["-e", EXTENSION, ...extensionArgs, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: work,
       env: {
@@ -260,50 +260,6 @@ function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions =
   });
 }
 
-// Cancellation is sent to real Pi RPC while the alternate's lease is owned,
-// not inferred from a timer or a simulated AbortController.
-async function runNativeFailoverAbort({ home, work, extension, observer, barrier }) {
-  const child = spawn(PI, ["-e", extension, "-e", observer.extension, "--approve", "--mode", "rpc",
-    "--no-session", "--no-tools", "--model", "experiment/controls-auto"], {
-    cwd: work, stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
-      PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
-      BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
-      BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log") },
-  });
-  let stdout = "", stderr = "", partial = "";
-  const records = [];
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", chunk => {
-    stdout = appendBounded(stdout, chunk);
-    const lines = (partial + chunk).split("\n");
-    partial = lines.pop();
-    for (const line of lines) { try { records.push(JSON.parse(line)); } catch { /* RPC only */ } }
-  });
-  child.stderr.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
-  const send = command => new Promise((resolve, reject) => child.stdin.write(JSON.stringify(command) + "\n", error => error ? reject(error) : resolve()));
-  const wait = async (name, condition) => {
-    const deadline = Date.now() + 20_000;
-    while (!condition() && child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.ok(condition(), `${name} not observed: ${stderr}\n${stdout}`);
-  };
-  try {
-    await send({ id: "control-prompt", type: "prompt", message: "one cancellation request" });
-    await wait("admitted alternate barrier", () => existsSync(barrier));
-    await send({ id: "control-abort", type: "abort" });
-    await wait("abort acknowledgement", () => records.some(r => r.id === "control-abort" && r.type === "response" && r.success === true));
-    await wait("agent settlement", () => records.some(r => r.type === "agent_settled"));
-    assert.equal(records.filter(r => r.type === "agent_settled").length, 1);
-    const closed = waitForClose(child);
-    child.stdin.end();
-    await closed;
-    assertNoBlockedNetwork(home);
-  } finally {
-    if (child.exitCode === null) await stopChild(child);
-  }
-}
-
 async function fakeStats(port) {
   const response = await fetch(`http://127.0.0.1:${port}/_stats`);
   assert.equal(response.ok, true);
@@ -340,282 +296,6 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   let server;
   before(async () => { server = await startFakeServer(); fakePort = server.port; });
   after(async () => { if (server?.child) await stopChild(server.child); });
-
-  // Research only: use Pi's public virtual-model API without loading Bifrost.
-  // A positive result establishes the host seam, not Bifrost receipt transfer.
-  for (const scenario of [
-    { name: "server failure", first: "fail", retry: true, expected: ["fail", "healthy"], reasons: ["user", "retry"] },
-    { name: "rate limit", first: "rate-limit-429", retry: true, expected: ["rate-limit-429", "healthy"], reasons: ["user", "retry"] },
-    { name: "TPM rejection", first: "tpm-request-too-large", retry: true, expected: ["tpm-request-too-large", "healthy"], reasons: ["user", "retry"] },
-    { name: "terminal billing rejection", first: "credits-exhausted", retry: true, expected: ["credits-exhausted"], reasons: ["user"] },
-    { name: "terminal continuation", first: "credits-exhausted", retry: true, continueTerminal: true, expected: ["credits-exhausted", "healthy"], reasons: ["user", "user"] },
-    { name: "native retry disabled", first: "fail", retry: false, expected: ["fail"], reasons: ["user"] },
-    { name: "failover disabled", first: "fail", retry: true, disableFailover: true, expected: ["fail", "fail"], reasons: ["user", "retry"] },
-    { name: "physical retry", first: "fail", retry: true, physical: true, expected: ["fail", "fail"], reasons: [] },
-  ]) {
-    it(`characterizes native Pi failover: ${scenario.name}`, async () => {
-      const home = mkdtempSync(join(tmpdir(), "bifrost-native-failover-home-"));
-      const work = mkdtempSync(join(tmpdir(), "bifrost-native-failover-work-"));
-      try {
-        writeFixture({ home, work, port: server.port,
-          models: [{ id: scenario.first, reasoning: false }, { id: "healthy", reasoning: false }],
-          bifrost: { enabled: false },
-          retry: { enabled: scenario.retry, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
-        });
-        const extension = join(work, "native-failover-experiment.mjs");
-        const tracePath = join(work, "native-failover-trace.json");
-        writeFileSync(extension, `import { writeFileSync } from "node:fs";
-export default function(pi) {
-  const scenario = ${JSON.stringify(scenario)};
-  const routes = [];
-  const settlements = [];
-  let continued = false;
-  pi.registerVirtualModel({
-    provider: "experiment", id: "auto", name: "Native failover experiment", thinkingLevels: ["off"],
-    route(request, ctx) {
-      const alternate = !scenario.disableFailover && (request.reason === "retry" || continued);
-      const id = alternate ? "healthy" : scenario.first;
-      routes.push({ reason: request.reason, failed: request.failed?.model.id ?? null,
-        failedContent: request.failed?.message.content.length ?? null,
-        selected: id, userCount: request.messages.filter(m => m.role === "user").length,
-        projectedError: request.messages.some(m => m.role === "assistant" && m.stopReason === "error") });
-      const model = ctx.modelRegistry.find("fake", id);
-      if (!model) throw new Error("experiment model unavailable");
-      return { model, thinkingLevel: "off" };
-    },
-  });
-  pi.on("agent_before_settle", (event, ctx) => {
-    settlements.push({ outcome: event.outcome, canContinue: event.context.canContinue });
-    if (!scenario.continueTerminal || continued || event.outcome !== "error" || ctx.signal?.aborted || event.context.pendingMessages.length) return;
-    const branch = ctx.sessionManager.getBranch();
-    const last = branch.at(-1);
-    if (last?.type !== "message" || last.message.role !== "assistant" || last.message.stopReason !== "error"
-      || last.message.model !== scenario.first || last.message.content.length !== 0) throw new Error("unexpected terminal fixture boundary");
-    continued = true;
-    return { entries: [{ type: "context_edit", targetId: last.id, replacement: null }], continue: true };
-  });
-  pi.on("session_shutdown", () => writeFileSync(${JSON.stringify(tracePath)}, JSON.stringify({ routes, settlements })));
-}`);
-        const observer = writeOutcomeObserver(work);
-        const before = await fakeStats(server.port);
-        const result = await runPi({ home, work, extension, extraExtensions: [observer.extension],
-          model: scenario.physical ? `fake/${scenario.first}` : "experiment/auto",
-          messages: ["respond with one word"] });
-        const after = await fakeStats(server.port);
-        assert.equal(result.timedOut, false, result.stderr);
-        const models = after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => e.model);
-        assert.deepEqual(models, scenario.expected, result.stderr);
-        assert.equal(result.code === 0, scenario.expected.at(-1) === "healthy", result.stderr);
-        const trace = JSON.parse(readFileSync(tracePath, "utf8"));
-        assert.deepEqual(trace.routes.map(r => r.reason), scenario.reasons);
-        assert.ok(trace.routes.every(r => r.userCount === 1 && !r.projectedError), "one user request and no failed response in projection");
-        for (const route of trace.routes.filter(r => r.reason === "retry")) {
-          assert.equal(route.failed, scenario.first);
-          assert.equal(route.failedContent, 0);
-        }
-        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
-        assert.equal(outcome.userCount, 1);
-        const failed = outcome.assistants.filter(e => e.stopReason === "error");
-        assert.ok(failed.every(e => e.contentLength === 0));
-        for (const entry of failed.slice(0, scenario.expected.at(-1) === "healthy" ? failed.length : -1)) {
-          assert.ok(outcome.contextEdits.some(edit => edit.targetId === entry.id && edit.isNull), "exact failed entry omitted from projection");
-        }
-        assert.ok(trace.settlements.length >= 1);
-        if (scenario.continueTerminal) assert.equal(trace.settlements[0].outcome, "error");
-        assertNoBlockedNetwork(home);
-        console.log("native-failover experiment", JSON.stringify({ name: scenario.name, models, ...trace, userCount: outcome.userCount, exitCode: result.code }));
-      } finally {
-        rmSync(home, { recursive: true, force: true });
-        rmSync(work, { recursive: true, force: true });
-      }
-    });
-  }
-
-  for (const { version, mode } of [
-    { version: 1, mode: "retain-within-tier" },
-    { version: 2, mode: "retain-within-tier" },
-    { version: 2, mode: "observe" },
-  ]) {
-    it(`composes native failover with V${version} receipt owners and ${mode} affinity`, async () => {
-      const home = mkdtempSync(join(tmpdir(), "bifrost-receipt-experiment-home-"));
-      const work = mkdtempSync(join(tmpdir(), "bifrost-receipt-experiment-work-"));
-      try {
-        const suffix = `v${version}-${mode}`;
-        const first = `affinity-failover-a-${suffix}`, alternate = `affinity-failover-b-${suffix}`;
-        const a = `fake/${first}`, b = `fake/${alternate}`;
-        const tracePath = join(work, "receipt-experiment.json");
-        const extension = join(work, "receipt-experiment.mjs");
-        writeFixture({ home, work, port: server.port,
-          models: [{ id: first, reasoning: false }, { id: alternate, reasoning: false }],
-          bifrost: { enabled: false },
-          retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
-        });
-        writeFileSync(extension, `import { installReceiptExperiment } from ${JSON.stringify(join(ROOT, "tests/fixtures/native-failover-receipt-experiment.mjs"))};
-export default pi => installReceiptExperiment(pi, ${JSON.stringify({ work, version, first, alternate, mode, tracePath })});`);
-        const observer = writeOutcomeObserver(work);
-        const before = await fakeStats(server.port);
-        const result = await runPi({ home, work, extension, extraExtensions: [observer.extension], noTools: false,
-          model: "experiment/receipt-auto", messages: ["establish anchor", "exercise model transition", "exercise affinity after success"] });
-        const after = await fakeStats(server.port);
-        assert.equal(result.timedOut, false, result.stderr);
-        assert.equal(result.code, 0, result.stderr);
-        const trace = JSON.parse(readFileSync(tracePath, "utf8"));
-        const retain = mode === "retain-within-tier";
-        const expected = retain ? [first, first, alternate, alternate, alternate] : [first, alternate, alternate, first, alternate];
-        const actual = after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => e.model);
-        // Observe mode picks B on turn 2, then A on turn 3 (A's second call
-        // fails). The same native retry path must remain independent of affinity.
-        assert.deepEqual(actual, expected, result.stderr);
-        const transitionTurn = retain ? 2 : 3;
-        const transition = trace.routes.filter(r => r.turn === transitionTurn);
-        assert.deepEqual(transition.slice(0, 2).map(r => [r.reason, r.model]), [["user", a], ["retry", b]]);
-        assert.notEqual(transition[0].dispatchId, transition[1].dispatchId, "model change creates distinct owner identity");
-        assert.equal(transition[0].entryId, transition[1].entryId, "same original user boundary");
-        const continuation = trace.routes.find(r => r.reason === "continuation");
-        const preceding = trace.routes[trace.routes.indexOf(continuation) - 1];
-        assert.equal(continuation.model, b);
-        assert.equal(continuation.dispatchId, preceding.dispatchId, "tool continuation uses existing B owner");
-        assert.equal(continuation.toolsInProjection, 1, "completed tool result retained");
-        assert.deepEqual(trace.toolCalls, ["synthetic"], "tool side effect occurs exactly once");
-        const changed = trace.settled.filter(r => r.turn === transitionTurn);
-        assert.deepEqual(changed.map(r => [r.model, r.outcome, r.confirmed]), [[a, "failure", true], [b, "success", true]]);
-        assert.deepEqual(changed.map(r => r.dispatchId), transition.slice(0, 2).map(r => r.dispatchId));
-        const claimed = trace.settled.find(r => r.model === b && r.trial);
-        assert.ok(claimed, "alternate owned expired half-open trial");
-        assert.equal(trace.projection.models[a].openUntil, undefined, "A circuit remains closed");
-        assert.equal(trace.projection.models[a].failures.length, 1);
-        assert.equal(trace.projection.models[b].trialActive, false, "alternate trial released");
-        assert.deepEqual(trace.projection.models[b].failures, []);
-        if (version === 2) {
-          assert.equal(typeof claimed.leaseId, "string");
-          assert.equal(Object.keys(trace.state.dispatches).length, 4);
-          assert.equal(new Set(trace.settled.map(r => r.outcomeId)).size, 4);
-          for (const receipt of trace.settled) {
-            const durable = trace.state.dispatches[receipt.dispatchId];
-            assert.equal(durable.settledKind, receipt.outcome);
-            assert.equal(durable.scopes[0].modelKey, receipt.model);
-          }
-          assert.ok(Object.values(trace.state.scopes).every(scope => scope.lease === undefined));
-        }
-        const third = trace.routes.find(r => r.turn === 3 && r.reason === "user");
-        assert.equal(third.strategy, a, "strategy deliberately prefers A");
-        assert.equal(third.anchor, b, "successful B promoted using existing anchor store");
-        assert.equal(third.model, retain ? b : a);
-        assert.equal(third.affinitySelection, retain ? "retained_anchor" : "strategy");
-        assert.equal(trace.promotions.filter(r => r.turn === transitionTurn).length, 1);
-        assert.equal(trace.promotions.find(r => r.turn === transitionTurn).dispatchId, changed[1].dispatchId);
-        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
-        assert.equal(outcome.userCount, 3, "one persisted user message for each submission");
-        const failures = outcome.assistants.filter(e => e.stopReason === "error");
-        assert.equal(failures.length, 1);
-        assert.ok(outcome.contextEdits.some(e => e.targetId === failures[0].id && e.isNull));
-        assertNoBlockedNetwork(home);
-        console.log("native receipt experiment", JSON.stringify({ version, mode, actual, routes: trace.routes, settled: trace.settled, promotions: trace.promotions }));
-      } finally {
-        rmSync(home, { recursive: true, force: true });
-        rmSync(work, { recursive: true, force: true });
-      }
-    });
-  }
-
-  for (const scenario of [
-    "no-alternate", "all-fail", "stale-settlement", "write-failure", "admission-contention",
-    "strict-tier", "exact-model", "branch-invalidated", "manual-invalidated", "cancel-after-admission", "post-tool",
-  ]) {
-    it(`native failover controls: ${scenario}`, async () => {
-      const home = mkdtempSync(join(tmpdir(), "bifrost-failover-control-home-"));
-      const work = mkdtempSync(join(tmpdir(), "bifrost-failover-control-work-"));
-      try {
-        const first = `failover-control-a-${scenario}`, alternate = `failover-control-b-${scenario}`;
-        const a = `fake/${first}`, b = `fake/${alternate}`;
-        const tracePath = join(work, "receipt-controls.json"), barrier = join(work, "admitted-alternate");
-        const extension = join(work, "receipt-controls.mjs");
-        writeFixture({ home, work, port: server.port,
-          models: [{ id: first, reasoning: false }, { id: alternate, reasoning: false }],
-          bifrost: { enabled: false },
-          retry: { enabled: true, maxRetries: scenario === "all-fail" ? 2 : 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
-        });
-        writeFileSync(extension, `import { installReceiptControls } from ${JSON.stringify(join(ROOT, "tests/fixtures/native-failover-controls-experiment.mjs"))};
-export default pi => installReceiptControls(pi, ${JSON.stringify({ work, scenario, first, alternate, tracePath, barrier })});`);
-        const observer = writeOutcomeObserver(work);
-        const before = await fakeStats(server.port);
-        if (scenario === "cancel-after-admission") {
-          await runNativeFailoverAbort({ home, work, extension, observer, barrier });
-        } else {
-          const result = await runPi({ home, work, extension, extraExtensions: [observer.extension],
-            noTools: scenario !== "post-tool", model: "experiment/controls-auto", messages: ["one control request"] });
-          assert.equal(result.timedOut, false, result.stderr);
-          assert.equal(result.code === 0, scenario === "post-tool", result.stderr);
-        }
-        const after = await fakeStats(server.port);
-        const actual = after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => e.model);
-        const expected = scenario === "all-fail" ? [first, alternate] : scenario === "exact-model" ? [first, first]
-          : scenario === "post-tool" ? [first, first, alternate] : [first];
-        assert.deepEqual(actual, expected, "exact physical request sequence");
-        const trace = JSON.parse(readFileSync(tracePath, "utf8"));
-        assert.equal(trace.hostSettlements.length, 1);
-        assert.equal(trace.liveReceipts, 0, "no live receipt after settlement");
-        assert.equal(trace.routes.every(r => r.entryId === trace.routes[0].entryId), true);
-        const expectedOutcomes = scenario === "all-fail" ? [[a, "failure"], [b, "failure"]]
-          : scenario === "cancel-after-admission" ? [[a, "failure"], [b, "cancelled"]]
-          : scenario === "post-tool" ? [[a, "failure"], [b, "success"]] : [[a, "failure"]];
-        assert.deepEqual(trace.settled.map(r => [r.model, r.kind]), expectedOutcomes, "each admitted owner settles exactly once");
-        assert.equal(new Set(trace.settled.map(r => r.dispatchId)).size, expectedOutcomes.length);
-        assert.equal(new Set(trace.settled.map(r => r.outcomeId)).size, expectedOutcomes.length);
-        for (const r of trace.settled) {
-          const durable = trace.state.dispatches[r.dispatchId];
-          assert.equal(durable.settledKind, r.kind);
-          assert.equal(durable.scopes[0].modelKey, r.model);
-        }
-        assert.equal(Object.keys(trace.state.dispatches).length, expectedOutcomes.length + (scenario === "admission-contention" ? 1 : 0));
-        assert.ok(Object.values(trace.state.scopes).every(scope => scope.lease === undefined), "all owned trial leases released");
-        assert.deepEqual(trace.promotions, scenario === "post-tool" ? [b] : []);
-        assert.deepEqual(trace.toolCalls, scenario === "post-tool" ? ["synthetic"] : []);
-        const expectedStops = { "no-alternate": "no-eligible-alternate", "all-fail": "no-eligible-alternate",
-          "stale-settlement": "settlement-unconfirmed", "write-failure": "settlement-unconfirmed",
-          "admission-contention": "admission-rejected", "strict-tier": "no-eligible-alternate",
-          "branch-invalidated": "authority-changed", "manual-invalidated": "authority-changed",
-          "cancel-after-admission": "cancelled-after-admission" };
-        assert.equal(trace.stop, expectedStops[scenario] ?? null);
-        if (scenario === "stale-settlement" || scenario === "write-failure") {
-          assert.deepEqual(trace.rejections, [scenario === "stale-settlement" ? "stale" : "state_write_failed"]);
-          assert.equal(trace.settled[0].cleanup, true, "fixture-only cleanup after rejected settlement");
-          assert.equal(trace.admissions.length, 1, "no alternate admission following unconfirmed settlement");
-        }
-        if (scenario === "admission-contention") {
-          assert.deepEqual(trace.admissions.map(r => r.status), ["admitted", "blocked"]);
-          assert.equal(trace.externalLeasePreserved, true);
-          assert.equal(trace.state.dispatches[trace.externalDispatchId].settledKind, "cancelled");
-        }
-        if (scenario === "branch-invalidated" || scenario === "manual-invalidated") {
-          assert.deepEqual(trace.epoch, scenario === "branch-invalidated" ? { branch: 1, manual: 0 } : { branch: 0, manual: 1 });
-          assert.equal(trace.admissions.length, 1);
-        }
-        if (scenario === "cancel-after-admission") {
-          assert.equal(trace.nativeSignalAborted, true);
-          assert.deepEqual(trace.hostSettlements, [{ aborted: true }]);
-          assert.equal(typeof trace.settled[1].leaseId, "string");
-        }
-        if (scenario === "exact-model") {
-          assert.equal(trace.explicitPreserved, true);
-          assert.deepEqual(trace.routes.map(r => r.reason), ["user", "retry"]);
-          assert.equal(trace.routes[0].dispatchId, trace.routes[1].dispatchId);
-        }
-        if (scenario === "post-tool") {
-          assert.deepEqual(trace.routes.map(r => [r.reason, r.model]), [["user", a], ["continuation", a], ["retry", b]]);
-          assert.equal(trace.routes[0].dispatchId, trace.routes[1].dispatchId);
-          assert.equal(trace.routes[2].toolsInProjection, 1, "committed tool result available to alternate");
-          assert.equal(typeof trace.settled[1].leaseId, "string");
-        }
-        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
-        assert.equal(outcome.userCount, 1, "no synthetic user replay");
-        assertNoBlockedNetwork(home);
-      } finally {
-        rmSync(home, { recursive: true, force: true });
-        rmSync(work, { recursive: true, force: true });
-      }
-    });
-  }
 
   it("does not dispatch allowance alternate after abort at deterministic pre-settlement barrier", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-abort-home-"));
@@ -998,7 +678,7 @@ export default pi => installReceiptControls(pi, ${JSON.stringify({ work, scenari
   });
 
   for (const mode of ["v1", "v2"]) {
-    it(`keeps a terminal TPM rejection separate from allowance recovery in ${mode} Auto`, async () => {
+    for (const nativeRetry of [false, true]) it(`characterizes registered ${mode} Auto TPM failure with native retry ${nativeRetry ? "enabled" : "disabled"}`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-tpm-${mode}-home-`));
       const work = mkdtempSync(join(tmpdir(), `bifrost-tpm-${mode}-work-`));
       try {
@@ -1018,7 +698,7 @@ export default pi => installReceiptControls(pi, ${JSON.stringify({ work, scenari
             { id: "tpm-request-too-large", reasoning: false },
             { provider: "fake-backup", id: "healthy", reasoning: false },
           ],
-          bifrost, retry: { enabled: false, provider: { maxRetries: 0 } },
+          bifrost, retry: { enabled: nativeRetry, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
         });
         const before = await fakeStats(server.port);
         const observer = writeOutcomeObserver(work);
@@ -1028,103 +708,36 @@ export default pi => installReceiptControls(pi, ${JSON.stringify({ work, scenari
         });
         const after = await fakeStats(server.port);
         assert.equal(result.timedOut, false, result.stderr);
-        assert.notEqual(result.code, 0, "the existing allowance opt-in does not authorize replay of a TPM rejection");
+        assert.notEqual(result.code, 0, "the current registered extension cannot recover this rejection");
+        const expectedAttempts = nativeRetry ? 2 : 1;
         assert.deepEqual(
           after.stats.slice(before.stats.length).filter((entry) => entry.kind === "generation")
             .map(({ provider, model }) => ({ provider, model })),
-          [{ provider: "fake", model: "tpm-request-too-large" }],
-          "the failed request must not reach the alternate under the existing allowance-only policy",
+          Array.from({ length: expectedAttempts }, () => ({ provider: "fake", model: "tpm-request-too-large" })),
+          "native retry remains sticky on A; no alternate request under the existing allowance-only policy",
         );
         assert.match(result.stderr, /Request too large.*TPM.*Limit 60000, Requested 74499/i);
         const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
         assert.equal(outcome.userCount, 1, "the original user request is not re-enqueued");
         assert.deepEqual(
           outcome.assistants.map(({ provider, model, stopReason, contentLength }) => ({ provider, model, stopReason, contentLength })),
-          [{ provider: "fake", model: "tpm-request-too-large", stopReason: "error", contentLength: 0 }],
+          Array.from({ length: expectedAttempts }, () => ({ provider: "fake", model: "tpm-request-too-large", stopReason: "error", contentLength: 0 })),
         );
+        if (nativeRetry) assert.ok(outcome.contextEdits.some(edit => edit.targetId === outcome.assistants[0].id && edit.isNull), "Pi omits the exact first failed assistant before native retry");
+        if (mode === "v2") {
+          const durable = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability-v2.json"), "utf8"));
+          const receipts = Object.values(durable.dispatches);
+          assert.equal(receipts.length, 1, "same-model host retries share one receipt");
+          assert.equal(receipts[0].settledKind, "failure");
+          assert.deepEqual(receipts[0].scopes.map(scope => scope.modelKey), ["fake/tpm-request-too-large"]);
+          assert.ok(Object.values(durable.scopes).every(scope => scope.lease === undefined), "no trial remains owned");
+        }
         assertNoBlockedNetwork(home);
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(work, { recursive: true, force: true });
       }
     });
-
-
-    for (const scenario of [
-      { name: "cross-provider", failed: "tpm-request-too-large", backup: "fake-backup", success: true },
-      { name: "same-provider", failed: "tpm-request-too-large", backup: "fake", success: true },
-      { name: "ordinary-429", failed: "rate-limit-429", backup: "fake-backup", success: false },
-    ]) {
-      it(`authorizes only qualified request-budget recovery (${scenario.name}) in ${mode} Auto`, async () => {
-        const home = mkdtempSync(join(tmpdir(), `bifrost-budget-${mode}-home-`));
-        const work = mkdtempSync(join(tmpdir(), `bifrost-budget-${mode}-work-`));
-        try {
-          const bifrost = {
-            ...(mode === "v2" ? { schemaVersion: 2 } : {}),
-            enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
-            models: { quick: [`fake/${scenario.failed}`, `${scenario.backup}/healthy`] },
-            reliability: {
-              enabled: true, failureThreshold: 3, retryOnAllowanceExhausted: false,
-              retryOnRequestBudgetExceeded: true, allowanceCooldownScope: "provider",
-              ...(mode === "v2" ? { stateVersion: 2 } : {}),
-            },
-            debug: { enabled: true, path: ".pi/bifrost-debug.jsonl" },
-          };
-          writeFixture({
-            home, work, port: server.port,
-            models: [{ id: scenario.failed, reasoning: false }, { provider: scenario.backup, id: "healthy", reasoning: false }],
-            bifrost, retry: { enabled: false, provider: { maxRetries: 0 } },
-          });
-          const before = await fakeStats(server.port);
-          const observer = writeOutcomeObserver(work);
-          const result = await runPi({
-            home, work, extraExtensions: [observer.extension],
-            messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"],
-          });
-          const after = await fakeStats(server.port);
-          assert.equal(result.timedOut, false, result.stderr);
-          assert.equal(result.code === 0, scenario.success, result.stderr);
-          assert.deepEqual(
-            after.stats.slice(before.stats.length).filter((entry) => entry.kind === "generation")
-              .map(({ provider, model }) => ({ provider, model })),
-            [{ provider: "fake", model: scenario.failed }, ...(scenario.success ? [{ provider: scenario.backup, model: "healthy" }] : [])],
-          );
-          const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
-          assert.equal(outcome.userCount, 1);
-          const failed = outcome.assistants.find((entry) => entry.model === scenario.failed);
-          assert.equal(failed.stopReason, "error");
-          assert.equal(failed.contentLength, 0);
-          if (scenario.success) {
-            assert.match(result.stderr, /request budget exceeded for fake\/tpm-request-too-large; retrying once with/);
-            assert.match(result.stderr, /request-budget recovery/);
-            assert.ok(outcome.contextEdits.some((entry) => entry.targetId === failed.id && entry.isNull));
-            assert.equal(outcome.assistants.filter((entry) => entry.model === "healthy" && entry.stopReason === "stop").length, 1);
-            const trace = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8");
-            assert.match(trace, /"code":"request_rejected","source":"request_failure"/);
-            assert.doesNotMatch(trace, /Requested 74499|respond with one word/);
-            const providerPath = join(work, ".pi", "bifrost-provider-reliability.json");
-            if (existsSync(providerPath)) {
-              const providerState = JSON.parse(readFileSync(providerPath, "utf8"));
-              assert.ok(Object.entries(providerState.scopes).every(([key, scope]) => !key.includes("bifrost-provider-rate/fake") && !key.includes("bifrost-provider-usage/fake") || scope.openUntil === undefined));
-            }
-            if (mode === "v2") {
-              const state = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability-v2.json"), "utf8"));
-              const receipts = Object.values(state.dispatches);
-              assert.equal(receipts.length, 2);
-              assert.deepEqual(receipts.map((receipt) => receipt.settledKind).sort(), ["failure", "success"]);
-              assert.ok(Object.values(state.scopes).every((scope) => scope.lease === undefined));
-            }
-          } else {
-            assert.doesNotMatch(result.stderr, /retrying once with/);
-            assert.equal(outcome.assistants.length, 1);
-          }
-          assertNoBlockedNetwork(home);
-        } finally {
-          rmSync(home, { recursive: true, force: true });
-          rmSync(work, { recursive: true, force: true });
-        }
-      });
-    }
 
     it(`retries one zero-effect allowance failure with a configured alternate in ${mode} Auto`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-home-`));
