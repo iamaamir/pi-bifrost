@@ -2114,6 +2114,67 @@ describe("bifrost command ui", () => {
     assert.equal(initRecoveryCommand("user"), "/bifrost config reconcile --source user --recover");
   });
 
+  for (const receiptOnly of [false, true]) {
+    it(`reports one activation failure after ${receiptOnly ? "receipt-only" : "config"} commit`, async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-reload-failure-"));
+      const previousCwd = process.cwd();
+      process.chdir(tempDir);
+      try {
+        const piDir = join(tempDir, ".pi");
+        mkdirSync(piDir);
+        const configPath = join(piDir, "bifrost.json");
+        const ownershipPath = join(piDir, "bifrost-reconcile-ownership.json");
+        writeFileSync(configPath, JSON.stringify({ enabled: true, models: { quick: ["fixture/old"] }, classifier: { backend: "prompt", enabled: false, model: "fixture/manual-classifier" } }));
+        if (!receiptOnly) writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt({ quick: ["fixture/old"] })));
+        writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+          { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+        ]);
+        const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+        const registry = (ctx as any).modelRegistry;
+        registry.getAll = () => [{ provider: "fixture", id: "chat", api: "openai-completions", cost: { input: 0.2, output: 0.2 } }];
+        registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+        registry.refresh = async () => ({ aborted: false, errors: new Map() });
+        (ctx as any).ui.confirm = async () => true;
+        if (receiptOnly) {
+          await createCommandRouter(makeState() as never)("init", ctx as never);
+          assert.ok(existsSync(ownershipPath));
+          rmSync(ownershipPath);
+          calls.length = 0;
+        }
+        if (!receiptOnly) rmSync(ownershipPath);
+        const configBeforeCommit = readFileSync(configPath, "utf8");
+        const state = makeState();
+        const previousConfig = state.config;
+        let mutated = false;
+        let configAtCommit = "";
+        Object.defineProperty(state, "extensionDir", { get() {
+          if (!mutated && existsSync(ownershipPath)) {
+            mutated = true;
+            configAtCommit = readFileSync(configPath, "utf8");
+            writeFileSync(configPath, "{");
+          }
+          return ".";
+        } });
+        await createCommandRouter(state as never)("init", ctx as never);
+        assert.equal(mutated, true, JSON.stringify(calls));
+        assert.equal(state.config, previousConfig);
+        assert.doesNotThrow(() => JSON.parse(configAtCommit));
+        if (receiptOnly) assert.equal(configAtCommit, configBeforeCommit);
+        else assert.notEqual(configAtCommit, configBeforeCommit);
+        const notices = calls.filter((call) => call.kind === "notify").map((call) => String(call.value));
+        const failures = notices.filter((notice) => notice.includes("could not be activated"));
+        assert.equal(failures.length, 1, JSON.stringify(notices));
+        assert.equal(notices.filter((notice) => notice.startsWith("error:")).length, 1, JSON.stringify(notices));
+        assert.match(failures[0], /reload rejected/);
+        assert.match(failures[0], receiptOnly ? /Setup information was saved/ : /Configuration was saved/);
+        assert.equal(notices.some((notice) => notice.includes("reloaded config")), false);
+      } finally {
+        process.chdir(previousCwd);
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("reconciles generated memberships from a recent probe cache and keeps manual config", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-refresh-"));
     const previousCwd = process.cwd();
@@ -4210,7 +4271,42 @@ describe("route dispatch", () => {
     assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).startsWith("info:Probing 1 model(s)")));
     const lines = calls.filter((c) => c.kind === "widget").flatMap((c) => c.lines ?? []);
     assert.ok(lines.includes("--- probe results (1 models) ---"));
+    assert.ok(lines.includes("Current probe results could not be saved."));
   });
+
+  it("does not advertise a stale report when probe persistence fails", async () => {
+    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+    await inTempDir(async () => {
+      mkdirSync(".pi", { recursive: true });
+      mkdirSync(".pi/bifrost-probe.json");
+      writeFileSync(".pi/bifrost-probe.json/old", "stale");
+      await createCommandRouter(makeState() as never)("probe", ctx);
+      assert.equal(readFileSync(".pi/bifrost-probe.json/old", "utf8"), "stale");
+    });
+    const output = JSON.stringify(calls);
+    assert.match(output, /Current probe results could not be saved/);
+    assert.doesNotMatch(output, /full results →|Check .*bifrost-probe.json/);
+  });
+
+  for (const saved of [true, false]) {
+    it(`reports all-success probe ${saved ? "saved" : "unsaved"} accurately`, async () => {
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAvailable = () => [{ provider: "fixture", id: "chat", api: "openai-completions", cost: { input: 0, output: 0 } }];
+      registry.streamSimple = () => ({ result: async () => ({ role: "assistant", content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop" }) });
+      await inTempDir(async () => {
+        if (!saved) { mkdirSync(".pi", { recursive: true }); mkdirSync(".pi/bifrost-probe.json"); }
+        await createCommandRouter(makeState() as never)("probe", ctx);
+      });
+      const notices = calls.filter((c) => c.kind === "notify").map((c) => String(c.value)).join("\n");
+      assert.match(notices, /All 1 models responded successfully/);
+      if (saved) assert.doesNotMatch(notices, /could not be saved/);
+      else assert.match(notices, /could not be saved/);
+      const output = JSON.stringify(calls);
+      if (saved) assert.match(output, /full results →/);
+      else assert.doesNotMatch(output, /full results →/);
+    });
+  }
 
   it("sanitizes probe failures and clears progress when the probe rejects", async () => {
     const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);

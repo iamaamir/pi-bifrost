@@ -48,10 +48,36 @@ describe("probe transport", () => {
 
       process.chdir(cwd);
       const result = await runProbe(ctx, {});
+      assert.equal(result.persisted, true);
       assert.equal(result.results[0]?.status, "ok");
       assert.equal(result.results[0]?.model, "gpt-5.4-mini");
     } finally {
       process.chdir(cwdBefore);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("reports disabled, incomplete and failed persistence without replacing stale reports", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-persist-"));
+    const previous = process.cwd();
+    const model = { provider: "fixture", id: "one", api: "openai-completions", cost: { input: 0, output: 0 } };
+    const ctx = { modelRegistry: { getAvailable: () => [model], streamSimple: () => { throw new Error("offline"); } } } as never;
+    try {
+      process.chdir(cwd);
+      mkdirSync(".pi");
+      writeFileSync(".pi/bifrost-probe.json", "stale");
+      const disabled = await runProbe(ctx, { persist: false, sessionFallback: false });
+      assert.equal(disabled.persisted, false);
+      const incomplete = await runProbe(ctx, { models: [], sessionFallback: false });
+      assert.equal(incomplete.persisted, false);
+      assert.equal(readFileSync(".pi/bifrost-probe.json", "utf8"), "stale");
+      rmSync(".pi/bifrost-probe.json");
+      mkdirSync(".pi/bifrost-probe.json");
+      const failed = await runProbe(ctx, { sessionFallback: false });
+      assert.equal(failed.persisted, false);
+      assert.equal(failed.results.length, 1);
+    } finally {
+      process.chdir(previous);
       rmSync(cwd, { recursive: true, force: true });
     }
   });
@@ -228,6 +254,7 @@ describe("probe transport", () => {
     } as never;
     const result = await runProbe(ctx, { persist: false, signal: controller.signal });
     assert.equal(dispatched, 0, "an aborted signal must not dispatch a primary attempt");
+    assert.equal(result.persisted, false);
     assert.equal(result.cancelled, true);
     assert.equal(result.results.length, 0);
   });

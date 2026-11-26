@@ -243,7 +243,7 @@ function reportProbeCompletion(
 export async function runProbe(
   ctx: ExtensionContext,
   options: RunProbeOptions = {},
-): Promise<{ results: ProbeResult[]; path: string; cancelled?: true }> {
+): Promise<{ results: ProbeResult[]; path: string; persisted: boolean; cancelled?: true }> {
   const runId = randomUUID();
   const outputPath = join(process.cwd(), ".pi", "bifrost-probe.json");
   const catalog = ctx.modelRegistry.getAvailable().filter(isGenerativeModel);
@@ -299,27 +299,27 @@ export async function runProbe(
   if (signal?.aborted) {
     const partial = results.filter((result): result is ProbeResult => result !== undefined);
     reportProbeCompletion(runId, partial, catalog.length, { cache: "not_written", cacheReason: "cancelled" }, true);
-    return { results: partial, path: outputPath, cancelled: true };
+    return { results: partial, path: outputPath, persisted: false, cancelled: true };
   }
   if (!validateCompleteProbeReport(results, catalog)) {
     reportProbeCompletion(runId, results, catalog.length, { cache: "not_written", cacheReason: "incomplete_report" });
-    return { results, path: outputPath };
+    return { results, path: outputPath, persisted: false };
   }
   if (!persist) {
     reportProbeCompletion(runId, results, catalog.length, { cache: "not_written", cacheReason: "persistence_disabled" });
-    return { results, path: outputPath };
+    return { results, path: outputPath, persisted: false };
   }
   try {
     writeJsonFile(outputPath, results);
-  } catch (err) {
+  } catch {
     // Persistence is best-effort: a completed probe must still return its
     // results so callers record reliability outcomes and render the report.
-    console.error(`[bifrost] failed to write probe results: ${err}`);
+    console.error("[bifrost] failed to write probe results");
     reportProbeCompletion(runId, results, catalog.length, { cache: "error", cacheError: "write_failed" });
-    return { results, path: outputPath };
+    return { results, path: outputPath, persisted: false };
   }
   reportProbeCompletion(runId, results, catalog.length, { cache: "written" });
-  return { results, path: outputPath };
+  return { results, path: outputPath, persisted: true };
 }
 
 async function probeOne(
