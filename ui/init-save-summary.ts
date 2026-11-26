@@ -1,5 +1,39 @@
-import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { isDeepStrictEqual } from "node:util";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
+import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
+
+type InitTheme = ExtensionContext["ui"]["theme"];
+
+function stylePreviewLine(theme: InitTheme, line: string): string {
+  const match = /^(\S+(?:\s+\S+)?)(\s{2,})(.*)$/.exec(line);
+  if (!match) {
+    return line.replace(/^(\s+)(global|workspace)(?= \()/, (_text, space: string, layer: string) =>
+      space + theme.fg("accent", layer),
+    );
+  }
+  const [, label, spacing, rawValue] = match;
+  let value = rawValue!;
+  if (label === "Models") {
+    value = value.replace(/\b\d+ working models? found\b/, (count) => theme.fg("success", count));
+  }
+  if (label === "Also uses") {
+    value = value.replace(/\b(global|workspace)\b/g, (layer) => theme.fg("accent", layer));
+  }
+  return theme.fg("muted", label!) + spacing + value;
+}
+
+export function initSummaryPanel(theme: InitTheme, lines: readonly string[]): Box {
+  const box = new Box(2, 1, (text) => theme.bg("toolPendingBg", text));
+  const [title = "", ...body] = lines;
+  const styled = [
+    theme.fg("accent", theme.bold(title)),
+    theme.fg("dim", "─────────────"),
+    ...body.map((line) => stylePreviewLine(theme, line)),
+  ];
+  box.addChild(new Text(styled.join("\n"), 0, 0));
+  return box;
+}
 
 type Config = Record<string, unknown>;
 
@@ -81,13 +115,11 @@ export function initClassifierSummary(
   configuredModel: string | string[] | undefined,
   detectedModel: string | undefined,
 ): string {
-  return !enabled
-    ? "off"
-    : detected.backend !== CLASSIFIER_BACKEND_IDS.prompt
-      ? `${detected.backend} (${detected.auto ? "detected default" : "configured"})`
-      : configuredModel
-        ? `prompt (${configuredModel}, configured)`
-        : detectedModel
-          ? `prompt (${detectedModel}, detected default)`
-          : "prompt (no eligible model; regex fallback)";
+  if (!enabled) return "off";
+  if (detected.backend !== CLASSIFIER_BACKEND_IDS.prompt) {
+    return `${detected.backend} (${detected.auto ? "detected default" : "configured"})`;
+  }
+  if (configuredModel) return `prompt (${configuredModel}, configured)`;
+  if (detectedModel) return `prompt (${detectedModel}, detected default)`;
+  return "prompt (no eligible model; regex fallback)";
 }

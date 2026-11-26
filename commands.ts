@@ -1,5 +1,4 @@
 import { log as logNotice } from "./ui/notice.ts";
-import { summaryPanel } from "./ui/summary-panel.ts";
 import {
   clearProbeProgress,
   setProbeProgress,
@@ -13,7 +12,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { initClassifierSummary, initSavePreviewLines, initSaveSummary } from "./ui/init-save-summary.ts";
+import { initClassifierSummary, initSavePreviewLines, initSaveSummary, initSummaryPanel } from "./ui/init-save-summary.ts";
 import {
   constants,
   closeSync,
@@ -84,7 +83,6 @@ import {
   PROBE_PROMPT_TEXT,
   readRecentCompleteProbeReportCacheHit,
   describeProbeReportCacheAge,
-  describeProbeReuseReason,
 } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
@@ -405,7 +403,7 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
 
 function uiOutput(ctx: ExtensionContext, lines: string[], summary = false) {
   if (ctx.mode === "tui" && ctx.hasUI) {
-    if (summary) ctx.ui.setWidget("bifrost-output", (_tui, theme) => summaryPanel(theme, lines));
+    if (summary) ctx.ui.setWidget("bifrost-output", (_tui, theme) => initSummaryPanel(theme, lines));
     else ctx.ui.setWidget("bifrost-output", lines);
   } else {
     for (const line of lines) console.error(`[bifrost] ${line}`);
@@ -768,7 +766,7 @@ async function runInitProbe(
   const errors = results.filter((r) => r.status === "error").length;
   const timeouts = results.filter((r) => r.status === "timeout").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
-  initLog(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
+  initLog(ctx, `${ok} model${ok === 1 ? "" : "s"} worked; ${errors} failed${timeouts ? `; ${timeouts} timed out` : ""}${skipped ? `; ${skipped} skipped` : ""}.`);
   return {
     workingModels: results
       .filter((r) => r.status === "ok")
@@ -1813,7 +1811,7 @@ function initMembershipFailureMessage(status: string, reason: string | undefined
   return status === "advisory"
     ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
     : reason === "no_changes"
-      ? "The refreshed catalog has no safe membership changes; no files were changed."
+      ? "No changes to apply from this check. Your config was kept."
       : "Init could not safely prepare a membership update (" +
         (reason ?? "unknown source state") +
         "); no files were changed.";
@@ -2024,7 +2022,6 @@ async function handleInitInner(
 
   if (!reused) {
     ranProbe = true;
-    initLog(ctx, `Checking ${available.length} models (${describeProbeReuseReason(forced)}).`);
     const probeRun = await runInitProbe(ctx, state, initConfig, available, initLog);
     if (!probeRun) return;
     workingModels = probeRun.workingModels;
@@ -2058,12 +2055,10 @@ async function handleInitInner(
     }
   }
 
-  if (ranProbe) {
-    initLog(ctx, `Using ${workingModels.length} working models from this check.`);
-  } else {
+  if (!ranProbe) {
     initLog(
       ctx,
-      `Model check: cached ${probeAge} ago. Run /bifrost init -f to check again.`,
+      `Using model check from ${probeAge} ago: ${workingModels.length} worked. Run /bifrost init -f to check again.`,
     );
   }
 
@@ -2382,7 +2377,7 @@ async function handleInitInner(
           if (source.ownershipBytes !== null) {
             initLog(
               ctx,
-              "The refreshed catalog has no safe membership or settings changes; no files were changed.",
+              "No changes to apply from this check. Your config was kept.",
             );
             return;
           }
