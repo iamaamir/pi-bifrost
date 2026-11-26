@@ -31,14 +31,15 @@ export function probeProgressComponent(
   if ("phase" in stats) {
     const box = new Box(0, 0, (text) => text);
     box.addChild(
-      new Text(theme.bold("◆ Bifrost") + theme.fg("dim", "  Refreshing model catalog"), 0, 0),
+      new Text(theme.bold("◆ Bifrost") + theme.fg("warning", "  Refreshing model catalog"), 0, 0),
     );
     box.addChild(progressBar(theme, { frame }));
     if (cancellable) box.addChild(new Text(theme.fg("dim", "  Esc to cancel"), 0, 0));
     return box;
   }
   const header =
-    theme.bold("◆ Bifrost") + theme.fg("dim", `  Probing models · ${stats.done}/${stats.total}`);
+    theme.bold("◆ Bifrost") +
+    theme.fg("warning", `  Probing models · ${stats.done}/${stats.total}`);
   const counts =
     theme.fg("success", `✓ ${stats.okCount} working`) +
     theme.fg("dim", "   ·   ") +
