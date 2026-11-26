@@ -1,6 +1,6 @@
 # Rules
 
-The route-rule engine: compile configured regex rules once, verify their safety, and match
+The route-rule engine: compile configured regex rules once, apply heuristic safety checks, and match
 prompts against the compiled set.
 
 ## Ownership
@@ -31,46 +31,131 @@ a later match that appears earlier in the text.
 `classifyCompiled(text, compiled)` is a pure loop over already-compiled rules: it constructs no
 `RegExp`, reads no environment, verifies nothing and spawns nothing. `classify(text, rules)` is
 deprecated and exists as the parity reference; production uses compilation. `classify` constructs
-a `RegExp` and verifies each rule on every call, so an uncached verdict can spawn one bounded
-child process. Consumers that must not spawn use `classifyCompiled`.
+a `RegExp` and checks verification for each rule it visits, so an uncached verdict can launch
+a bounded verifier. Consumers that must not spawn use `classifyCompiled`.
 
 ## Safety checks are heuristic
 
-Two independent checks decide whether a pattern may run. Neither is a proof of safety.
+JavaScript's `RegExp.test()` is synchronous. A pattern that requires excessive backtracking
+can block the event loop: a timer, promise race or abort signal cannot interrupt a native
+regex match. Running a test match in the Pi process would therefore expose the host itself
+to the problem the verifier is trying to detect.
 
-1. **Textual scan** — rejects a group repeated without a finishing bound whose body carries a
-   variable quantifier, and repeated alternations whose branches ambiguously overlap. It is
-   textual, cheap and never executes a pattern. Constructs it does not model are treated
-   permissively, and it is deliberately conservative only in the shapes it enumerates.
-2. **Canary probe** — runs the pattern against ten fixed canaries in a child process with a
-   10 ms budget per match, twice per canary, batches of 32, a timeout of
-   `500 + 20 × patterns` ms, `SIGKILL`, and a bounded output buffer.
+Two complementary defenses reduce that risk before rules reach normal matching:
 
-A pattern is rejected when either check rejects it. Decoded verdicts are honored first: a line
-`0` accepts and `1` rejects in batch order; the first line that is neither stops decoding for
-that batch, the un-decoded remainder is rejected, and verdicts beyond the batch size are ignored.
-A short, malformed or otherwise incomplete stream rejects the un-decoded remainder of its batch.
-A timeout is the narrow exception: it rejects only the first still-pending pattern and then
-continues. Later batches still run in every case.
+1. **Textual scan** — rejects selected repeated-group and ambiguous-alternation shapes
+   without executing the configured regex. Unmodeled constructs proceed to the probe.
+2. **Canary probe** — executes patterns against ten fixed sample strings in a separate
+   process, with a per-match timing threshold and a parent-enforced process timeout.
 
-Accepted does not mean "safe in general". It means these two heuristics found no problem on the
-canaries they used. Documentation and comments must say "heuristic" and "fail closed for
-unverifiable patterns", never "safe".
+```mermaid
+flowchart TD
+    A[Configured rules] --> B[Construct case-insensitive regexes]
+    B -->|Invalid| X[Log and drop]
+    B -->|Valid| C{Cached verdict?}
+    C -->|Yes| G{Accepted verdict?}
+    C -->|No| D{Structural scan rejects?}
+    D -->|Yes| F[Cache rejection]
+    D -->|No| E[Run bounded canary probe]
+    E -->|Accepted| H[Cache acceptance]
+    E -->|Rejected or unverifiable| F
+    F --> G
+    H --> G
+    G -->|No| Y[Drop rule]
+    G -->|Yes| I[Keep compiled rule in input order]
+    I --> J[Match prompts without verification]
+```
+
+An accepted verdict means these heuristics did not reject the pattern. It does not prove
+that the pattern has bounded execution time on every possible prompt. Fail-closed handling
+of missing verdicts is distinct from a universal regex safety guarantee.
+
+## How the backtracking probe works
+
+[`safety.ts`](safety.ts) contains `BACKTRACKING_PROBE`, a fixed JavaScript program stored as
+a string. It is the child-side verifier, not a regex or a user-supplied program.
+`verifyRulePatterns` is the parent-side coordinator.
+
+Node's `-e` option executes the program supplied as an argument. The parent passes
+`["-e", BACKTRACKING_PROBE]` to `spawnSync`; configured patterns are data in a JSON stdin
+payload, not interpolated into the executable program.
+
+```mermaid
+sequenceDiagram
+    participant P as Parent (verifyRulePatterns)
+    participant C as Child (BACKTRACKING_PROBE)
+    P->>C: spawnSync with fixed program
+    P->>C: stdin JSON: patterns, canaries, budget
+    Note over P: Wait synchronously with timeout
+    loop Each pattern and its sample inputs
+        C->>C: Construct regex and time matches
+    end
+    C-->>P: stdout verdict line per completed pattern
+    Note over P,C: On timeout, parent sends SIGKILL
+    P->>P: Decode available verdicts and cache results
+```
+
+The child reads stdin using file descriptor `0`, constructs each `RegExp` with the `i` flag,
+and times matches using `performance.now()`. A match that finishes within 10 ms advances to
+the next canary. A slower match is retried; if the retry also exceeds 10 ms, the pattern is
+rejected. The timing threshold is not an interrupt: a match that never returns is handled
+by the parent process timeout instead.
+
+The child writes each completed verdict immediately using `fs.writeSync` on file descriptor
+`1` (stdout). This preserves the completed prefix even if a subsequent pattern stalls.
+
+| Verdict line | Meaning |
+| --- | --- |
+| `0` | Accepted by the probe |
+| `1` | Rejected by the probe |
+
+The parent consumes verdicts in batch order, ignoring empty lines and surplus verdicts
+beyond the batch size. A short or malformed stream preserves the decoded prefix and rejects
+the unverified remainder of that batch. On `ETIMEDOUT`, it rejects the first still-pending
+pattern and continues probing the rest. Later batches remain eligible for verification.
 
 ## Effects and state
 
-`compileRules` (and `classify` for a pattern without a cached verdict) may read
-`BIFROST_PROBE_NODE` and forward the ambient environment to one bounded child process per batch,
-with `NODE_OPTIONS` cleared for the child. On a Node host the probe uses `process.execPath` so its
-verdict cannot be chosen through `PATH`. On Bun or Deno it resolves `node` through `PATH` and,
-if no Node binary exists, falls back to the hosting runtime; `BIFROST_PROBE_NODE` overrides the
-choice on every host. The probe writes nothing to disk and opens no network connection.
-`classifyCompiled` spawns nothing.
+`compileRules` (and the deprecated `classify` for uncached patterns) may launch a verifier
+for each batch of up to 32 unknown patterns. Timeout recovery and runtime fallback can
+cause additional invocations. Each invocation has a timeout of `500 + 20 × patterns` ms,
+`SIGKILL`, and a bounded output buffer. This is a per-invocation bound, not a single deadline
+for compiling an arbitrarily large rule set. The parent still blocks during `spawnSync`.
 
-Verdicts are cached in memory by pattern text for the life of the process, so a rejection is
-reported once and later compilations of the same patterns are spawn-free. The cache is
-intentional module state: it is not exported, not configurable and not persisted. Tests must use
-fresh pattern text rather than assuming an empty cache.
+On a Node host, the default verifier is `process.execPath`, avoiding a `PATH` lookup.
+On Bun or Deno it looks up `node`. The `BIFROST_PROBE_NODE` environment variable overrides
+the choice on every host. If the selected executable is absent (`ENOENT`) and differs
+from the hosting runtime, the parent retries with `process.execPath`. The parent forwards
+its ambient environment with `NODE_OPTIONS` cleared. The embedded verifier itself reads
+stdin and writes stdout; it does not write files or make network calls. This is execution
+isolation for regex probing, not a general-purpose security sandbox.
+
+Verdicts are cached by pattern text for the process lifetime, not persisted to disk. Both
+acceptance and rejection are reused; rejection diagnostics are emitted once per pattern.
+Tests must use fresh pattern text when they need to exercise verification rather than
+cache reuse. `classifyCompiled` does not recompile, verify, read the environment or spawn.
+
+## Design trade-offs
+
+| Approach | Assessment |
+| --- | --- |
+| Timer, promise race or abort signal around an in-process match | Cannot interrupt synchronous native regex execution. |
+| Static analysis alone | Cheap and useful, but the implemented scan does not model every potentially expensive pattern. |
+| Terminable worker thread | A viable alternative for execution isolation; would require worker lifecycle and timeout handling. |
+| Separate process (current) | Native process termination, no extra dependency, simple stdin/stdout protocol and recoverable partial verdicts. |
+
+The current design keeps expensive verification out of compiled matching and avoids shipping
+a separate executable or worker entry point. Its costs are subprocess startup, synchronous
+compilation latency, heuristic false positives and negatives, and a process-lifetime cache
+without eviction. The embedded program is also less convenient to typecheck, lint and debug
+than an ordinary source file. Clearing `NODE_OPTIONS` and choosing the hosting Node binary
+by default reduce verifier substitution risks, but neither makes the inherited environment
+or explicit override a sandbox.
+
+A separate verifier source file or worker-based implementation could improve maintainability
+or responsiveness, but would need evidence for equivalent failure handling, termination,
+runtime selection, packaging and consumer effects. No such redesign is implied by this
+capability boundary.
 
 ## Compatibility
 
@@ -94,5 +179,5 @@ cannot hang the runner.
 
 A different verifier can replace `safety.ts` behind `verifyRulePatterns` + `isPatternAccepted`
 without touching routing policy. Do not weaken fail-closed rejection, do not spawn on the match
-path, do not resolve the verifier through `PATH`, and do not persist verdicts. See
+path, do not resolve the verifier through `PATH` on a Node host, and do not persist verdicts. See
 [AGENTS.md](AGENTS.md).
