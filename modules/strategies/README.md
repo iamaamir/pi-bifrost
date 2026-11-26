@@ -1,83 +1,178 @@
-# Strategies
+# Model-selection strategies
 
-Built-in model-selection strategies for the routing policy.
+Bifrost uses a strategy to choose one model from an ordered candidate pool. This capability
+implements the built-in strategies configured through `strategy` and `categoryStrategies`
+in `bifrost.json`. It lets users prefer cost, context capacity, list order or random selection
+without changing how Bifrost classifies a prompt or determines model eligibility.
+
+A routing rule or classifier can identify a target tier, such as `quick` or `frontier`.
+A strategy answers the next question: which candidate in the supplied pool should win?
+
+## Example: choose a model within a tier
+
+The following illustrative configuration assumes the named models exist in the registry.
+The model identifiers and prices below are fictional.
+
+```json
+{
+  "models": {
+    "quick": ["example/a", "example/b", "example/c"],
+    "frontier": ["example/a", "example/b", "example/c"]
+  },
+  "default": "quick",
+  "strategy": "cheapest",
+  "categoryStrategies": {
+    "frontier": "largest_context"
+  }
+}
+```
+
+Suppose the resolver supplies these candidates in the listed order:
+
+| Candidate | Input cost | Output cost | Context window |
+| --- | ---: | ---: | ---: |
+| `example/a` | 2 | 3 | 32000 |
+| `example/b` | 1 | 5 | 64000 |
+| `example/c` | 4 | 1.5 | 128000 |
+
+Costs are illustrative prices per million tokens. For this pool, the default `cheapest`
+strategy chooses A in the quick tier (combined cost 5). The frontier override chooses C
+(context window 128000). The override changes selection policy, not membership.
+
+| Strategy | Result for this pool |
+| --- | --- |
+| `first`, `fastest` | A (first in supplied order) |
+| `cheapest` | A (lowest combined cost) |
+| `cheapest_input` | B (lowest input cost) |
+| `cheapest_output` | C (lowest output cost) |
+| `largest_context` | C (largest context window) |
+| `best_value` | C (lowest combined cost divided by context window) |
+| `random` | A, B or C, depending on the draw |
+
+These are selection results for the assumed pool, not guaranteed final routes or actual
+provider prices. The engine does not measure latency for `fastest`, estimate the prompt's
+actual token bill for `cheapest`, or measure model quality for `best_value`.
+
+## Where strategies participate in routing
+
+[`routing.ts`](../../routing.ts) owns strategy configuration precedence:
+the target tier's `categoryStrategies` entry, then the top-level `strategy`, then
+`first` if neither is supplied. Configuration loading and merging remain outside this module.
+
+```mermaid
+flowchart TD
+    A[Requested tier] --> B[Resolve configured strategy]
+    A --> C[Discover ordered candidates]
+    C --> D[Apply applicable eligibility and reliability controls]
+    D --> E[Apply billing preference if applicable]
+    B --> F[Strategy selection]
+    E --> F
+    F -->|No winner| G[Resolver evaluates permitted fallback]
+    G -->|Another tier| B
+    G -->|Exhausted| H[No selection]
+    F -->|Winner| I[Resolver applies applicable affinity policy]
+    I --> J[Routing decision]
+```
+
+This diagram summarizes configured-tier routing; direct model references and simpler
+resolver paths need not traverse every stage. The resolver supplies the ordered selection
+pool and consumes the strategy result. Affinity retention can change the selected model
+only under its own policy and within the applicable selection pool. Dispatch and live
+revalidation remain with the host. The [resolve-only SDK](../../docs/router-api.md) uses the
+shared routing resolver and returns advisory decisions, not authorization to dispatch.
 
 ## Ownership
 
 This capability owns:
 
 - the closed set of built-in strategy names and their single canonical order (`ALL_STRATEGIES`)
-- the documented cost and context metrics (`modelCost`, `modelInputCost`,
-  `modelOutputCost`, `modelContextSize`)
-- the final pick from an ordered candidate pool (`selectModel`)
+- the cost and context metrics (`modelCost`, `modelInputCost`, `modelOutputCost`,
+  `modelContextSize`)
+- the pick from an ordered candidate pool (`selectModel`)
 
-It owns nothing else. Candidate discovery, tiers, provider eligibility, sign-in,
-reserves, billing preference, reliability and circuits, affinity, fallback,
-routing rules and dispatch stay with `routing.ts` and its existing owners.
-`routing.ts` and `config.ts` re-export this contract so existing root subpath
-imports keep working.
+Candidate discovery, classification, tiers, provider eligibility, sign-in, reserves,
+billing preference, reliability and circuits, affinity, fallback and dispatch stay with
+their existing owners.
 
 ## Inputs and outputs
 
-`selectModel(candidates, strategy, random)` is synchronous and pure with respect
-to its inputs:
+`selectModel(candidates, strategy, random)` is synchronous and does not mutate its inputs:
 
-- `candidates` is the final permitted pool in the host's order. Selection never
-  re-sorts, mutates or allocates replacements.
-- Each candidate exposes `cost.input`, `cost.output` and `contextWindow`; host
-  objects may carry more fields, and generic inference preserves their identity.
+- `candidates` is an ordered pool supplied by the caller. Selection never sorts or
+  allocates replacement candidates.
+- Each candidate exposes `cost.input`, `cost.output` and `contextWindow`; host objects
+  may carry more fields, and generic inference preserves their type and identity.
 - `strategy` is one of the eight names in `ALL_STRATEGIES`.
-- `random` is an injectable draw used once by `random` and never by the others.
+- `random` is an injectable draw, called once only for the random strategy with multiple
+  candidates. The default is `Math.random`.
 
-The result is always a member of the supplied pool, or `undefined` for an empty
-pool. A single candidate is returned without scoring or drawing.
+A returned candidate is the original member of the supplied pool. Empty input yields
+`undefined`. A single candidate is returned without scoring or drawing. A nonempty
+multi-candidate metric pool can also yield `undefined` when no comparable minimum exists.
 
 ## Behavior
 
 | Strategy | Chooses |
 | --- | --- |
-| `first`, `fastest` | the first candidate in list order |
-| `cheapest` | lowest `input + output` cost |
+| `first`, `fastest` | first candidate in list order |
+| `cheapest` | lowest `input + output` cost (excludes cache costs) |
 | `cheapest_input` | lowest input cost |
 | `cheapest_output` | lowest output cost |
 | `largest_context` | largest context window |
-| `best_value` | lowest combined cost per context token |
-| `random` | `floor(draw * length)`, one draw |
+| `best_value` | lowest combined cost divided by context window |
+| `random` | index `floor(draw * length)` |
 
-Ties keep the earliest candidate. An unknown strategy name keeps the legacy
-first-candidate fallback; callers validate names elsewhere. `random` is total for
-draws outside `[0, 1)` and for `NaN`, selecting the last candidate.
+Ties keep the earliest candidate. An unknown strategy name keeps the legacy first-candidate
+fallback; callers validate names elsewhere. For multi-candidate random selection, a draw
+outside the half-open interval from 0 (inclusive) to 1 (exclusive), including `NaN`,
+selects the last candidate.
 
-Numeric contract: the lowest comparable score wins, and equal scores keep the
-earliest candidate, so tie-breaking is stable. Callers pass validated finite
-metrics, but arithmetic on finite inputs can still leave the finite domain — an
-`input + output` or `best_value` ratio can overflow to `+Infinity` — so the
-observable rules are:
+### Numeric edge behavior
 
-- the lowest comparable score wins; equal scores keep the earliest candidate;
-- a finite score wins over `NaN` and `+Infinity`, wherever each appears;
-- `NaN` is never comparable, so a `NaN` score never wins;
-- `+Infinity` never wins, including a sum of finite inputs that overflows to it;
-- `-Infinity` always wins, keeping the earliest such candidate;
-- when every score is `NaN` or `+Infinity` (including `0 / 0` for `best_value`)
-  there is no comparable minimum and the result is `undefined` rather than a
-  fabricated candidate.
+The metric scan starts at positive infinity and replaces the winner only when the score
+is strictly lower. For `largest_context` the score is the negative context window;
+for `best_value` it is the combined cost divided by the context window.
 
-A missing `cost` object is a caller error and throws for multi-candidate metric
-strategies. Valid-domain callers cannot reach these states; changing them is a
-separate decision.
+- The lowest comparable score wins; equal scores keep the earliest candidate.
+- `NaN` and positive infinity never win; negative infinity wins over finite scores.
+- If every score is `NaN` or positive infinity, the result is `undefined`.
+- Even finite inputs can produce non-finite scores, for example through cost addition
+  overflow or division by zero.
+- Missing `cost` throws when a multi-candidate cost-based strategy accesses it. The
+  singleton path does not access metrics.
+
+These are preserved behaviors, not permission to supply invalid model metadata or a
+new validation policy.
+
+## Design rationale and trade-offs
+
+The strategies share a small structural candidate contract and a closed set of names.
+A switch selects the relevant operation; metric-based strategies use a one-pass minimum
+scan. This makes ordering and edge behavior explicit without requiring a class hierarchy,
+strategy registry or dependency injection framework.
+
+| Approach | Assessment |
+| --- | --- |
+| Sort the full pool | Unnecessary when only one winner is needed; requires sorting work and either mutates the pool or copies it. |
+| One-pass scan (current) | Linear time and constant auxiliary space for metric selection; preserves list order, candidate identity and stable ties. |
+| Direct indexing | Constant time for first, fastest and random; no metric scan required. |
+| Extensible strategy registry | Could support dynamically registered policies, but adds lifecycle and compatibility concerns without an existing requirement. |
+
+The cost and context strategies use simple metadata proxies. They do not account for
+actual token usage, quality or observed latency. More sophisticated ranking would need
+a separate behavior contract and evidence, not just a replacement implementation.
 
 ## Dependencies and effects
 
-No imports outside this directory, no I/O, no host runtime, no network, no
-filesystem, no clock, no dispatch, no credentials and no persisted state.
+No runtime imports, I/O, host runtime, network, filesystem, clock, dispatch, credentials
+or persisted state. Random selection uses the supplied callback or the default random
+source; the module itself owns no random state.
 
 ## Compatibility
 
-The exported names, signatures and behavior are the public contract of the
-strategies capability. They are also re-exported from `routing.ts` (selection,
-metrics and the strategy type) and `config.ts` (`ALL_STRATEGIES`), which existing
-consumers import. Configuration names and defaults are unchanged.
+The strategy type and metric/selection functions remain available through the existing
+`routing.ts` compatibility boundary, which preserves its published host-model signatures.
+`config.ts` re-exports `ALL_STRATEGIES`. Configuration names and defaults are unchanged.
 
 ## Verification
 
@@ -92,8 +187,8 @@ directly because they import this capability.
 
 ## Extending or replacing
 
-Add a strategy by extending the union and the canonical list in `selection.ts`,
-then updating the schema enums and the drift guard in one change. Keep every
-consumer override-free: this capability chooses from the supplied pool and does
-not gain eligibility, fallback or dispatch authority. Replacement must preserve
-the documented behavior above, including tie-breaking and edge cases.
+Add a strategy by updating the canonical list in [`selection.ts`](selection.ts), from which
+the union is derived, implementing its behavior, and updating the schema enums and drift
+guard in one change. Preserve the documented selection semantics, including ordering,
+identity, tie-breaking and edge cases. Do not move eligibility, fallback or dispatch
+authority into this capability. See [AGENTS.md](AGENTS.md).
