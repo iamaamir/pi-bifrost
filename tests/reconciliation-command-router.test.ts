@@ -205,7 +205,7 @@ describe("config reconciliation command router", () => {
   it("fault control: complete-on-refresh-failure turns the named advisory assertion RED in an isolated source copy", async () => {
     const sourcePath = new URL("../commands.ts", import.meta.url);
     const original = fs.readFileSync(sourcePath, "utf8");
-    const staleCatch = '    } catch {\n      setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });\n    } finally {';
+    const staleCatch = '    } catch {\n      setRegistryProviderEvidence(state, request.provider, {\n        status: "stale",\n        refreshedAt: Date.now(),\n      });\n    } finally {';
     assert.equal(original.split(staleCatch).length - 1, 1, "refresh failure catch anchor must be unique");
     const mutant = original.replace(staleCatch, staleCatch.replace('status: "stale"', 'status: "complete"'));
     assert.notEqual(mutant, original, "controlled fault must change the production command source");

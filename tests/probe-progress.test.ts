@@ -16,6 +16,15 @@ describe("init probe progress presentation", () => {
     assert.ok(colors.includes(`dim:${"─".repeat(21)}`));
   });
 
+  it("uses warning color for refresh and probing messages", () => {
+    const colors: string[] = [];
+    const theme = { fg: (color: string, text: string) => { colors.push(`${color}:${text}`); return text; }, bold: (text: string) => text };
+    probeProgressComponent(theme, { phase: "preparing" }).render(80);
+    probeProgressComponent(theme, { done: 2, total: 4, okCount: 1, errCount: 1 }).render(80);
+    assert.ok(colors.includes("warning:  Refreshing model catalog"));
+    assert.ok(colors.includes("warning:  Probing models · 2/4"));
+  });
+
   it("renders preparation without advertising unavailable cancellation", () => {
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
     const output = probeProgressComponent(theme, { phase: "preparing" }).render(80).join("\n");
