@@ -67,6 +67,7 @@ import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import type { ReliabilityV2LegacyAllowanceMarker } from "./reliability-v2.ts";
 import { projectProviderCooldownsForRouting, type LegacyAllowanceMarker, type ProviderTrialClaim } from "./provider-cooldowns.ts";
 import { normalizeFailureObservation } from "./failure-observations.ts";
+import { autoRecoveryCategory, autoRecoveryEnabled, autoRecoveryOptedIn, requestBudgetRejectionHint, recoveryDescription, type AutoRecoveryCategory } from "./auto-recovery-policy.ts";
 import { createRuntimeAffinityStore, type RuntimeAffinitySuccessProof, type RuntimeAffinityStore } from "./runtime-affinity.ts";
 import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
@@ -1220,6 +1221,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       && (previousReliability.cooldownOnAllowanceExhausted ?? true) === (nextReliability.cooldownOnAllowanceExhausted ?? true)
       && (previousReliability.allowanceCooldownScope ?? "provider") === (nextReliability.allowanceCooldownScope ?? "provider")
       && (previousReliability.retryOnAllowanceExhausted ?? false) === (nextReliability.retryOnAllowanceExhausted ?? false)
+      && (previousReliability.retryOnRequestBudgetExceeded ?? false) === (nextReliability.retryOnRequestBudgetExceeded ?? false)
       && (previousReliability.observations?.enabled ?? false) === (nextReliability.observations?.enabled ?? false);
     state.configGeneration = (state.configGeneration ?? 0) + 1;
     for (const reference of allowanceRetrySessions) {
@@ -1796,13 +1798,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     readonly selectedTier: string;
     readonly explicitTier: boolean;
     readonly observation: NonNullable<ReturnType<typeof normalizeFailureObservation>>;
+    readonly failureCategory: AutoRecoveryCategory;
     readonly receipt?: AutoDispatchReceipt;
   }
 
   interface AllowanceRetryToken extends Omit<AutoUserBoundary, "message"> {
     readonly userMessage: WeakRef<object>;
     readonly failedModelKey: string;
-    readonly failureCategory: "allowance_exhausted" | "billing_denied";
+    readonly failureCategory: AutoRecoveryCategory;
     readonly assistantEntryId: string;
     readonly approvedAssistantEntryIds: readonly string[];
     readonly requestedTier: string;
@@ -1898,7 +1901,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     event: TurnEndEvent,
     boundary: { entryId: string; message: object },
     failedModelKey: string,
-    failureCategory: NonNullable<ReturnType<typeof normalizeFailureObservation>>["category"],
+    failureCategory: AutoRecoveryCategory,
   ): string {
     const content = (event.message as { content?: unknown }).content;
     if ((Array.isArray(content) && content.length > 0)
@@ -1906,8 +1909,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       return "Automatic retry stopped because this turn produced output or used tools.";
     }
     if (hasActiveAllowanceRetryAttempt(ctx, boundary, failedModelKey)) {
-      const failureLabel = failureCategory === "billing_denied" ? "a billing denial"
-        : failureCategory === "allowance_exhausted" ? "a usage limit" : "another failure";
+      const failureLabel = recoveryDescription(failureCategory).noun;
       return `The alternate also returned ${failureLabel}. Automatic retry limit reached.`;
     }
     return "Automatic retry stopped because this turn had other activity.";
@@ -1993,18 +1995,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const assistantMessage = pending.assistantMessage.deref();
     if (!boundaryMessage || !assistantMessage) return undefined;
     const boundary = { entryId: pending.entryId, message: boundaryMessage };
-    const { failedModelKey, requestedTier, observation, receipt } = pending;
+    const { failedModelKey, requestedTier, observation, receipt, failureCategory } = pending;
     const reliability = state.config.reliability;
-    if (!isBudgetLimitFailure(observation) || observation?.source !== "runtime") return undefined;
-    if (observation.category !== "allowance_exhausted" && observation.category !== "billing_denied") return undefined;
-    const failureCategory = observation.category;
+    const budgetHint = failureCategory === "request_budget_exceeded"
+      && requestBudgetRejectionHint((assistantMessage as { errorMessage?: unknown }).errorMessage, failedModelKey);
+    if (autoRecoveryCategory(observation, budgetHint) !== failureCategory) return undefined;
+    if (budgetHint && event.outcome !== "error") return undefined;
     const approvedAssistantEntryIds = isSideEffectFreeAllowanceFailure(ctx, assistantMessage, pending.assistantEntryId, boundary, failedModelKey);
-    if (reliability?.retryOnAllowanceExhausted !== true) {
+    if (!autoRecoveryOptedIn(reliability, failureCategory)) {
       setAllowanceRetryStopReason(ctx, "Automatic retry is off.");
       return undefined;
     }
-    if (reliability?.enabled === false || reliability?.cooldownOnAllowanceExhausted === false) {
-      setAllowanceRetryStopReason(ctx, "Automatic retry requires reliability and allowance cooldowns to be enabled.");
+    if (!autoRecoveryEnabled(reliability, failureCategory)) {
+      setAllowanceRetryStopReason(ctx, failureCategory === "request_budget_exceeded"
+        ? "Automatic retry requires reliability to be enabled."
+        : "Automatic retry requires reliability and allowance cooldowns to be enabled.");
       return undefined;
     }
     if (!approvedAssistantEntryIds) {
@@ -2021,7 +2026,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     const previousAttempt = allowanceRetryAttemptBySession.get(ctx.sessionManager);
     if (previousAttempt?.entryId === boundary.entryId && previousAttempt.userMessage.deref() === boundary.message) {
-      const failureLabel = failureCategory === "billing_denied" ? "a billing denial" : "a usage limit";
+      const failureLabel = recoveryDescription(failureCategory).noun;
       setAllowanceRetryStopReason(ctx, `The alternate also returned ${failureLabel}. Automatic retry limit reached.`);
       return undefined;
     }
@@ -2079,9 +2084,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const saved = state.reliabilityStore.recordFailure(
         failedModelKey,
         "agent_settled",
-        observation.category === "billing_denied" ? "billing_denied" : "allowance_exhausted",
+        failureCategory,
         undefined,
-        state.config.reliability?.allowanceCooldownScope === "model" ? observation : undefined,
+        isBudgetLimitFailure(observation) && state.config.reliability?.allowanceCooldownScope === "model" ? observation : undefined,
       );
       if (!saved) {
         setAllowanceRetryStopReason(ctx, "Its cooldown could not be confirmed as saved, so no retry was sent.");
@@ -2099,7 +2104,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // or abort that happened while it settled must win over the prepared retry.
     if (ctx.signal?.aborted || ctx.hasPendingMessages?.() || event.context.pendingMessages.length > 0
       || !autoBoundaryStillActive(ctx, ownerBoundary)
-      || state.config.reliability?.retryOnAllowanceExhausted !== true
+      || !autoRecoveryEnabled(state.config.reliability, failureCategory)
       || !isSideEffectFreeAllowanceFailure(ctx, assistantMessage, pending.assistantEntryId, boundary,
         failedModelKey, [], [], approvedAssistantEntryIds)) {
       setAllowanceRetryStopReason(ctx, "The turn changed while saving its cooldown; no request was sent.");
@@ -2107,10 +2112,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
 
     const randomValue = Math.random();
-    const alternative = resolveAllowanceAlternative(ctx, requestedTier, failedModelKey, randomValue, explicitTier);
+    const alternative = resolveAllowanceAlternative(ctx, requestedTier, failedModelKey, randomValue, explicitTier, undefined, failureCategory);
     if (!alternative) {
-      const failureLabel = failureCategory === "billing_denied" ? "billing was denied for" : "usage limit reached for";
-      log(ctx, `Bifrost: ${failureLabel} ${failedModelKey}. No eligible configured alternative is available for ${requestedTier}; no retry was sent.`, "warning");
+      const failureLabel = recoveryDescription(failureCategory).label;
+      log(ctx, `Bifrost: ${failureLabel} for ${failedModelKey}. No eligible configured alternative is available for ${requestedTier}; no retry was sent.`, "warning");
       debugLifecycle("reliability", "allowance_retry_unavailable", ctx.sessionManager, boundary.message, {
         model: failedModelKey,
         tier: requestedTier,
@@ -2737,6 +2742,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     bypassV2Snapshot = false,
     random?: () => number,
     preparedSignIn?: ReadonlySet<string>,
+    excludedRequestModel?: string,
   ): ConfiguredTierResolution<Model<Api>> {
     let reliabilityState = reliabilityV2Enabled() && !bypassV2Snapshot
       ? projectReliabilityV2ForRouting(
@@ -2783,6 +2789,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       random,
       affinityContext,
       signInExclusionFor(ctx, preparedSignIn),
+      excludedRequestModel,
     );
   }
 
@@ -2793,9 +2800,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     randomValue: number,
     explicitTier = false,
     preparedSignIn?: ReadonlySet<string>,
+    failureCategory?: AutoRecoveryCategory,
   ): { model: Model<Api>; selectedTier: string; attempt: ReturnType<typeof resolveForTier> } | undefined {
     const random = () => randomValue;
-    const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random, preparedSignIn);
+    const excludedRequestModel = failureCategory === "request_budget_exceeded" ? failedModelKey : undefined;
+    const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random, preparedSignIn, excludedRequestModel);
     const first = firstAttempt.resolution;
     if (first.selected && modelKey(first.selected) !== failedModelKey
       && (!explicitTier || first.selectedTier === requestedTier)) {
@@ -2807,7 +2816,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const orderedTiers = [state.config.default, ...Object.keys(state.config.models ?? {})]
       .filter((tier, index, tiers): tier is string => typeof tier === "string" && tier !== requestedTier && tiers.indexOf(tier) === index);
     for (const tier of orderedTiers) {
-      const attempt = resolveForTier(ctx, tier, undefined, false, random, preparedSignIn);
+      const attempt = resolveForTier(ctx, tier, undefined, false, random, preparedSignIn, excludedRequestModel);
       const result = attempt.resolution;
       if (!result.selected || modelKey(result.selected) === failedModelKey) continue;
       return { model: result.selected, selectedTier: result.selectedTier ?? tier, attempt };
@@ -2856,7 +2865,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       && token.configGeneration === boundary.configGeneration
       && now < token.expiresAt
       && state.enabled && !state.pinned
-      && state.config.reliability?.retryOnAllowanceExhausted === true
+      && autoRecoveryEnabled(state.config.reliability, token.failureCategory)
       && allowanceRetryBoundaryStillSafe(ctx, token, boundary.message);
     if (!valid) {
       clearAllowanceRetry(ctx.sessionManager, now >= token.expiresAt ? "expired" : "ownership_changed");
@@ -2867,8 +2876,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function allowanceRetryBoundaryStillSafe(ctx: ExtensionContext, token: AllowanceRetryToken, message: IdentityObject): boolean {
     if (ctx.signal?.aborted || ctx.hasPendingMessages?.() || !state.enabled || state.pinned
-      || state.config.reliability?.enabled === false || state.config.reliability?.cooldownOnAllowanceExhausted === false
-      || state.config.reliability?.retryOnAllowanceExhausted !== true
+      || !autoRecoveryEnabled(state.config.reliability, token.failureCategory)
       || !autoBoundaryStillActive(ctx, { ...token, message })) return false;
     const assistant = ctx.sessionManager.getBranch().find((entry) => entry.type === "message" && entry.id === token.assistantEntryId);
     return !!assistant && assistant.type === "message"
@@ -3235,7 +3243,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             ...(activeRouteOrigin === "automatic" && affinityStore ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}),
           };
           let recoveryResolution = activeRecoveryToken
-            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier, turnSignInExclusions)
+            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier, turnSignInExclusions, activeRecoveryToken.failureCategory)
             : undefined;
           if (activeRecoveryToken && !recoveryResolution) {
             terminalRouteCategory = "allowance_retry_candidate_unavailable";
@@ -3373,7 +3381,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             throw new Error("Bifrost classifier settings changed during routing; no model was dispatched. Resubmit after repair.");
           }
           saveClassifierDecision(prompt, classification);
-          log(ctx, `Bifrost auto: ${activeRouteTier ?? classification.tier} → ${modelKey(model)} (${activeRecoveryToken ? "allowance recovery" : classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
+          log(ctx, `Bifrost auto: ${activeRouteTier ?? classification.tier} → ${modelKey(model)} (${activeRecoveryToken ? recoveryDescription(activeRecoveryToken.failureCategory).route : classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
           return model;
         },
         onDispatch: (model, thinkingLevel, intent) => {
@@ -3395,7 +3403,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             debug("virtual", "dispatch", { model: key, thinkingLevel, reliabilityStateVersion: 2 });
             const retry = allowanceRetryAttemptBySession.get(ctx.sessionManager);
             if (activeRouteOrigin === "recovery" && retry) {
-              const failureLabel = retry.failureCategory === "billing_denied" ? "billing was denied" : "usage limit reached";
+              const failureLabel = recoveryDescription(retry.failureCategory).label;
               log(ctx, `Bifrost: ${failureLabel} for ${retry.failedModelKey}; retrying once with ${key} (${activeRouteTier ?? retry.selectedTier}).`, "warning");
             }
             return;
@@ -3403,7 +3411,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           ownership.claim(key, intent, (trial) => debug("virtual", "trial", { model: key, allowed: trial.allowed, claimed: trial.claimed }));
           const retry = allowanceRetryAttemptBySession.get(ctx.sessionManager);
           if (activeRouteOrigin === "recovery" && retry) {
-            const failureLabel = retry.failureCategory === "billing_denied" ? "billing was denied" : "usage limit reached";
+            const failureLabel = recoveryDescription(retry.failureCategory).label;
             log(ctx, `Bifrost: ${failureLabel} for ${retry.failedModelKey}; retrying once with ${key} (${activeRouteTier ?? retry.selectedTier}).`, "warning");
           }
           debug("virtual", "dispatch", { model: key, thinkingLevel });
@@ -3789,13 +3797,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("turn_end", async (event, ctx) => {
     pendingInferredRateBySession.delete(ctx.sessionManager);
-    const allowanceRetryEnabled = state.config.reliability?.enabled !== false
-      && state.config.reliability?.cooldownOnAllowanceExhausted !== false
-      && state.config.reliability?.retryOnAllowanceExhausted === true;
-    if ((!reliabilityV2Enabled() && !affinityStore && !allowanceRetryEnabled && !providerCooldownsEnabled()) || event.message.role !== "assistant") return;
+    const allowanceRetryEnabled = autoRecoveryEnabled(state.config.reliability, "allowance_exhausted");
+    const requestBudgetRetryEnabled = autoRecoveryEnabled(state.config.reliability, "request_budget_exceeded");
+    if ((!reliabilityV2Enabled() && !affinityStore && !allowanceRetryEnabled && !requestBudgetRetryEnabled && !providerCooldownsEnabled()) || event.message.role !== "assistant") return;
     const boundary = turnUserBoundary(ctx, event);
     if (!boundary) return;
-    if (providerCooldownsEnabled() && event.message.stopReason === "error"
+    const budgetHint = requestBudgetRetryEnabled && isBifrostAuto(ctx.model) && state.enabled && !state.pinned
+      && event.message.stopReason === "error"
+      && requestBudgetRejectionHint(event.message.errorMessage, `${event.message.provider}/${event.message.model}`);
+    if (providerCooldownsEnabled() && !budgetHint && event.message.stopReason === "error"
       && typeof event.message.provider === "string" && typeof event.message.model === "string"
       && typeof event.message.errorMessage === "string" && hasExplicit429StatusText(event.message.errorMessage)) {
       const observation = normalizeFailureObservation({ outcomeId: randomUUID(),
@@ -3821,7 +3831,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       }
       const provider = event.message.provider;
       const model = event.message.model;
-      if ((allowanceRetryEnabled || providerCooldownsEnabled()) && event.message.stopReason === "error"
+      if ((allowanceRetryEnabled || requestBudgetRetryEnabled || providerCooldownsEnabled()) && event.message.stopReason === "error"
         && typeof provider === "string" && typeof model === "string") {
         const failedModelKey = `${provider}/${model}`;
         const observation = normalizeFailureObservation({
@@ -3829,13 +3839,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           ...(typeof (event.message as typeof event.message & { errorMessage?: unknown }).errorMessage === "string"
             ? { errorText: (event.message as typeof event.message & { errorMessage: string }).errorMessage } : {}),
         });
+        const failureCategory = autoRecoveryCategory(observation, budgetHint);
         try { await finishProviderDispatch(ctx, failedModelKey, observation, false); }
         catch {
           setAllowanceRetryStopReason(ctx, "Provider cooldown could not be saved; no automatic retry was sent.");
-          if (allowanceRetryEnabled && isBudgetLimitFailure(observation)) return;
+          if (failureCategory && autoRecoveryEnabled(state.config.reliability, failureCategory)) return;
         }
         const routeProof = uniqueV1RouteProof(ctx, boundary, failedModelKey);
-        if (routeProof && observation && isBudgetLimitFailure(observation)) {
+        if (routeProof && observation && failureCategory) {
           const safeFailure = isSideEffectFreeAllowanceFailure(ctx, event.message, event.messageEntryId, boundary,
             failedModelKey, event.toolResults, event.toolResultEntryIds);
           if (safeFailure) pendingAllowanceFailureBySession.set(ctx.sessionManager, {
@@ -3852,9 +3863,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             selectedTier: routeProof.selectedTier,
             explicitTier: routeProof.explicitTier,
             observation,
+            failureCategory,
           });
           else {
-            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey, observation.category));
+            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey, failureCategory));
           }
         }
       }
@@ -3878,7 +3890,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       receipt.outcome = "failure";
       receipt.assistantEntryId = undefined;
       receipt.successObservedAt = undefined;
-      if (receipt.observationsEnabled || state.config.reliability?.cooldownOnAllowanceExhausted !== false || providerCooldownsEnabled()) {
+      if (receipt.observationsEnabled || state.config.reliability?.cooldownOnAllowanceExhausted !== false || providerCooldownsEnabled() || requestBudgetRetryEnabled) {
         const errorText = (event.message as typeof event.message & { errorMessage?: unknown }).errorMessage;
         const observation = normalizeFailureObservation({
           outcomeId: receipt.outcomeId,
@@ -3934,7 +3946,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       await renewV2Receipt(ctx, receipt);
     }
-    if (allowanceRetryEnabled && event.message.stopReason === "error" && receipt.failureObservation && isBudgetLimitFailure(receipt.failureObservation)
+    const failureCategory = autoRecoveryCategory(providerObservation, budgetHint);
+    if (event.message.stopReason === "error" && providerObservation && failureCategory
+      && autoRecoveryEnabled(state.config.reliability, failureCategory)
       && (receipt.retryEligible || hasActiveAllowanceRetryAttempt(ctx, boundary, receipt.modelKey))) {
       const safeFailure = receipt.retryEligible && isSideEffectFreeAllowanceFailure(ctx, event.message, event.messageEntryId, boundary,
         receipt.modelKey, event.toolResults, event.toolResultEntryIds);
@@ -3951,11 +3965,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         requestedTier: receipt.requestedTier,
         selectedTier: receipt.tier,
         explicitTier: receipt.explicitTier,
-        observation: receipt.failureObservation,
+        observation: providerObservation,
+        failureCategory,
         receipt,
       });
       else {
-        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey, receipt.failureObservation.category));
+        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey, failureCategory));
       }
     }
   });
@@ -3981,6 +3996,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pendingAllowanceFailureBySession.delete(ctx.sessionManager);
     const retry = await retryAllowanceFailure(ctx, pending, event);
     if (retry) return retry;
+    if (pending.failureCategory === "request_budget_exceeded") {
+      const reason = takeAllowanceRetryStopReason(ctx);
+      if (reason) log(ctx, `Bifrost: ${reason}`, "warning");
+    }
     return;
   });
 

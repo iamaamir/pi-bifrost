@@ -833,7 +833,11 @@ export function validateConfig(
       && typeof reliabilityRecord.retryOnAllowanceExhausted !== "boolean") {
       reliabilityProblem("config.reliability_allowance_retry_invalid", "reliability.retryOnAllowanceExhausted", "reliability.retryOnAllowanceExhausted must be a boolean.");
     }
-    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted"]);
+    if (reliabilityRecord.retryOnRequestBudgetExceeded !== undefined
+      && typeof reliabilityRecord.retryOnRequestBudgetExceeded !== "boolean") {
+      reliabilityProblem("config.reliability_request_budget_retry_invalid", "reliability.retryOnRequestBudgetExceeded", "reliability.retryOnRequestBudgetExceeded must be a boolean.");
+    }
+    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted", "retryOnRequestBudgetExceeded"]);
     if (Object.keys(reliabilityRecord).some((key) => !known.has(key))) {
       issues.push({ severity: "error", code: "config.reliability_unknown_field", path: "reliability", message: "reliability contains an unsupported field." });
     }

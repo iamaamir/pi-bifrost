@@ -271,6 +271,7 @@ const routerSnapshotSchema: DataSchema = {
       cooldownOnAllowanceExhausted: scalar,
       allowanceCooldownScope: scalar,
       retryOnAllowanceExhausted: scalar,
+      retryOnRequestBudgetExceeded: scalar,
     },
     affinity: { mode: scalar, providerAdvisory: scalar },
     routingScope: {

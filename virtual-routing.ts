@@ -12,6 +12,7 @@ const REASON_LABELS: Record<RouteReasonCode, string> = {
   trial_active: "trial in progress",
   provider_not_allowed: "provider not allowed",
   sign_in_unavailable: "provider sign-in unavailable",
+  request_rejected: "rejected this request",
   requested_tier_unhealthy: "tier unhealthy",
   requested_tier_unavailable: "tier unavailable",
   requested_tier_excluded: "reserve policy exclusion",

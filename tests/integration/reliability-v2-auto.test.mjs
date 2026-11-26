@@ -729,6 +729,83 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
       }
     });
 
+
+    for (const scenario of [
+      { name: "cross-provider", failed: "tpm-request-too-large", backup: "fake-backup", success: true },
+      { name: "same-provider", failed: "tpm-request-too-large", backup: "fake", success: true },
+      { name: "ordinary-429", failed: "rate-limit-429", backup: "fake-backup", success: false },
+    ]) {
+      it(`authorizes only qualified request-budget recovery (${scenario.name}) in ${mode} Auto`, async () => {
+        const home = mkdtempSync(join(tmpdir(), `bifrost-budget-${mode}-home-`));
+        const work = mkdtempSync(join(tmpdir(), `bifrost-budget-${mode}-work-`));
+        try {
+          const bifrost = {
+            ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+            enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+            models: { quick: [`fake/${scenario.failed}`, `${scenario.backup}/healthy`] },
+            reliability: {
+              enabled: true, failureThreshold: 3, retryOnAllowanceExhausted: false,
+              retryOnRequestBudgetExceeded: true, allowanceCooldownScope: "provider",
+              ...(mode === "v2" ? { stateVersion: 2 } : {}),
+            },
+            debug: { enabled: true, path: ".pi/bifrost-debug.jsonl" },
+          };
+          writeFixture({
+            home, work, port: server.port,
+            models: [{ id: scenario.failed, reasoning: false }, { provider: scenario.backup, id: "healthy", reasoning: false }],
+            bifrost, retry: { enabled: false, provider: { maxRetries: 0 } },
+          });
+          const before = await fakeStats(server.port);
+          const observer = writeOutcomeObserver(work);
+          const result = await runPi({
+            home, work, extraExtensions: [observer.extension],
+            messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"],
+          });
+          const after = await fakeStats(server.port);
+          assert.equal(result.timedOut, false, result.stderr);
+          assert.equal(result.code === 0, scenario.success, result.stderr);
+          assert.deepEqual(
+            after.stats.slice(before.stats.length).filter((entry) => entry.kind === "generation")
+              .map(({ provider, model }) => ({ provider, model })),
+            [{ provider: "fake", model: scenario.failed }, ...(scenario.success ? [{ provider: scenario.backup, model: "healthy" }] : [])],
+          );
+          const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+          assert.equal(outcome.userCount, 1);
+          const failed = outcome.assistants.find((entry) => entry.model === scenario.failed);
+          assert.equal(failed.stopReason, "error");
+          assert.equal(failed.contentLength, 0);
+          if (scenario.success) {
+            assert.match(result.stderr, /request budget exceeded for fake\/tpm-request-too-large; retrying once with/);
+            assert.match(result.stderr, /request-budget recovery/);
+            assert.ok(outcome.contextEdits.some((entry) => entry.targetId === failed.id && entry.isNull));
+            assert.equal(outcome.assistants.filter((entry) => entry.model === "healthy" && entry.stopReason === "stop").length, 1);
+            const trace = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8");
+            assert.match(trace, /"code":"request_rejected","source":"request_failure"/);
+            assert.doesNotMatch(trace, /Requested 74499|respond with one word/);
+            const providerPath = join(work, ".pi", "bifrost-provider-reliability.json");
+            if (existsSync(providerPath)) {
+              const providerState = JSON.parse(readFileSync(providerPath, "utf8"));
+              assert.ok(Object.entries(providerState.scopes).every(([key, scope]) => !key.includes("bifrost-provider-rate/fake") && !key.includes("bifrost-provider-usage/fake") || scope.openUntil === undefined));
+            }
+            if (mode === "v2") {
+              const state = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability-v2.json"), "utf8"));
+              const receipts = Object.values(state.dispatches);
+              assert.equal(receipts.length, 2);
+              assert.deepEqual(receipts.map((receipt) => receipt.settledKind).sort(), ["failure", "success"]);
+              assert.ok(Object.values(state.scopes).every((scope) => scope.lease === undefined));
+            }
+          } else {
+            assert.doesNotMatch(result.stderr, /retrying once with/);
+            assert.equal(outcome.assistants.length, 1);
+          }
+          assertNoBlockedNetwork(home);
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+          rmSync(work, { recursive: true, force: true });
+        }
+      });
+    }
+
     it(`retries one zero-effect allowance failure with a configured alternate in ${mode} Auto`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-home-`));
       const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-work-`));
