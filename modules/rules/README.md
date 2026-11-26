@@ -30,7 +30,9 @@ a later match that appears earlier in the text.
 
 `classifyCompiled(text, compiled)` is a pure loop over already-compiled rules: it constructs no
 `RegExp`, reads no environment, verifies nothing and spawns nothing. `classify(text, rules)` is
-deprecated and exists as the parity reference; production uses compilation.
+deprecated and exists as the parity reference; production uses compilation. `classify` constructs
+a `RegExp` and verifies each rule on every call, so an uncached verdict can spawn one bounded
+child process. Consumers that must not spawn use `classifyCompiled`.
 
 ## Safety checks are heuristic
 
@@ -44,12 +46,12 @@ Two independent checks decide whether a pattern may run. Neither is a proof of s
    10 ms budget per match, twice per canary, batches of 32, a timeout of
    `500 + 20 × patterns` ms, `SIGKILL`, and a bounded output buffer.
 
-A pattern is rejected when either check rejects it, and a probe that cannot complete (timeout,
-missing binary, short stream, malformed stream) rejects the unverified remainder of that batch
-instead of assuming it is safe. Decoded verdicts are honored first: a verdict line `0` accepts
-and `1` rejects in batch order; the first line that is neither ends decoding for that batch,
-the un-decoded remainder is rejected, and later batches still run. A timeout rejects the first
-still-pending pattern and continues.
+A pattern is rejected when either check rejects it. Decoded verdicts are honored first: a line
+`0` accepts and `1` rejects in batch order; the first line that is neither stops decoding for
+that batch, the un-decoded remainder is rejected, and verdicts beyond the batch size are ignored.
+A short, malformed or otherwise incomplete stream rejects the un-decoded remainder of its batch.
+A timeout is the narrow exception: it rejects only the first still-pending pattern and then
+continues. Later batches still run in every case.
 
 Accepted does not mean "safe in general". It means these two heuristics found no problem on the
 canaries they used. Documentation and comments must say "heuristic" and "fail closed for
@@ -57,10 +59,13 @@ unverifiable patterns", never "safe".
 
 ## Effects and state
 
-`compileRules` may read `BIFROST_PROBE_NODE` and forward the ambient environment to one bounded
-child process per batch, using the hosting Node binary by default (`process.execPath`) so the
-verdict does not depend on `PATH`. `NODE_OPTIONS` is cleared for the child. It writes nothing to
-disk and opens no network connection. `classifyCompiled` and `classify` spawn nothing.
+`compileRules` (and `classify` for a pattern without a cached verdict) may read
+`BIFROST_PROBE_NODE` and forward the ambient environment to one bounded child process per batch,
+with `NODE_OPTIONS` cleared for the child. On a Node host the probe uses `process.execPath` so its
+verdict cannot be chosen through `PATH`. On Bun or Deno it resolves `node` through `PATH` and,
+if no Node binary exists, falls back to the hosting runtime; `BIFROST_PROBE_NODE` overrides the
+choice on every host. The probe writes nothing to disk and opens no network connection.
+`classifyCompiled` spawns nothing.
 
 Verdicts are cached in memory by pattern text for the life of the process, so a rejection is
 reported once and later compilations of the same patterns are spawn-free. The cache is
@@ -82,7 +87,8 @@ node --test --experimental-strip-types modules/rules/tests/safety.test.ts
 ```
 
 Module tests bind the mutation targets directly; the isolation cases run compile-and-match in a
-bounded child so a mutant cannot hang the runner.
+bounded child that imports the module under test by URL, so a mutant executes the real code and
+cannot hang the runner.
 
 ## Extending or replacing
 
