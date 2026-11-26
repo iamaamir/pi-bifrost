@@ -13,7 +13,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { initClassifierSummary, initSaveSummary } from "./ui/init-save-summary.ts";
+import { initClassifierSummary, initSavePreviewLines, initSaveSummary } from "./ui/init-save-summary.ts";
 import {
   constants,
   closeSync,
@@ -2484,33 +2484,15 @@ async function handleInitInner(
       nextOwnershipBytes: ownershipBytes,
     };
   }
-  const { modelTiers, fieldsAdded, fieldsChanged, unverifiedSavedCount } = initSaveSummary(
-    source.configBytes, transaction.nextConfigBytes, probeVerified,
-  );
-  uiOutput(
-    ctx,
-    [
-      "Bifrost · ready to save",
-      `Save to      ${initSourceLabel(source)}`,
-      `Models       ${workingModels.length} working model${workingModels.length === 1 ? "" : "s"} found${ranProbe ? "" : ` · cached ${probeAge} ago`}`,
-      modelTiers,
-      receiptOnly ? "Setup        model-management information will be saved" : "",
-      fieldsAdded.length ? `Fields added   ${fieldsAdded.join(", ")}` : "",
-      fieldsChanged.length ? `Fields changed   ${fieldsChanged.join(", ")}` : "",
-
-      `Classifier  ${effectiveClassifierSummary}`,
-      ...configLayerPaths(process.cwd(), state.extensionDir)
-        .filter(([layer]) => inheritedSourceLayers.includes(layer))
-        .map(([layer, path], index) => `${index === 0 ? "Also uses" : "         "}    ${layer} (${displayPath(path)})`),
-      uncategorized.length ? `Uncategorized  ${uncategorized.length}` : "",
-
-      uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
-      unverifiedSavedCount
-        ? `${unverifiedSavedCount} saved model tier entries were not verified by this check; handwritten entries are preserved.`
-        : "",
-    ].filter(Boolean),
-    true,
-  );
+  const summary = initSaveSummary(source.configBytes, transaction.nextConfigBytes, probeVerified);
+  const inheritedLines = configLayerPaths(process.cwd(), state.extensionDir)
+    .filter(([layer]) => inheritedSourceLayers.includes(layer))
+    .map(([layer, path], index) => `${index === 0 ? "Also uses" : "         "}    ${layer} (${displayPath(path)})`);
+  uiOutput(ctx, initSavePreviewLines({
+    sourceLabel: initSourceLabel(source), workingCount: workingModels.length, ranProbe, probeAge,
+    summary, receiptOnly, classifier: effectiveClassifierSummary, inheritedLines,
+    uncategorizedCount: uncategorized.length,
+  }), true);
 
   if (uncategorized.length > 0) {
     initLog(
