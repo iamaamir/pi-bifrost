@@ -1,7 +1,68 @@
-# Rules
+# Route rules
 
-The route-rule engine: compile configured regex rules once, apply heuristic safety checks, and match
-prompts against the compiled set.
+Bifrost's route rules map prompt text to a configured tier or a direct model reference using
+user-defined regular expressions. This module implements the `rules` field in `bifrost.json`
+and the rule lists loaded from `bifrost-routes.json`. It compiles and checks those patterns,
+then matches prompts against the accepted rules.
+
+## Example: route prompts by intent
+
+The following illustrative configuration fragment assumes the `quick`, `general` and
+`frontier` tiers are already configured in `models`:
+
+```json
+{
+  "rules": [
+    { "pattern": "\\breview\\b", "model": "frontier" },
+    { "pattern": "\\bwrite tests\\b", "model": "general" },
+    { "pattern": "\\bformat\\b", "model": "quick" }
+  ]
+}
+```
+
+| Prompt | Rule result |
+| --- | --- |
+| Review this pull request | `frontier` |
+| Write tests for this function | `general` |
+| Format this file | `quick` |
+| Format this file and review the changes | `frontier` (first matching rule in list order) |
+| Explain this function | No regex match |
+
+These are rule-engine outcomes, not guaranteed final routing decisions. Matching is
+case-insensitive. The `model` field can also name a direct `provider/model-id` reference
+instead of a tier.
+
+## Where rules participate in routing
+
+[`config-load.ts`](../../config-load.ts) loads the effective rule list from the route-file
+override or the configuration. [`classification-pipeline.ts`](../../classification-pipeline.ts)
+compiles that list when it constructs a pipeline and reuses it for matching.
+The standalone router uses the rules in its supplied configuration snapshot.
+
+```mermaid
+flowchart TD
+    A[Effective configured rule list] --> B[Compile and verify rules]
+    B --> C[Compiled rules held by classification pipeline]
+    P[Prompt in automatic routing] --> D[First matching rule]
+    C --> D
+    D -->|Direct model reference| E[Direct model pre-check]
+    D -->|Tier or no match| F[Cache and optional classifier]
+    F -->|No classification| G[Regex tier or direct-model result]
+    F -->|Classified| H[Routing resolver]
+    E --> H
+    G -->|Match| H
+    G -->|No match| I[Existing default or unclassified path]
+    I --> H
+```
+
+The diagram summarizes the classification path with configured tiers; explicit overrides
+and other host controls are outside this module. Direct model references can take precedence
+at the initial regex pre-check, while tier rules normally serve as a fallback after the cache
+and optional classifier. The first matching rule is authoritative within each regex check;
+it does not override every other routing decision.
+
+The routing resolver remains responsible for candidate eligibility, tier strategies and
+fallback. A rule supplies a routing target, not permission to dispatch a model request.
 
 ## Ownership
 
