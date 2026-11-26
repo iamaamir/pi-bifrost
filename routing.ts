@@ -680,20 +680,9 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
   const requestedExcluded = reserveExcluded(primary);
   const requestedUnreliable = unreliableSkipped(primary);
   const requestedScopeRejected = scopeRejected(primary);
-  let fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
+  const fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
     ? "requested_tier_unavailable"
-    // A pool emptied only by sign-in has no reliability evidence behind it.
-    // This path has no explicit policy, but the wording must stay the same as
-    // the explicit-boundary path: reliability state holds nothing about it.
-    : signInOnlySkipped(primary) && !requestedExcluded
-      ? "sign_in_unavailable"
-      : requestedUnreliable > 0
-        ? "requested_tier_unhealthy"
-        : requestedScopeRejected
-          ? "requested_tier_provider_excluded"
-          : requestedExcluded
-            ? "requested_tier_excluded"
-            : tierExclusionReason(primary, requestedExcluded);
+    : tierExclusionReason(primary, requestedExcluded);
 
   // Compute final reason after evaluating fallback
   const resolveFinalReason = (fb: HealthyModelResolution<M>): RoutedModelResolution<M>["fallbackReason"] => {
@@ -753,6 +742,34 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
   };
 }
 
+/** Summarize the attempted pools without changing their selection or order. */
+function explicitBoundaryReason<M extends RoutingModelBase>(
+  requestedTier: string,
+  attempted: readonly RoutedTierAttempt<M>[],
+  selected: RoutedTierAttempt<M> | undefined,
+): RoutedModelResolution["fallbackReason"] {
+  const pools = attempted.map(attempt => attempt.resolution);
+  const primary = pools[0];
+  const reserveExcluded = (pool: HealthyModelResolution<M>): boolean =>
+    pool.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true;
+  const primaryReason = tierExclusionReason(primary, reserveExcluded(primary));
+
+  if (selected) {
+    if (selected.tier === requestedTier) return undefined;
+    return primary.candidates.length === 0 ? "requested_tier_unavailable" : primaryReason;
+  }
+  if (pools.length === 1 && primary.skipped.length > 0) return primaryReason ?? "requested_tier_unhealthy";
+  if (pools.every(pool => pool.candidates.length === 0 && pool.skipped.length === 0)) return "requested_tier_unavailable";
+
+  const anyReserveExcluded = pools.some(reserveExcluded);
+  if (signInOnlySkipped(...pools) && !anyReserveExcluded) return "sign_in_unavailable";
+  if (pools.some(pool => unreliableSkipped(pool) > 0)) return "all_tiers_exhausted";
+  if (pools.some(scopeRejected)) return "requested_tier_provider_excluded";
+  if (anyReserveExcluded) return "requested_tier_excluded";
+  if (pools.some(requestAttempted)) return "request_candidates_exhausted";
+  return undefined;
+}
+
 function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   ctx: RoutingHostContext<M>,
   options: TierResolutionOptions,
@@ -782,36 +799,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   }
   const selectedAttempt = attemptedTiers.find(({ resolution }) => resolution.selected);
   const primary = attemptedTiers[0].resolution;
-  const primaryReserveExcluded = primary.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true;
-  const anyReserveExcluded = attemptedTiers.some(({ resolution }) =>
-    resolution.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true);
-  const allPoolsUnavailable = attemptedTiers.every(({ resolution }) => resolution.candidates.length === 0 && resolution.skipped.length === 0);
-  const anyUnreliable = attemptedTiers.some(({ resolution }) => unreliableSkipped(resolution) > 0);
-  const anyScopeRejected = attemptedTiers.some(({ resolution }) => scopeRejected(resolution));
-  // Every attempted tier was emptied only by sign-in, so the boundary failed
-  // for lack of credentials rather than for an unavailable or unreliable tier.
-  const signInOnly = signInOnlySkipped(...attemptedTiers.map(({ resolution }) => resolution)) && !anyReserveExcluded;
-  const primaryExclusion = tierExclusionReason(primary, primaryReserveExcluded);
-  const fallbackReason: RoutedModelResolution["fallbackReason"] = selectedAttempt
-      ? selectedAttempt.tier === options.requestedTier
-        ? undefined
-        : primary.candidates.length === 0
-          ? "requested_tier_unavailable"
-          : primaryExclusion
-    : attemptedTiers.length === 1 && primary.skipped.length > 0
-      ? primaryExclusion ?? "requested_tier_unhealthy"
-    : allPoolsUnavailable
-      ? "requested_tier_unavailable"
-      : signInOnly
-        ? "sign_in_unavailable"
-      : anyUnreliable
-        ? "all_tiers_exhausted"
-        : anyScopeRejected
-          ? "requested_tier_provider_excluded"
-          : anyReserveExcluded
-            ? "requested_tier_excluded"
-            : attemptedTiers.some(({ resolution }) => requestAttempted(resolution))
-              ? "request_candidates_exhausted" : undefined;
+  const fallbackReason = explicitBoundaryReason(options.requestedTier, attemptedTiers, selectedAttempt);
   return {
     requestedTier: options.requestedTier,
     selectedTier: selectedAttempt?.tier,

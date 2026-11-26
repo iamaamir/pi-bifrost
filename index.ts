@@ -2877,6 +2877,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return token;
   }
 
+  function matchesPreparedAllowanceBoundary(
+    tokens: readonly (AllowanceRetryToken | undefined)[],
+    boundary: AutoUserBoundary,
+  ): boolean {
+    return tokens.some(token => token?.entryId === boundary.entryId && token.userMessage.deref() === boundary.message);
+  }
+
   function allowanceRetryBoundaryStillSafe(ctx: ExtensionContext, token: AllowanceRetryToken, message: IdentityObject): boolean {
     if (ctx.signal?.aborted || ctx.hasPendingMessages?.() || !state.enabled || state.pinned
       || state.config.reliability?.enabled === false || state.config.reliability?.cooldownOnAllowanceExhausted === false
@@ -3043,14 +3050,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classifierDispatchGeneration: number | undefined;
       let classifierDispatchSession: ClassifierSessionRuntime | undefined;
       let classifierDispatchGuardEnabled = false;
-      try {
-      if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
-      // Cached: the first Auto request in a session pays for one resolution per
-      // configured provider, later requests reuse it for the TTL. Only a new
-      // user turn selects a model; continuations, retries, and direct requests
-      // dispatch the sticky or fallback model, so those waits would buy nothing.
-      if (requestReason === "user" && state.enabled && !state.pinned) turnSignInExclusions = await prepareSignInEligibility(ctx);
-      if (v2Active) {
+      function assertV2RouteAvailable(): void {
         if (!state.reliabilityV2ConfigValid) {
           rejectionCategory = "reliability_config_invalid";
           throw new Error("Bifrost reliability v2 config is invalid; fix it and run /bifrost reload.");
@@ -3072,6 +3072,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           rejectionCategory = "direct_unsupported";
           throw new Error("Bifrost reliability v2 does not support direct utility requests; select Auto for a user turn or use reliability stateVersion 1.");
         }
+      }
+
+      async function prepareV2RouteBoundary(): Promise<void> {
+        assertV2RouteAvailable();
         autoBoundary = findAutoUserBoundary(ctx, request);
         if (!autoBoundary) {
           rejectionCategory = "boundary_unproven";
@@ -3114,6 +3118,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (request.reason !== "retry" || state.config.reliability?.failover !== true) dispatchReceipt.outcome = undefined;
         }
       }
+
+      try {
+      if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
+      // Cached: the first Auto request in a session pays for one resolution per
+      // configured provider, later requests reuse it for the TTL. New user
+      // turns prepare eligibility here. A proven changed-model retry refreshes
+      // eligibility separately; sticky continuations do not select again.
+      if (requestReason === "user" && state.enabled && !state.pinned) turnSignInExclusions = await prepareSignInEligibility(ctx);
+      if (v2Active) await prepareV2RouteBoundary();
       const canProveAffinityBoundary = typeof ctx.sessionManager?.getHeader === "function"
         && typeof ctx.sessionManager?.getBranch === "function";
       if (request.reason === "user" && canProveAffinityBoundary && !autoBoundary) {
@@ -3153,6 +3166,142 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         begin: (key) => trackerFor(ctx).begin(key),
         release: (key) => trackerFor(ctx).release(key),
       });
+      function assertClassifierCurrent(): void {
+        if (classifierDispatchGuardEnabled
+          && (classifierDispatchGeneration === undefined || !classifierDispatchSession
+            || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
+          terminalRouteCategory = "classifier_state_changed";
+          throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
+        }
+      }
+
+      async function prepareV1Dispatch(model: Model<Api>, currentRequest: ModelRouteRequest): Promise<void> {
+        if (!isVirtualModel(model)) await claimProviderDispatch(ctx, model);
+        assertClassifierCurrent();
+        assertNativeTransitionCurrent();
+        if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && (currentRequest.reason === "user" || nativeTransition) && autoBoundary && !isVirtualModel(model)) {
+          pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
+            userEntryId: autoBoundary.entryId,
+            userMessage: new WeakRef(autoBoundary.message),
+            modelKey: modelKey(model),
+            dispatchId: randomUUID(),
+          });
+        }
+      }
+
+      // A changed-model retry owns a new receipt. Never renew the failed model's receipt for its alternate.
+      async function admitNewV2Receipt(model: Model<Api>, boundary: AutoUserBoundary, store: ReliabilityV2Store): Promise<void> {
+        const key = modelKey(model);
+        if (!activeRouteTier) throw new Error("Bifrost reliability v2 could not bind the selected model to a configured tier.");
+        const receipt = v2Receipts.create({
+          session: ctx.sessionManager,
+          sessionId: boundary.sessionId,
+          userEntryId: boundary.entryId,
+          userMessage: boundary.message,
+          configGeneration: boundary.configGeneration,
+          modelKey: key,
+          requestedTier: activeRouteRequestedTier ?? activeRouteTier,
+          tier: activeRouteTier,
+          explicitTier: activeRouteExplicitTier,
+          affinityEligible: state.enabled && !state.pinned && activeRouteOrigin === "automatic",
+          retryEligible: activeRouteOrigin === "automatic" || activeRouteOrigin === "explicit_tier",
+          observationsEnabled: state.config.reliability?.observations?.enabled === true,
+          admittedAt: Date.now(),
+          proofUntil: Date.now() + V2_MAX_DISPATCH_LIFETIME_MS,
+          leases: [],
+          store,
+        });
+        dispatchReceipt = receipt;
+        debugLifecycle("reliability", "admission_started", ctx.sessionManager, boundary.message, {
+          request_correlation_id: requestCorrelationId ?? null,
+          model: key,
+          tier: receipt.tier,
+          reason: requestReason,
+        });
+        const legacyQuotaMarker = state.config.reliability?.cooldownOnAllowanceExhausted !== false
+          && state.config.reliability?.allowanceCooldownScope !== "model"
+          ? importedLegacyV2AllowanceBlock(key) : undefined;
+        const admission = await store.admit({
+          ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId,
+          modelKeys: [key],
+          ...(legacyQuotaMarker ? { legacyAllowanceMarkers: [legacyQuotaMarker] } : {}),
+        });
+        if (admission.status !== "admitted") {
+          terminalRouteCategory = "admission_rejected";
+          v2Receipts.remove(ctx.sessionManager, receipt);
+          dispatchReceipt = undefined;
+          debugLifecycle("reliability", "admission_blocked", ctx.sessionManager, boundary.message, {
+            request_correlation_id: requestCorrelationId ?? null,
+            model: key,
+            tier: receipt.tier,
+            status: admission.status,
+            category: "admission_rejected",
+          });
+          const reason = admission.status === "blocked" ? "a circuit is open or another trial owns it" : "reliability state rejected admission";
+          throw new Error(`Bifrost reliability v2 blocked ${key}: ${reason}. No provider request was sent.`);
+        }
+        receipt.leases = admission.leases ?? [];
+        receipt.proofUntil = admission.state.dispatches[receipt.dispatchId]?.proofUntil ?? receipt.proofUntil;
+        assertClassifierCurrent();
+        debugLifecycle("reliability", "admitted", ctx.sessionManager, boundary.message, {
+          request_correlation_id: requestCorrelationId ?? null,
+          model: key,
+          tier: receipt.tier,
+          status: "admitted",
+        });
+        if (!autoBoundaryStillActive(ctx, boundary) || state.reliabilityV2Store !== store) {
+          terminalRouteCategory = "boundary_changed_during_admission";
+          await settleV2Receipt(ctx, receipt, "cancelled");
+          dispatchReceipt = undefined;
+          throw new Error("Bifrost Auto boundary or configuration changed during admission; the turn was not sent.");
+        }
+        if (dispatchRecoveryToken && !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, boundary.message)) {
+          terminalRouteCategory = "allowance_retry_boundary_changed_during_admission";
+          await settleV2Receipt(ctx, receipt, "cancelled");
+          dispatchReceipt = undefined;
+          throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.");
+        }
+        assertNativeTransitionCurrent();
+        receipt.providerTrialClaim = await claimProviderDispatch(ctx, model);
+        assertNativeTransitionCurrent();
+        if (receipt.providerTrialClaim?.renewalFailed) {
+          terminalRouteCategory = "provider_trial_renewal_failed";
+          throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
+        }
+        assertClassifierCurrent();
+        startV2Heartbeat(ctx, receipt);
+      }
+
+      async function renewOwnedV2Receipt(model: Model<Api>, boundary: AutoUserBoundary): Promise<void> {
+        const receipt = dispatchReceipt;
+        const pool = receipt ? state.config.models?.[receipt.tier] : undefined;
+        const bindingStillConfigured = receipt && pool !== undefined && findCandidates(ctx, pool).some((candidate) => modelKey(candidate) === receipt.modelKey);
+        if (!receipt || receipt.modelKey !== modelKey(model) || receipt.renewalFailed
+          || Date.now() >= receipt.proofUntil || !autoBoundarySessionManualBranchActive(ctx, boundary) || !bindingStillConfigured) {
+          terminalRouteCategory = "receipt_invalid";
+          throw new Error("Bifrost reliability v2 receipt is no longer valid; the continuation was not sent.");
+        }
+        receipt.providerTrialClaim = await claimProviderDispatch(ctx, model);
+        if (receipt.providerTrialClaim?.renewalFailed) {
+          terminalRouteCategory = "provider_trial_renewal_failed";
+          throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
+        }
+        await renewV2Receipt(ctx, receipt);
+        if (receipt.providerTrialClaim?.renewalFailed) {
+          terminalRouteCategory = "provider_trial_renewal_failed";
+          throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
+        }
+        if (dispatchRecoveryToken && !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, boundary.message)) {
+          terminalRouteCategory = "allowance_retry_boundary_changed_during_admission";
+          throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.");
+        }
+        if (receipt.renewalFailed) {
+          terminalRouteCategory = "lease_renewal_failed";
+          throw new Error("Bifrost reliability v2 could not renew this turn's lease; the continuation was not sent.");
+        }
+        assertClassifierCurrent();
+      }
+
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
         retryAlternate: async (currentRequest) => {
@@ -3218,8 +3367,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               clearAllowanceRetry(ctx.sessionManager, "explicit_tier_override");
               terminalRouteCategory = "allowance_retry_tier_changed";
               throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the requested tier changed; no model was dispatched.");
-            } else if ([prepared, cancelled].some((candidate) => candidate?.entryId === autoBoundary.entryId
-              && candidate.userMessage.deref() === autoBoundary.message)) {
+            } else if (matchesPreparedAllowanceBoundary([prepared, cancelled], autoBoundary)) {
               terminalRouteCategory = "allowance_retry_boundary_changed";
               throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.");
             }
@@ -3484,12 +3632,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         },
         onDispatch: (model, thinkingLevel, intent) => {
           assertNativeTransitionCurrent();
-          if (classifierDispatchGuardEnabled
-            && (classifierDispatchGeneration === undefined || !classifierDispatchSession
-              || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
-            terminalRouteCategory = "classifier_state_changed";
-            throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
-          }
+          assertClassifierCurrent();
           const key = modelKey(model);
           if (nativeTransition) {
             recordAutoRouteProof(ctx.sessionManager, nativeTransition);
@@ -3519,15 +3662,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           }
           debug("virtual", "dispatch", { model: key, thinkingLevel });
         },
-        beforeDispatch: async (model, currentRequest, intent) => {
-          const assertClassifierCurrent = () => {
-            if (classifierDispatchGuardEnabled
-              && (classifierDispatchGeneration === undefined || !classifierDispatchSession
-                || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
-              terminalRouteCategory = "classifier_state_changed";
-              throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
-            }
-          };
+        beforeDispatch: async (model, currentRequest) => {
           assertClassifierCurrent();
           assertNativeTransitionCurrent();
           if (dispatchRecoveryToken) {
@@ -3538,18 +3673,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             }
           }
           if (!v2Active) {
-            if (!isVirtualModel(model)) await claimProviderDispatch(ctx, model);
-            assertClassifierCurrent();
-            assertNativeTransitionCurrent();
-            if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && (currentRequest.reason === "user" || nativeTransition) && autoBoundary && !isVirtualModel(model)) {
-              pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
-                userEntryId: autoBoundary.entryId,
-                userMessage: new WeakRef(autoBoundary.message),
-                modelKey: modelKey(model),
-                dispatchId: randomUUID(),
-              });
-            }
-            void intent;
+            await prepareV1Dispatch(model, currentRequest);
             return;
           }
           const boundary = autoBoundary;
@@ -3563,114 +3687,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             throw new Error("Bifrost Auto boundary changed before admission; the turn was not sent.");
           }
           if (currentRequest.reason === "user" || nativeTransition) {
-            const key = modelKey(model);
-            if (!activeRouteTier) throw new Error("Bifrost reliability v2 could not bind the selected model to a configured tier.");
-            const receipt = v2Receipts.create({
-              session: ctx.sessionManager,
-              sessionId: boundary.sessionId,
-              userEntryId: boundary.entryId,
-              userMessage: boundary.message,
-              configGeneration: boundary.configGeneration,
-              modelKey: key,
-              requestedTier: activeRouteRequestedTier ?? activeRouteTier,
-              tier: activeRouteTier,
-              explicitTier: activeRouteExplicitTier,
-              affinityEligible: state.enabled && !state.pinned && activeRouteOrigin === "automatic",
-              retryEligible: activeRouteOrigin === "automatic" || activeRouteOrigin === "explicit_tier",
-              observationsEnabled: state.config.reliability?.observations?.enabled === true,
-              admittedAt: Date.now(),
-              proofUntil: Date.now() + V2_MAX_DISPATCH_LIFETIME_MS,
-              leases: [],
-              store,
-            });
-            dispatchReceipt = receipt;
-            debugLifecycle("reliability", "admission_started", ctx.sessionManager, boundary.message, {
-              request_correlation_id: requestCorrelationId ?? null,
-              model: key,
-              tier: receipt.tier,
-              reason: requestReason,
-            });
-            const legacyQuotaMarker = state.config.reliability?.cooldownOnAllowanceExhausted !== false
-              && state.config.reliability?.allowanceCooldownScope !== "model"
-              ? importedLegacyV2AllowanceBlock(key) : undefined;
-            const admission = await store.admit({
-              ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId,
-              modelKeys: [key],
-              ...(legacyQuotaMarker ? { legacyAllowanceMarkers: [legacyQuotaMarker] } : {}),
-            });
-            if (admission.status !== "admitted") {
-              terminalRouteCategory = "admission_rejected";
-              v2Receipts.remove(ctx.sessionManager, receipt);
-              dispatchReceipt = undefined;
-              debugLifecycle("reliability", "admission_blocked", ctx.sessionManager, boundary.message, {
-                request_correlation_id: requestCorrelationId ?? null,
-                model: key,
-                tier: receipt.tier,
-                status: admission.status,
-                category: "admission_rejected",
-              });
-              const reason = admission.status === "blocked" ? "a circuit is open or another trial owns it" : "reliability state rejected admission";
-              throw new Error(`Bifrost reliability v2 blocked ${key}: ${reason}. No provider request was sent.`);
-            }
-            receipt.leases = admission.leases ?? [];
-            receipt.proofUntil = admission.state.dispatches[receipt.dispatchId]?.proofUntil ?? receipt.proofUntil;
-            assertClassifierCurrent();
-            debugLifecycle("reliability", "admitted", ctx.sessionManager, boundary.message, {
-              request_correlation_id: requestCorrelationId ?? null,
-              model: key,
-              tier: receipt.tier,
-              status: "admitted",
-            });
-            if (!autoBoundaryStillActive(ctx, boundary) || state.reliabilityV2Store !== store) {
-              terminalRouteCategory = "boundary_changed_during_admission";
-              await settleV2Receipt(ctx, receipt, "cancelled");
-              dispatchReceipt = undefined;
-              throw new Error("Bifrost Auto boundary or configuration changed during admission; the turn was not sent.");
-            }
-            if (dispatchRecoveryToken && !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, boundary.message)) {
-              terminalRouteCategory = "allowance_retry_boundary_changed_during_admission";
-              await settleV2Receipt(ctx, receipt, "cancelled");
-              dispatchReceipt = undefined;
-              throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.");
-            }
-            assertNativeTransitionCurrent();
-            receipt.providerTrialClaim = await claimProviderDispatch(ctx, model);
-            assertNativeTransitionCurrent();
-            if (receipt.providerTrialClaim?.renewalFailed) {
-              terminalRouteCategory = "provider_trial_renewal_failed";
-              throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
-            }
-            assertClassifierCurrent();
-            startV2Heartbeat(ctx, receipt);
-            return;
+            await admitNewV2Receipt(model, boundary, store);
+          } else {
+            await renewOwnedV2Receipt(model, boundary);
           }
-          const receipt = dispatchReceipt;
-          const pool = receipt ? state.config.models?.[receipt.tier] : undefined;
-          const bindingStillConfigured = receipt && pool !== undefined && findCandidates(ctx, pool).some((candidate) => modelKey(candidate) === receipt.modelKey);
-          if (!receipt || receipt.modelKey !== modelKey(model) || receipt.renewalFailed
-            || Date.now() >= receipt.proofUntil || !autoBoundarySessionManualBranchActive(ctx, boundary) || !bindingStillConfigured) {
-            terminalRouteCategory = "receipt_invalid";
-            throw new Error("Bifrost reliability v2 receipt is no longer valid; the continuation was not sent.");
-          }
-          receipt.providerTrialClaim = await claimProviderDispatch(ctx, model);
-          if (receipt.providerTrialClaim?.renewalFailed) {
-            terminalRouteCategory = "provider_trial_renewal_failed";
-            throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
-          }
-          await renewV2Receipt(ctx, receipt);
-          if (receipt.providerTrialClaim?.renewalFailed) {
-            terminalRouteCategory = "provider_trial_renewal_failed";
-            throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
-          }
-          if (dispatchRecoveryToken && !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, boundary.message)) {
-            terminalRouteCategory = "allowance_retry_boundary_changed_during_admission";
-            throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.");
-          }
-          if (receipt.renewalFailed) {
-            terminalRouteCategory = "lease_renewal_failed";
-            throw new Error("Bifrost reliability v2 could not renew this turn's lease; the continuation was not sent.");
-          }
-          assertClassifierCurrent();
         },
         onDispatchFailed: async (model) => {
           const key = modelKey(model);
