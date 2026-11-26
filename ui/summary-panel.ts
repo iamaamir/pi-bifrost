@@ -9,7 +9,7 @@ export function summaryPanel(theme: Theme, lines: readonly string[]): Box {
   const styled = lines.map((line, index) => {
     if (index === 0) return theme.fg("accent", theme.bold(line));
     const match = /^(\S+(?:\s+\S+)?)(\s{2,})(.*)$/.exec(line);
-    if (!match) return line;
+    if (!match) return line.replace(/^(\s+)(global|workspace)(?= \()/, (_text, space: string, layer: string) => space + theme.fg("accent", layer));
     let value = match[3]!;
     if (match[1] === "Models") value = value.replace(/\b\d+ working models? found\b/, (count) => theme.fg("success", count));
     if (match[1] === "Also uses") value = value.replace(/\b(global|workspace)\b/g, (layer) => theme.fg("accent", layer));

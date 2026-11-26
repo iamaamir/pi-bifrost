@@ -297,7 +297,8 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /no model-to-tier assignment changes/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Fields added/, `expected settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Model tiers\s+quick 1(?:\s|$)/, `expected unchanged tier total: ${JSON.stringify(result)}`);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
@@ -490,7 +491,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
         const target = selected === "global" ? "user" : "project";
-        assert.match(result.stdout + result.stderr, new RegExp(`(?:Create|Update)\\s+${target}`));
+        assert.match(result.stdout + result.stderr, new RegExp(`Save to\\s+${target}`));
         assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
         for (const layer of ["workspace", "user"]) {
           if (layer === "workspace" && selected === "default-global-only") {

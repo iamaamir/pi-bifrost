@@ -2063,7 +2063,7 @@ async function handleInitInner(
   } else {
     initLog(
       ctx,
-      `Using ${workingModels.length} saved probe results (${probeAge} old). Run /bifrost init -f to check again.`,
+      `Model check: cached ${probeAge} ago. Run /bifrost init -f to check again.`,
     );
   }
 
@@ -2518,32 +2518,28 @@ async function handleInitInner(
   const unverifiedSavedCount = savedModelKeys.filter((key) => !probeVerified.has(key)).length;
   const added = changes.filter((change) => change.kind === "add");
   const removed = changes.filter((change) => change.kind === "remove");
-  const tierSummary = [...new Set(changes.map((change) => change.tier))]
-    .sort()
-    .map(
-      (tier) =>
-        tier +
-        ": +" +
-        added.filter((change) => change.tier === tier).length +
-        "/-" +
-        removed.filter((change) => change.tier === tier).length,
-    )
-    .slice(0, 5);
   uiOutput(
     ctx,
     [
-      "Bifrost · proposed configuration",
-      `${source.configBytes === null ? "Create" : fieldsAdded.length || fieldsChanged.length ? "Update" : "Config"}      ${initSourceLabel(source)}`,
+      "Bifrost · ready to save",
+      `Save to      ${initSourceLabel(source)}`,
       `Models       ${workingModels.length} working model${workingModels.length === 1 ? "" : "s"} found${ranProbe ? "" : ` · cached ${probeAge} ago`}`,
-      added.length || removed.length ? `Model tiers  ${[added.length ? `+${added.length}` : "", removed.length ? `-${removed.length}` : ""].filter(Boolean).join(" / ")} model assignment${added.length + removed.length === 1 ? "" : "s"}` : "",
-      receiptOnly ? "Ownership    record will be added" : "",
+      Object.keys(savedPools).length || removed.length ? `Model tiers  ${[...new Set([...Object.keys(savedPools), ...removed.map((change) => change.tier)])].map((tier) => {
+        const pool = savedPools[tier];
+        const count = typeof pool === "string" ? 1 : Array.isArray(pool) ? pool.length : 0;
+        const plus = added.filter((change) => change.tier === tier).length;
+        const minus = removed.filter((change) => change.tier === tier).length;
+        const delta = [plus ? `+${plus}` : "", minus ? `-${minus}` : ""].filter(Boolean).join(", ");
+        return `${tier} ${count}${delta ? ` (${delta})` : ""}`;
+      }).join(" · ")}` : "",
+      receiptOnly ? "Setup        model-management information will be saved" : "",
       fieldsAdded.length ? `Fields added   ${fieldsAdded.join(", ")}` : "",
       fieldsChanged.length ? `Fields changed   ${fieldsChanged.join(", ")}` : "",
-      tierSummary.length ? `            ${tierSummary.map((tier) => tier.replace(/\+0\/-/g, "-").replace(/\/-0\b/g, "")).join(" · ")}${new Set(changes.map((change) => change.tier)).size > tierSummary.length ? " · additional tiers omitted" : ""}` : "",
+
       `Classifier  ${effectiveClassifierSummary}`,
       ...configLayerPaths(process.cwd(), state.extensionDir)
         .filter(([layer]) => inheritedSourceLayers.includes(layer))
-        .map(([layer, path]) => `Also uses    ${layer} (${displayPath(path)})`),
+        .map(([layer, path], index) => `${index === 0 ? "Also uses" : "         "}    ${layer} (${displayPath(path)})`),
       uncategorized.length ? `Uncategorized  ${uncategorized.length}` : "",
 
       uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
@@ -2715,7 +2711,7 @@ async function handleInitInner(
   const classifier = state.effectiveClassifierBackend(state.config, ctx);
   initLog(
     ctx,
-    `Updated ${initSourceLabel(source)} and reloaded config. Routing ${state.enabled ? "enabled" : "disabled"} with ${Object.keys(state.config.models ?? {}).length} tier(s). Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`,
+    `${receiptOnly ? "Setup information saved" : `Configuration saved to ${initSourceLabel(source)}`}. Routing ${state.enabled ? "enabled" : "disabled"}. Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}).`,
   );
 
   // Clear the init widget so it doesn't persist in the TUI.

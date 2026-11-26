@@ -1568,7 +1568,7 @@ describe("bifrost command ui", () => {
       await createCommandRouter(makeState() as never)("init", ctx as never);
       const outputLines = calls.flatMap((call) => Array.isArray(call.lines) ? call.lines : []);
       assert.ok(outputLines.some((line: string) => line.includes("workspace (") && line.includes("/bifrost.json)")), JSON.stringify(calls));
-      assert.ok(outputLines.some((line: string) => line.trim().startsWith("Update") && line.includes("project")));
+      assert.ok(outputLines.some((line: string) => line.trim().startsWith("Save to") && line.includes("project")));
       assert.ok(outputLines.some((line: string) => /\+1/.test(line)));
       assert.ok(outputLines.some((line: string) => line.includes("1 working model found") && line.includes("cached 1m ago")));
       assert.ok(outputLines.every((line: string) => !/-0\b/.test(line)));
@@ -2260,9 +2260,9 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("Probing models")), false);
       assert.equal(calls.some((call) => call.kind === "select"), false);
-      const reusedNotice = calls.find((call) => call.kind === "notify" && String(call.value).includes("saved probe results"));
+      const reusedNotice = calls.find((call) => call.kind === "notify" && String(call.value).includes("Model check: cached"));
       assert.ok(reusedNotice, "expected saved probe provenance in init output");
-      assert.match(String(reusedNotice?.value), /Using 1 saved probe results \(\d+[smhd.]+ old\)\. Run \/bifrost init -f to check again\./);
+      assert.match(String(reusedNotice?.value), /Model check: cached \d+[smhd.]+ ago\. Run \/bifrost init -f to check again\./);
       assert.doesNotMatch(String(reusedNotice?.value), /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
     } finally {
       process.chdir(previousCwd);
@@ -3701,7 +3701,7 @@ describe("command aliases", () => {
       for (const args of ["init", "init -g"]) {
         await createCommandRouter(makeState() as never)(args, ctx);
       }
-      const summaries = calls.filter((call) => call.lines?.some((line) => line.includes("Bifrost · proposed configuration")));
+      const summaries = calls.filter((call) => call.lines?.some((line) => line.includes("Bifrost · ready to save")));
       assert.match(summaries[0]!.lines!.join("\n"), /Fields added\s+.*models/);
       assert.match(summaries[0]!.lines!.join("\n"), /project \(\.pi\/bifrost\.json\)/);
       assert.match(summaries[1]!.lines!.join("\n"), /user \(.+bifrost\.json\)/);
@@ -4402,7 +4402,7 @@ describe("route dispatch", () => {
       ]);
       await createCommandRouter(state as never)("init", ctx);
     });
-    const proposal = calls.findIndex((c) => Array.isArray(c.lines) && c.lines.some((line: string) => line.trim() === "Bifrost · proposed configuration"));
+    const proposal = calls.findIndex((c) => Array.isArray(c.lines) && c.lines.some((line: string) => line.trim() === "Bifrost · ready to save"));
     assert.ok(proposal >= 0);
     assert.ok(calls.slice(proposal + 1).some((c) => c.value === "bifrost-output:0"));
   });
