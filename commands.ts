@@ -13,7 +13,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import { initClassifierSummary, initSaveSummary } from "./ui/init-save-summary.ts";
 import {
   constants,
   closeSync,
@@ -2234,15 +2234,9 @@ async function handleInitInner(
       );
     }
   }
-  const effectiveClassifierSummary = !classifierEnabled
-    ? "off"
-    : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
-      ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
-      : initConfig.classifier?.model
-        ? `prompt (${initConfig.classifier.model}, configured)`
-        : classifierModel
-          ? `prompt (${classifierModel}, detected default)`
-          : "prompt (no eligible model; regex fallback)";
+  const effectiveClassifierSummary = initClassifierSummary(
+    classifierEnabled, detectedClassifier, initConfig.classifier?.model, classifierModel,
+  );
 
   const proposal = buildInitProposal(
     models,
@@ -2490,48 +2484,16 @@ async function handleInitInner(
       nextOwnershipBytes: ownershipBytes,
     };
   }
-  const before = source.configBytes === null ? {} : JSON.parse(Buffer.from(source.configBytes).toString("utf8")) as Record<string, unknown>;
-  const after = JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>;
-  const fieldsAdded = Object.keys(after).filter((key) => !Object.hasOwn(before, key));
-  const fieldsChanged = Object.keys(before).filter((key) => !isDeepStrictEqual(before[key], after[key]));
-  const memberships = (config: Record<string, unknown>) => {
-    const pools = (config.models ?? {}) as Record<string, unknown>;
-    return Object.entries(pools).flatMap(([tier, pool]) =>
-      (typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool.filter((key): key is string => typeof key === "string") : [])
-        .map((modelKey) => JSON.stringify([tier, modelKey])),
-    );
-  };
-  const previousMemberships = new Set(memberships(before));
-  const nextMemberships = new Set(memberships(after));
-  const changes = [
-    ...[...nextMemberships].filter((key) => !previousMemberships.has(key)).map((key) => ({ kind: "add" as const, tier: (JSON.parse(key) as string[])[0]! })),
-    ...[...previousMemberships].filter((key) => !nextMemberships.has(key)).map((key) => ({ kind: "remove" as const, tier: (JSON.parse(key) as string[])[0]! })),
-  ];
-  const savedPools = (after.models ?? {}) as Record<string, unknown>;
-  const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
-    typeof pool === "string"
-      ? [pool]
-      : Array.isArray(pool)
-        ? pool.filter((key): key is string => typeof key === "string")
-        : [],
+  const { modelTiers, fieldsAdded, fieldsChanged, unverifiedSavedCount } = initSaveSummary(
+    source.configBytes, transaction.nextConfigBytes, probeVerified,
   );
-  const unverifiedSavedCount = savedModelKeys.filter((key) => !probeVerified.has(key)).length;
-  const added = changes.filter((change) => change.kind === "add");
-  const removed = changes.filter((change) => change.kind === "remove");
   uiOutput(
     ctx,
     [
       "Bifrost · ready to save",
       `Save to      ${initSourceLabel(source)}`,
       `Models       ${workingModels.length} working model${workingModels.length === 1 ? "" : "s"} found${ranProbe ? "" : ` · cached ${probeAge} ago`}`,
-      Object.keys(savedPools).length || removed.length ? `Model tiers  ${[...new Set([...Object.keys(savedPools), ...removed.map((change) => change.tier)])].map((tier) => {
-        const pool = savedPools[tier];
-        const count = typeof pool === "string" ? 1 : Array.isArray(pool) ? pool.length : 0;
-        const plus = added.filter((change) => change.tier === tier).length;
-        const minus = removed.filter((change) => change.tier === tier).length;
-        const delta = [plus ? `+${plus}` : "", minus ? `-${minus}` : ""].filter(Boolean).join(", ");
-        return `${tier} ${count}${delta ? ` (${delta})` : ""}`;
-      }).join(" · ")}` : "",
+      modelTiers,
       receiptOnly ? "Setup        model-management information will be saved" : "",
       fieldsAdded.length ? `Fields added   ${fieldsAdded.join(", ")}` : "",
       fieldsChanged.length ? `Fields changed   ${fieldsChanged.join(", ")}` : "",
