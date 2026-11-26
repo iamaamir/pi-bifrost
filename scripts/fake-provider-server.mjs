@@ -216,6 +216,8 @@ const server = http.createServer((request, response) => {
       });
       return;
     }
+    if (kind === "generation" && model.startsWith("affinity-failover-a-") && generationAttempt === 2) return json(response, 500, { error: { message: "simulated affinity failover server error" } });
+    if (kind === "generation" && model.startsWith("affinity-failover-b-") && generationAttempt === 1) return toolCallSse(response);
     if (model === "partial-allowance") { stat.syntheticOutcome = "partial_output_then_usage_limit_reached"; return partialAllowanceSse(response); }
     if (["tool-then-fail", "queue-tool-then-fail"].includes(model) && generationAttempt === 1) return toolCallSse(response);
     if (["tool-then-fail", "queue-tool-then-fail"].includes(model) && generationAttempt > 1) return json(response, 402, { error: { message: "You have no remaining credits; synthetic allowance failure after tool result." } });

@@ -208,12 +208,12 @@ function assertNoBlockedNetwork(home) {
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
 
-function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [], extension = EXTENSION }) {
+function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [], extension = EXTENSION, noTools = true }) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.TYPESAFE_API_KEY;
     const extensionArgs = extraExtensions.flatMap((extension) => ["-e", extension]);
-    const child = spawn(PI, ["-e", extension, ...extensionArgs, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
+    const child = spawn(PI, ["-e", extension, ...extensionArgs, "--approve", "--no-session", ...(noTools ? ["--no-tools"] : []), "--model", model, "-p", ...messages], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: work,
       env: {
@@ -380,6 +380,93 @@ export default function(pi) {
         if (scenario.continueTerminal) assert.equal(trace.settlements[0].outcome, "error");
         assertNoBlockedNetwork(home);
         console.log("native-failover experiment", JSON.stringify({ name: scenario.name, models, ...trace, userCount: outcome.userCount, exitCode: result.code }));
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const { version, mode } of [
+    { version: 1, mode: "retain-within-tier" },
+    { version: 2, mode: "retain-within-tier" },
+    { version: 2, mode: "observe" },
+  ]) {
+    it(`composes native failover with V${version} receipt owners and ${mode} affinity`, async () => {
+      const home = mkdtempSync(join(tmpdir(), "bifrost-receipt-experiment-home-"));
+      const work = mkdtempSync(join(tmpdir(), "bifrost-receipt-experiment-work-"));
+      try {
+        const suffix = `v${version}-${mode}`;
+        const first = `affinity-failover-a-${suffix}`, alternate = `affinity-failover-b-${suffix}`;
+        const a = `fake/${first}`, b = `fake/${alternate}`;
+        const tracePath = join(work, "receipt-experiment.json");
+        const extension = join(work, "receipt-experiment.mjs");
+        writeFixture({ home, work, port: server.port,
+          models: [{ id: first, reasoning: false }, { id: alternate, reasoning: false }],
+          bifrost: { enabled: false },
+          retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } },
+        });
+        writeFileSync(extension, `import { installReceiptExperiment } from ${JSON.stringify(join(ROOT, "tests/fixtures/native-failover-receipt-experiment.mjs"))};
+export default pi => installReceiptExperiment(pi, ${JSON.stringify({ work, version, first, alternate, mode, tracePath })});`);
+        const observer = writeOutcomeObserver(work);
+        const before = await fakeStats(server.port);
+        const result = await runPi({ home, work, extension, extraExtensions: [observer.extension], noTools: false,
+          model: "experiment/receipt-auto", messages: ["establish anchor", "exercise model transition", "exercise affinity after success"] });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false, result.stderr);
+        assert.equal(result.code, 0, result.stderr);
+        const trace = JSON.parse(readFileSync(tracePath, "utf8"));
+        const retain = mode === "retain-within-tier";
+        const expected = retain ? [first, first, alternate, alternate, alternate] : [first, alternate, alternate, first, alternate];
+        const actual = after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => e.model);
+        // Observe mode picks B on turn 2, then A on turn 3 (A's second call
+        // fails). The same native retry path must remain independent of affinity.
+        assert.deepEqual(actual, expected, result.stderr);
+        const transitionTurn = retain ? 2 : 3;
+        const transition = trace.routes.filter(r => r.turn === transitionTurn);
+        assert.deepEqual(transition.slice(0, 2).map(r => [r.reason, r.model]), [["user", a], ["retry", b]]);
+        assert.notEqual(transition[0].dispatchId, transition[1].dispatchId, "model change creates distinct owner identity");
+        assert.equal(transition[0].entryId, transition[1].entryId, "same original user boundary");
+        const continuation = trace.routes.find(r => r.reason === "continuation");
+        const preceding = trace.routes[trace.routes.indexOf(continuation) - 1];
+        assert.equal(continuation.model, b);
+        assert.equal(continuation.dispatchId, preceding.dispatchId, "tool continuation uses existing B owner");
+        assert.equal(continuation.toolsInProjection, 1, "completed tool result retained");
+        assert.deepEqual(trace.toolCalls, ["synthetic"], "tool side effect occurs exactly once");
+        const changed = trace.settled.filter(r => r.turn === transitionTurn);
+        assert.deepEqual(changed.map(r => [r.model, r.outcome, r.confirmed]), [[a, "failure", true], [b, "success", true]]);
+        assert.deepEqual(changed.map(r => r.dispatchId), transition.slice(0, 2).map(r => r.dispatchId));
+        const claimed = trace.settled.find(r => r.model === b && r.trial);
+        assert.ok(claimed, "alternate owned expired half-open trial");
+        assert.equal(trace.projection.models[a].openUntil, undefined, "A circuit remains closed");
+        assert.equal(trace.projection.models[a].failures.length, 1);
+        assert.equal(trace.projection.models[b].trialActive, false, "alternate trial released");
+        assert.deepEqual(trace.projection.models[b].failures, []);
+        if (version === 2) {
+          assert.equal(typeof claimed.leaseId, "string");
+          assert.equal(Object.keys(trace.state.dispatches).length, 4);
+          assert.equal(new Set(trace.settled.map(r => r.outcomeId)).size, 4);
+          for (const receipt of trace.settled) {
+            const durable = trace.state.dispatches[receipt.dispatchId];
+            assert.equal(durable.settledKind, receipt.outcome);
+            assert.equal(durable.scopes[0].modelKey, receipt.model);
+          }
+          assert.ok(Object.values(trace.state.scopes).every(scope => scope.lease === undefined));
+        }
+        const third = trace.routes.find(r => r.turn === 3 && r.reason === "user");
+        assert.equal(third.strategy, a, "strategy deliberately prefers A");
+        assert.equal(third.anchor, b, "successful B promoted using existing anchor store");
+        assert.equal(third.model, retain ? b : a);
+        assert.equal(third.affinitySelection, retain ? "retained_anchor" : "strategy");
+        assert.equal(trace.promotions.filter(r => r.turn === transitionTurn).length, 1);
+        assert.equal(trace.promotions.find(r => r.turn === transitionTurn).dispatchId, changed[1].dispatchId);
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 3, "one persisted user message for each submission");
+        const failures = outcome.assistants.filter(e => e.stopReason === "error");
+        assert.equal(failures.length, 1);
+        assert.ok(outcome.contextEdits.some(e => e.targetId === failures[0].id && e.isNull));
+        assertNoBlockedNetwork(home);
+        console.log("native receipt experiment", JSON.stringify({ version, mode, actual, routes: trace.routes, settled: trace.settled, promotions: trace.promotions }));
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(work, { recursive: true, force: true });
