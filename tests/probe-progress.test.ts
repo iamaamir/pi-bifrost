@@ -7,8 +7,13 @@ describe("init probe progress presentation", () => {
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
     const output = probeProgressComponent(theme, { phase: "preparing" }).render(80).join("\n");
     assert.match(output, /Refreshing model catalog/);
-    assert.match(output, /━─{19}/);
+    assert.match(output, /━─{23}/);
     assert.doesNotMatch(output, /%|working|failed|\d+\/\d+/);
+    const colors: string[] = [];
+    probeProgressComponent({ ...theme, fg: (color, text) => { colors.push(`${color}:${text}`); return text; } }, { phase: "preparing" }, false, 2).render(80);
+    assert.ok(colors.includes("accent:━"));
+    assert.ok(colors.includes("dim:──"));
+    assert.ok(colors.includes(`dim:${"─".repeat(21)}`));
   });
 
   it("renders preparation without advertising unavailable cancellation", () => {
