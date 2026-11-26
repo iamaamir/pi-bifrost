@@ -838,12 +838,13 @@ def capture(
                 "criteria": {"general": "keep this criterion"},
             }:
                 raise AssertionError("manual init changed explicit classifier settings")
-            init_screen = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
-            if init_screen.count("save bifrost setup?") != 1:
+            init_raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
+            init_screen = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", init_raw).split()).lower()
+            if init_screen.count("apply this configuration?") != 1:
                 raise AssertionError("manual init must ask exactly once to save the refreshed setup")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "save memberships: +2 / -0" not in init_screen or "to project (.pi/bifrost.json)" not in init_screen:
+            if "changes +2 model-to-tier assignments" not in init_screen or "update project (.pi/bifrost.json)" not in init_screen:
                 raise AssertionError("manual init did not preview the exact project membership changes")
 
         time.sleep(2.0)

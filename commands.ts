@@ -1,4 +1,5 @@
 import { log as logNotice } from "./ui/notice.ts";
+import { summaryPanel } from "./ui/summary-panel.ts";
 import {
   clearProbeProgress,
   setProbeProgress,
@@ -12,6 +13,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   constants,
   closeSync,
@@ -46,6 +48,7 @@ import {
   validateTierPolicyConfig,
 } from "./config.ts";
 import {
+  configLayerPaths,
   loadConfigForReload,
   loadConfigWithSourceOverride,
   readBoundedConfigText,
@@ -400,9 +403,10 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
   return selected;
 }
 
-function uiOutput(ctx: ExtensionContext, lines: string[]) {
+function uiOutput(ctx: ExtensionContext, lines: string[], summary = false) {
   if (ctx.mode === "tui" && ctx.hasUI) {
-    ctx.ui.setWidget("bifrost-output", lines);
+    if (summary) ctx.ui.setWidget("bifrost-output", (_tui, theme) => summaryPanel(theme, lines));
+    else ctx.ui.setWidget("bifrost-output", lines);
   } else {
     for (const line of lines) console.error(`[bifrost] ${line}`);
   }
@@ -2173,6 +2177,18 @@ async function handleInitInner(
         ? "workspace"
         : "global";
   const targetLayerIndex = layerOrder.indexOf(targetLayer);
+  const inheritedSourceLayers = [
+    ...new Set(
+      configLayers.sourceFields
+        .filter(
+          ({ layer, fields }) =>
+            fields.length > 0 &&
+            layer !== "effective" &&
+            layerOrder.indexOf(layer as (typeof layerOrder)[number]) < targetLayerIndex,
+        )
+        .map(({ layer }) => layer),
+    ),
+  ];
   const inheritedFields = new Set(
     configLayers.sourceFields
       .filter(
@@ -2283,8 +2299,6 @@ async function handleInitInner(
     proposal.default = defaultTier;
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];
   let receiptOnly = false;
-  let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
-  let settingsAdded = false;
   if (source.configBytes !== null) {
     const byProvider = new Map<string, Record<string, string[]>>();
     for (const model of available) {
@@ -2333,10 +2347,10 @@ async function handleInitInner(
           unknown
         >;
         let addedSetting = false;
+        const addSchemaPointer = Object.keys(existing).length === 0;
         for (const [key, value] of Object.entries(proposal)) {
           if (
-            key !== "$schema" &&
-            (key === "models" || !inheritedFields.has(key)) &&
+            (key === "$schema" ? addSchemaPointer : key === "models" || !inheritedFields.has(key)) &&
             existing[key] === undefined
           ) {
             existing[key] = value;
@@ -2344,7 +2358,6 @@ async function handleInitInner(
           }
         }
         if (addedSetting) {
-          settingsAdded = true;
           const nextConfigBytes = Buffer.from(JSON.stringify(existing, null, 2) + "\n", "utf8");
           const ownershipBytes =
             source.ownershipBytes ??
@@ -2371,7 +2384,6 @@ async function handleInitInner(
             nextConfigBytes,
             nextOwnershipBytes: ownershipBytes,
           };
-          changes = [];
         } else {
           if (source.ownershipBytes !== null) {
             initLog(
@@ -2394,7 +2406,6 @@ async function handleInitInner(
               "utf8",
             ),
           };
-          changes = [];
         }
       } else {
         initLog(
@@ -2408,14 +2419,14 @@ async function handleInitInner(
       const reconciled = JSON.parse(
         Buffer.from(plan.transaction.nextConfigBytes).toString("utf8"),
       ) as Record<string, unknown>;
+      const sourceConfig = JSON.parse(Buffer.from(source.configBytes!).toString("utf8")) as Record<string, unknown>;
+      const addSchemaPointer = Object.keys(sourceConfig).length === 0;
       for (const [key, value] of Object.entries(proposal)) {
         if (
-          key !== "$schema" &&
-          (key === "models" || !inheritedFields.has(key)) &&
+          (key === "$schema" ? addSchemaPointer : key === "models" || !inheritedFields.has(key)) &&
           reconciled[key] === undefined
         ) {
           reconciled[key] = value;
-          settingsAdded = true;
         }
       }
       const nextConfigBytes = Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8");
@@ -2431,7 +2442,6 @@ async function handleInitInner(
         return;
       }
       transaction = { ...plan.transaction, nextConfigBytes };
-      changes = plan.changes;
     }
   } else {
     if (source.ownershipBytes !== null) {
@@ -2479,14 +2489,25 @@ async function handleInitInner(
       nextConfigBytes: configBytes,
       nextOwnershipBytes: ownershipBytes,
     };
-    settingsAdded = true;
-    changes = Object.entries(models).flatMap(([tier, keys]) =>
-      keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
-    );
   }
-  const savedPools = (
-    JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
-  ).models as Record<string, unknown>;
+  const before = source.configBytes === null ? {} : JSON.parse(Buffer.from(source.configBytes).toString("utf8")) as Record<string, unknown>;
+  const after = JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>;
+  const fieldsAdded = Object.keys(after).filter((key) => !Object.hasOwn(before, key));
+  const fieldsChanged = Object.keys(before).filter((key) => !isDeepStrictEqual(before[key], after[key]));
+  const memberships = (config: Record<string, unknown>) => {
+    const pools = (config.models ?? {}) as Record<string, unknown>;
+    return Object.entries(pools).flatMap(([tier, pool]) =>
+      (typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool.filter((key): key is string => typeof key === "string") : [])
+        .map((modelKey) => JSON.stringify([tier, modelKey])),
+    );
+  };
+  const previousMemberships = new Set(memberships(before));
+  const nextMemberships = new Set(memberships(after));
+  const changes = [
+    ...[...nextMemberships].filter((key) => !previousMemberships.has(key)).map((key) => ({ kind: "add" as const, tier: (JSON.parse(key) as string[])[0]! })),
+    ...[...previousMemberships].filter((key) => !nextMemberships.has(key)).map((key) => ({ kind: "remove" as const, tier: (JSON.parse(key) as string[])[0]! })),
+  ];
+  const savedPools = (after.models ?? {}) as Record<string, unknown>;
   const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
     typeof pool === "string"
       ? [pool]
@@ -2508,30 +2529,29 @@ async function handleInitInner(
         removed.filter((change) => change.tier === tier).length,
     )
     .slice(0, 5);
-  const deltaSummary =
-    "memberships: +" +
-    added.length +
-    " / -" +
-    removed.length +
-    (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
   uiOutput(
     ctx,
     [
-      "--- init ---",
-      `source: ${ranProbe ? `probe (${workingModels.length} working)` : `saved probe (${workingModels.length} working, ${probeAge} old)`}`,
-      `save target: ${initSourceLabel(source)}`,
-      deltaSummary,
-      `classifier: ${effectiveClassifierSummary}`,
-      settingsAdded ? "settings: standard routing defaults added where missing" : "",
-      `uncategorized: ${uncategorized.length}`,
-      "proposed config: classifier and routing defaults detected from Pi's available models",
-      "----------------",
+      "Bifrost · proposed configuration",
+      `${source.configBytes === null ? "Create" : fieldsAdded.length || fieldsChanged.length ? "Update" : "Config"}      ${initSourceLabel(source)}`,
+      `Models       ${workingModels.length} working model${workingModels.length === 1 ? "" : "s"} found${ranProbe ? "" : ` · cached ${probeAge} ago`}`,
+      added.length || removed.length ? `Model tiers  ${[added.length ? `+${added.length}` : "", removed.length ? `-${removed.length}` : ""].filter(Boolean).join(" / ")} model assignment${added.length + removed.length === 1 ? "" : "s"}` : "",
+      receiptOnly ? "Ownership    record will be added" : "",
+      fieldsAdded.length ? `Fields added   ${fieldsAdded.join(", ")}` : "",
+      fieldsChanged.length ? `Fields changed   ${fieldsChanged.join(", ")}` : "",
+      tierSummary.length ? `            ${tierSummary.map((tier) => tier.replace(/\+0\/-/g, "-").replace(/\/-0\b/g, "")).join(" · ")}${new Set(changes.map((change) => change.tier)).size > tierSummary.length ? " · additional tiers omitted" : ""}` : "",
+      `Classifier  ${effectiveClassifierSummary}`,
+      ...configLayerPaths(process.cwd(), state.extensionDir)
+        .filter(([layer]) => inheritedSourceLayers.includes(layer))
+        .map(([layer, path]) => `Also uses    ${layer} (${displayPath(path)})`),
+      uncategorized.length ? `Uncategorized  ${uncategorized.length}` : "",
 
       uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
       unverifiedSavedCount
-        ? `${unverifiedSavedCount} saved model membership(s) were not probe-verified; handwritten entries are preserved.`
+        ? `${unverifiedSavedCount} saved model tier entries were not verified by this check; handwritten entries are preserved.`
         : "",
     ].filter(Boolean),
+    true,
   );
 
   if (uncategorized.length > 0) {
@@ -2550,8 +2570,8 @@ async function handleInitInner(
   const ok =
     writeWithoutPrompt ||
     (await ctx.ui.confirm(
-      "Save Bifrost setup?",
-      `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
+      "Apply this configuration?",
+      "",
     ));
   if (!ok) {
     initLog(ctx, "config not written");
@@ -4462,6 +4482,14 @@ function persistBootstrapConfig(
   if (!stillFresh && source.configBytes === null && !classifierChoice) {
     state.bootstrapModelsInMemory = false;
     return true;
+  }
+  if (stillFresh) {
+    if (!Object.hasOwn(current, "$schema"))
+      current.$schema = `${state.extensionDir.replace(/\/$/, "")}/schema.json`;
+    if (!Object.hasOwn(current, "rules")) {
+      const generatedTiers = new Set(Object.keys(generatedModels));
+      current.rules = DEFAULT_RULES.filter(({ model }) => generatedTiers.has(model));
+    }
   }
   const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
   const ownership = stillFresh
