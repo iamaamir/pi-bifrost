@@ -128,7 +128,7 @@ export function serializeBootstrapConfig(
     ["cache", projectKnownFields(source.cache, ["enabled", "maxEntries", "threshold", "ttlHours", "path"])],
     ["debug", projectKnownFields(source.debug, ["enabled", "path"])],
     ["reliability", projectKnownFields(source.reliability, [
-      "enabled", "stateVersion", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted",
+      "enabled", "stateVersion", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted", "failover",
       "failureThreshold", "windowMinutes", "cooldownMinutes", "path",
     ])],
     ["probe", projectKnownFields(source.probe, ["concurrency", "timeoutMs"])],

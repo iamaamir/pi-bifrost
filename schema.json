@@ -380,6 +380,11 @@
 "description": "Disabled by default. Set true to retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
           "default": false
         },
+        "failover": {
+          "type": "boolean",
+          "description": "Disabled by default. Allow Auto to choose another eligible model during a proven empty native Pi retry. Pi retains retry scheduling; previously attempted models are excluded for this user turn.",
+          "default": false
+        },
         "stateVersion": {
           "type": "integer",
           "enum": [1, 2],

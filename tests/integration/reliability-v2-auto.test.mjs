@@ -739,6 +739,53 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
       }
     });
 
+    it(`switches to the next configured model in registered ${mode} Auto on an empty native retry`, async () => {
+      const home = mkdtempSync(join(tmpdir(), "bifrost-native-failover-home-"));
+      const work = mkdtempSync(join(tmpdir(), "bifrost-native-failover-work-"));
+      try {
+        const config = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/tpm-request-too-large", "fake-backup/healthy"] },
+          reliability: { enabled: true, failureThreshold: 3, failover: true, ...(mode === "v2" ? { stateVersion: 2 } : {}) },
+        };
+        writeFixture({ home, work, port: server.port, bifrost: config,
+          models: [{ id: "tpm-request-too-large", reasoning: false }, { provider: "fake-backup", id: "healthy", reasoning: false }],
+          retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } } });
+        const before = await fakeStats(server.port);
+        const observer = writeOutcomeObserver(work);
+        const result = await runPi({ home, work, extraExtensions: [observer.extension],
+          messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"] });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false, result.stderr);
+        assert.equal(result.code, 0, result.stderr);
+        assert.deepEqual(after.stats.slice(before.stats.length).filter(e => e.kind === "generation").map(e => [e.provider, e.model]),
+          [["fake", "tpm-request-too-large"], ["fake-backup", "healthy"]]);
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 1);
+        assert.deepEqual(outcome.assistants.map(e => [e.provider, e.model, e.stopReason]),
+          [["fake", "tpm-request-too-large", "error"], ["fake-backup", "healthy", "stop"]]);
+        assert.equal(outcome.assistants[0].contentLength, 0);
+        assert.ok(outcome.contextEdits.some(e => e.targetId === outcome.assistants[0].id && e.isNull));
+        if (mode === "v2") {
+          const durable = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability-v2.json"), "utf8"));
+          const receipts = Object.values(durable.dispatches);
+          assert.deepEqual(receipts.map(r => [r.scopes[0].modelKey, r.settledKind]),
+            [["fake/tpm-request-too-large", "failure"], ["fake-backup/healthy", "success"]]);
+          assert.equal(new Set(receipts.map(r => r.outcomeId)).size, 2);
+          assert.ok(Object.values(durable.scopes).every(s => s.lease === undefined));
+        } else {
+          const durable = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability.json"), "utf8"));
+          assert.equal(durable.models["fake/tpm-request-too-large"].failures.length, 1);
+          assert.equal(durable.models["fake/tpm-request-too-large"].openUntil, undefined);
+        }
+        assertNoBlockedNetwork(home);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
     it(`retries one zero-effect allowance failure with a configured alternate in ${mode} Auto`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-home-`));
       const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-work-`));

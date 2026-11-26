@@ -463,8 +463,8 @@ function formatCandidateLines(
         return `xx ${key} (${reasonLabel("provider_not_allowed")})`;
       // Sign-in and every other non-circuit skip carry no openUntil; printing
       // "open circuit until unknown" for them was a lie in the old code.
-      if (skippedCandidate.reason === "sign_in_unavailable")
-        return `xx ${key} (${reasonLabel("sign_in_unavailable")})`;
+      if (skippedCandidate.reason === "sign_in_unavailable" || skippedCandidate.reason === "request_attempted")
+        return `xx ${key} (${reasonLabel(skippedCandidate.reason)})`;
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";

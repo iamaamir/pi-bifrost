@@ -73,13 +73,14 @@ export type ClassificationResult =
   | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary };
 
 export type RouteDecisionExclusionCode = SkippedCandidate["reason"] | CandidateDiscoveryExclusion["reason"] | UnresolvedCandidatePattern["reason"] | "economic_reserve";
-export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot" | "config_snapshot" | "sign_in_check";
+export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot" | "config_snapshot" | "sign_in_check" | "request_failure";
 
 /** Where an exclusion was observed. A dead sign-in is not reliability state:
  * no request was made and no failure was recorded, so the trace says so. */
 function evidenceSourceForExclusion(code: RouteDecisionExclusionCode): RouteDecisionEvidenceSource {
   if (code === "provider_not_allowed") return "config_snapshot";
   if (code === "sign_in_unavailable") return "sign_in_check";
+  if (code === "request_attempted") return "request_failure";
   return "reliability_state";
 }
 

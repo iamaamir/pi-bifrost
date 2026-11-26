@@ -92,6 +92,7 @@ import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel }
 import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
+import { provesNativeRetryLineage, type RetryLineageFact } from "./failover.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import { createPiNativeClassifier, piClassificationSupported } from "./classifier-pi-native.ts";
@@ -1785,6 +1786,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     readonly requestedTier: string;
     readonly selectedTier: string;
     readonly explicitTier: boolean;
+    readonly nativeFailoverOrigin?: "automatic" | "explicit_tier";
+    readonly attemptedModels?: readonly string[];
   }
 
   interface PendingAllowanceFailure extends Omit<AutoUserBoundary, "message"> {
@@ -2019,6 +2022,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setAllowanceRetryStopReason(ctx, "Automatic retry stopped because this turn has queued work.");
       return undefined;
     }
+    const nativeProof = uniqueV1RouteProof(ctx, boundary, failedModelKey);
+    if ((nativeProof?.attemptedModels?.length ?? 0) > 1) {
+      setAllowanceRetryStopReason(ctx, "Native failover already changed the model; no extra terminal retry was sent.");
+      return undefined;
+    }
     const previousAttempt = allowanceRetryAttemptBySession.get(ctx.sessionManager);
     if (previousAttempt?.entryId === boundary.entryId && previousAttempt.userMessage.deref() === boundary.message) {
       const failureLabel = failureCategory === "billing_denied" ? "a billing denial" : "a usage limit";
@@ -2159,6 +2167,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     receipt: AutoDispatchReceipt,
     kind: "success" | "failure" | "cancelled",
     suppressAllowanceNotice = false,
+    requireFreshSettlement = false,
   ): Promise<boolean> {
     receipt.finalizing = true;
     const failureObservation = receipt.failureObservation;
@@ -2206,7 +2215,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             ...(recordedObservation ? { observation: recordedObservation } : {}),
             ...(policyAllowanceEvidence ? { allowanceExhaustion: policyAllowanceEvidence } : {}),
           } });
-        settlementConfirmed = result.status === "settled" || result.status === "duplicate";
+        settlementConfirmed = result.status === "settled" || (!requireFreshSettlement && result.status === "duplicate");
         debugLifecycle("reliability", "receipt_settled", ctx.sessionManager, receipt.userMessage.deref(), {
           model: receipt.modelKey,
           outcome: kind,
@@ -2737,6 +2746,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     bypassV2Snapshot = false,
     random?: () => number,
     preparedSignIn?: ReadonlySet<string>,
+    excludedRequestModels?: ReadonlySet<string>,
   ): ConfiguredTierResolution<Model<Api>> {
     let reliabilityState = reliabilityV2Enabled() && !bypassV2Snapshot
       ? projectReliabilityV2ForRouting(
@@ -2783,6 +2793,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       random,
       affinityContext,
       signInExclusionFor(ctx, preparedSignIn),
+      excludedRequestModels,
     );
   }
 
@@ -2876,6 +2887,56 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         { entryId: token.entryId, message }, token.failedModelKey, [], [], token.approvedAssistantEntryIds, true);
   }
 
+  function nativeFailoverCurrent(ctx: ExtensionContext, request: ModelRouteRequest, proof: AutoRouteProof, boundary: AutoUserBoundary): boolean {
+    return state.config.reliability?.failover === true && state.config.reliability?.enabled !== false
+      && !ctx.signal?.aborted && !request.signal?.aborted && !ctx.hasPendingMessages?.()
+      && autoBoundaryStillActive(ctx, { ...proof, message: boundary.message })
+      && !routingPolicyInvalid(state) && !providerCooldownWriteFailed;
+  }
+
+  function nativeRetryFacts(ctx: ExtensionContext, request: ModelRouteRequest, boundary: AutoUserBoundary): RetryLineageFact[] | undefined {
+    const activity = allowanceActivityBySession.get(ctx.sessionManager);
+    if (!activity || activity.multipleUsers || activity.firstUser !== boundary.message || !request.failed) return undefined;
+    const branch = ctx.sessionManager.getBranch();
+    const start = branch.findIndex(entry => entry.type === "message" && entry.id === boundary.entryId && entry.message === boundary.message);
+    if (start < 0 || request.messages.some(message => message === request.failed!.message)) return undefined;
+    return branch.slice(start + 1).map((entry): RetryLineageFact => {
+      if (entry.type === "context_edit" && entry.replacement === null) return { kind: "omission", target: entry.targetId };
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "error"
+        && Array.isArray(entry.message.content) && entry.message.content.length === 0) {
+        return { kind: "failure", id: entry.id, model: `${entry.message.provider}/${entry.message.model}`,
+          matchesLatest: entry.message === request.failed!.message };
+      }
+      return { kind: "other" };
+    });
+  }
+
+  function nativeRetryProof(ctx: ExtensionContext, request: ModelRouteRequest, boundary: AutoUserBoundary): AutoRouteProof | undefined {
+    if (request.reason !== "retry" || !request.failed || isVirtualModel(request.failed.model)) return undefined;
+    const failedKey = modelKey(request.failed.model);
+    const proof = uniqueV1RouteProof(ctx, boundary, failedKey);
+    if (!proof?.nativeFailoverOrigin || !proof.attemptedModels || !nativeFailoverCurrent(ctx, request, proof, boundary)) return undefined;
+    if (proof.explicitTier && proof.selectedTier !== proof.requestedTier) return undefined;
+    if (allowanceRetryAttemptBySession.has(ctx.sessionManager)) return undefined;
+    const facts = nativeRetryFacts(ctx, request, boundary);
+    return facts && provesNativeRetryLineage(facts, proof.attemptedModels) ? proof : undefined;
+  }
+
+  async function settleNativeFailure(ctx: ExtensionContext, proof: AutoRouteProof, receipt: AutoDispatchReceipt | undefined): Promise<boolean> {
+    if (reliabilityV2Enabled()) {
+      if (!receipt || receipt.modelKey !== proof.modelKey || receipt.outcome !== "failure" || receipt.finalizing || receipt.finalized
+        || receipt.renewalFailed || receipt.configGeneration !== proof.configGeneration) return false;
+      // Duplicate is not fresh settlement authority for a changed-model dispatch.
+      return settleV2Receipt(ctx, receipt, "failure", false, true);
+    }
+    const failure = trackerFor(ctx).failureFor(proof.modelKey);
+    if (!failure) return false;
+    const saved = state.reliabilityStore.recordFailure(proof.modelKey, "agent_settled", failure.reason ?? "provider request failed",
+      undefined, state.config.reliability?.allowanceCooldownScope === "model" ? failure.failureObservation : undefined);
+    if (saved) trackerFor(ctx).release(proof.modelKey);
+    return saved;
+  }
+
   function recordAutoRouteProof(session: IdentityObject, proof: AutoRouteProof): void {
     const proofs = (autoRouteProofsBySession.get(session) ?? []).filter((prior) =>
       prior.userMessage.deref() && prior.entryId !== proof.entryId);
@@ -2965,6 +3026,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let activeRouteRequestedTier: string | undefined;
       let activeRouteExplicitTier = false;
       let dispatchRecoveryToken: AllowanceRetryToken | undefined;
+      let nativeTransition: AutoRouteProof | undefined;
       let rejectionCategory = "preflight_rejection";
       let terminalRouteCategory: string | undefined;
       let activeRouteOrigin = request.reason === "direct" ? "direct" : request.reason === "retry" ? "retry" : request.reason === "continuation" ? "continuation" : "automatic";
@@ -3039,7 +3101,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             rejectionCategory = "receipt_stale";
             throw new Error("Bifrost reliability v2 receipt is stale or expired; this continuation was not sent. Start a new user turn.");
           }
-          dispatchReceipt.outcome = undefined;
+          if (request.reason !== "retry" || state.config.reliability?.failover !== true) dispatchReceipt.outcome = undefined;
         }
       }
       const canProveAffinityBoundary = typeof ctx.sessionManager?.getHeader === "function"
@@ -3083,6 +3145,34 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
+        retryAlternate: async (currentRequest) => {
+          if (state.config.reliability?.failover !== true || state.config.reliability?.enabled === false) return undefined;
+          const boundary = autoBoundary ?? findAutoUserBoundary(ctx, currentRequest);
+          const proof = boundary && nativeRetryProof(ctx, currentRequest, boundary);
+          if (!boundary || !proof) { if (dispatchReceipt) dispatchReceipt.outcome = undefined; return undefined; }
+          autoBoundary = boundary;
+          correlationTurn = boundary.message;
+          const settled = await settleNativeFailure(ctx, proof, dispatchReceipt);
+          if (v2Active) dispatchReceipt = undefined;
+          if (!settled || !nativeFailoverCurrent(ctx, currentRequest, proof, boundary)) {
+            throw new Error("Bifrost: native failover stopped; failed dispatch settlement or routing authority could not be confirmed.");
+          }
+          pendingAllowanceFailureBySession.delete(ctx.sessionManager);
+          pendingInferredRateBySession.delete(ctx.sessionManager);
+          const excluded = new Set(proof.attemptedModels);
+          const resolved = resolveForTier(ctx, proof.requestedTier, undefined, false, undefined, undefined, excluded).resolution;
+          const candidate = resolved.selected;
+          const selectedTier = resolved.selectedTier ?? proof.requestedTier;
+          if (!candidate || excluded.has(modelKey(candidate)) || (proof.explicitTier && selectedTier !== proof.requestedTier)) {
+            throw new Error("Bifrost: no eligible unattempted model for this native retry.");
+          }
+          nativeTransition = { ...proof, modelKey: modelKey(candidate), selectedTier, attemptedModels: [...excluded, modelKey(candidate)] };
+          activeRouteOrigin = proof.nativeFailoverOrigin!;
+          activeRouteTier = selectedTier;
+          activeRouteRequestedTier = proof.requestedTier;
+          activeRouteExplicitTier = proof.explicitTier;
+          return candidate;
+        },
         fallback: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default, undefined, false, undefined, turnSignInExclusions).resolution.selected : undefined),
         sticky: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
@@ -3359,6 +3449,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               requestedTier: classification.tier,
               selectedTier: activeRouteTier,
               explicitTier: activeRouteExplicitTier,
+              ...(activeRouteOrigin === "automatic" || activeRouteOrigin === "explicit_tier"
+                ? { nativeFailoverOrigin: activeRouteOrigin, attemptedModels: [modelKey(model)] } : {}),
             });
           }
           if (activeRecoveryToken) {
@@ -3377,6 +3469,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           return model;
         },
         onDispatch: (model, thinkingLevel, intent) => {
+          if (nativeTransition && (!autoBoundary || !nativeFailoverCurrent(ctx, request, nativeTransition, autoBoundary))) {
+            throw new Error("Bifrost: native failover authority changed before dispatch.");
+          }
           if (classifierDispatchGuardEnabled
             && (classifierDispatchGeneration === undefined || !classifierDispatchSession
               || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
@@ -3384,6 +3479,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
           }
           const key = modelKey(model);
+          if (nativeTransition) {
+            recordAutoRouteProof(ctx.sessionManager, nativeTransition);
+            log(ctx, `Bifrost: native retry selecting ${key} (${nativeTransition.selectedTier}).`, "warning");
+          }
           debugLifecycle("virtual", "dispatch", ctx.sessionManager, correlationTurn, {
             request_correlation_id: requestCorrelationId ?? null,
             model: key,
@@ -3418,6 +3517,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             }
           };
           assertClassifierCurrent();
+          if (nativeTransition && (!autoBoundary || !nativeFailoverCurrent(ctx, currentRequest, nativeTransition, autoBoundary))) {
+            throw new Error("Bifrost: native failover authority changed before admission.");
+          }
           if (dispatchRecoveryToken) {
             const recoveryUser = dispatchRecoveryToken.userMessage.deref();
             if (!recoveryUser || !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, recoveryUser)) {
@@ -3428,7 +3530,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (!v2Active) {
             if (!isVirtualModel(model)) await claimProviderDispatch(ctx, model);
             assertClassifierCurrent();
-            if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && currentRequest.reason === "user" && autoBoundary && !isVirtualModel(model)) {
+            if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && (currentRequest.reason === "user" || nativeTransition) && autoBoundary && !isVirtualModel(model)) {
               pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
                 userEntryId: autoBoundary.entryId,
                 userMessage: new WeakRef(autoBoundary.message),
@@ -3449,7 +3551,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             terminalRouteCategory = "boundary_changed";
             throw new Error("Bifrost Auto boundary changed before admission; the turn was not sent.");
           }
-          if (currentRequest.reason === "user") {
+          if (currentRequest.reason === "user" || nativeTransition) {
             const key = modelKey(model);
             if (!activeRouteTier) throw new Error("Bifrost reliability v2 could not bind the selected model to a configured tier.");
             const receipt = v2Receipts.create({
@@ -3574,6 +3676,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           try { await finishProviderDispatch(ctx, key, undefined, false); }
           catch { log(ctx, `Bifrost could not confirm recovery-trial release for provider ${model.provider}.`, "warning"); }
           // Release only the bookkeeping this dispatch owns.
+          if (nativeTransition && autoBoundary) pendingAffinity(ctx.sessionManager)?.delete(autoBoundary.entryId);
           ownership.fail(key);
         },
         onDegrade: (model) => {
