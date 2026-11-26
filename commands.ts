@@ -147,6 +147,7 @@ function installConfigIfTierPoliciesValid(
   config: BifrostConfig,
   ctx: ExtensionContext,
   validatedReload = false,
+  reloadLog: typeof log = log,
 ): boolean {
   const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
   errors.push(...validateConfig(config).filter((issue) => issue.severity === "error"
@@ -155,7 +156,7 @@ function installConfigIfTierPoliciesValid(
   if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
   if (errors.length > 0) {
     debug("config", "reload_rejected", { category: "validation_failed", issueCount: errors.length });
-    log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
+    reloadLog(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
     return false;
   }
   const previousConfig = state.config;
@@ -183,15 +184,16 @@ function installReloadedConfig(
   state: BifrostState,
   loaded: ReturnType<typeof loadConfigForReload>,
   ctx: ExtensionContext,
+  reloadLog: typeof log = log,
 ): boolean {
   if (loaded.diagnostics.length > 0) {
     debug("config", "reload_rejected", { category: "source_invalid", issueCount: loaded.diagnostics.length });
-    log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
+    reloadLog(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
     return false;
   }
-  const installed = installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
+  const installed = installConfigIfTierPoliciesValid(state, loaded.config, ctx, true, reloadLog);
   if (installed && loaded.warnings.length > 0) {
-    log(ctx, `Bifrost config loaded with warnings: ${loaded.warnings.map(({ message }) => message).join(" ")}`, "warning");
+    reloadLog(ctx, `Bifrost config loaded with warnings: ${loaded.warnings.map(({ message }) => message).join(" ")}`, "warning");
   }
   return installed;
 }
@@ -1356,6 +1358,65 @@ function initMembershipFailureMessage(status: string, reason: string | undefined
       : "Init could not safely prepare a membership update (" + (reason ?? "unknown source state") + "); no files were changed.";
 }
 
+function installInitReloadedConfig(state: BifrostState, ctx: ExtensionContext, initLog: typeof log, receiptOnly: boolean): boolean {
+  const loaded = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (installReloadedConfig(state, loaded, ctx, initLog)) return true;
+  initLog(ctx, receiptOnly ? "Setup information was saved, but configuration could not be activated." : "Configuration was saved, but could not be activated.", "error");
+  return false;
+}
+
+function renderProbeResults(ctx: ExtensionContext, results: Awaited<ReturnType<typeof runProbe>>["results"], path: string, persisted: boolean): void {
+  const ok = results.filter((r) => r.status === "ok");
+  const errs = results.filter((r) => r.status === "error");
+  const timeouts = results.filter((r) => r.status === "timeout");
+  const skipped = results.filter((r) => r.status === "skipped");
+
+  const lines = [
+    `--- probe results (${results.length} models) ---`,
+    `  ok:      ${ok.length}`,
+    `  error:   ${errs.length}`,
+    `  timeout: ${timeouts.length}`,
+    `  skipped: ${skipped.length}`,
+    "",
+  ];
+
+  if (errs.length > 0) {
+    lines.push("errors:");
+    for (const e of errs.slice(0, 10)) {
+      lines.push(`  ${e.provider}/${e.model} — error`);
+    }
+    if (errs.length > 10) lines.push(`  ... and ${errs.length - 10} more`);
+  }
+
+  if (timeouts.length > 0) {
+    lines.push("timeouts:");
+    for (const t of timeouts) {
+      lines.push(`  ${t.provider}/${t.model}`);
+    }
+  }
+
+  lines.push("", persisted ? `full results → ${path}` : "Current probe results could not be saved.");
+  uiOutput(ctx, lines);
+
+  renderProbeNotice(ctx, ok.length, results.length, path, persisted);
+}
+
+function renderProbeNotice(ctx: ExtensionContext, okCount: number, total: number, path: string, persisted: boolean): void {
+  if (okCount < total) {
+    const message = persisted
+      ? `${okCount}/${total} models responded. Check ${path} for details.`
+      : `${okCount}/${total} models responded. Current probe results could not be saved.`;
+    if (ctx.hasUI && ctx.mode === "tui") initNotice(ctx, "Probe", message, "warning");
+    else log(ctx, message, "warning");
+  } else if (okCount > 0) {
+    const message = persisted
+      ? `All ${okCount} models responded successfully.`
+      : `All ${okCount} models responded successfully. Current probe results could not be saved.`;
+    if (ctx.hasUI && ctx.mode === "tui") initNotice(ctx, "Probe", message, persisted ? "success" : "warning");
+    else log(ctx, message, persisted ? "info" : "warning");
+  }
+}
+
 async function handleInitInner(
   args: string,
   ctx: ExtensionContext,
@@ -1885,8 +1946,7 @@ async function handleInitInner(
   }
 
   // Auto-reload so the extension picks up the new config immediately.
-  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
-  if (!installReloadedConfig(state, loadedConfig, ctx)) return;
+  if (!installInitReloadedConfig(state, ctx, initLog, receiptOnly)) return;
   const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
     enabled: state.config.enabled ?? true,
     pinned: false,
@@ -3506,7 +3566,7 @@ export function createCommandRouter(
         log(ctx, "Probe was cancelled; partial results were not saved.", "warning");
         return;
       }
-      const { results, path } = probeRun;
+      const { results, path, persisted } = probeRun;
       state.reliabilityStore.applyOutcomes(
         results.map((r) =>
           r.status === "ok"
@@ -3516,47 +3576,7 @@ export function createCommandRouter(
         Date.now()
       );
 
-      const ok = results.filter((r) => r.status === "ok");
-      const errs = results.filter((r) => r.status === "error");
-      const timeouts = results.filter((r) => r.status === "timeout");
-      const skipped = results.filter((r) => r.status === "skipped");
-
-      const lines = [
-        `--- probe results (${results.length} models) ---`,
-        `  ok:      ${ok.length}`,
-        `  error:   ${errs.length}`,
-        `  timeout: ${timeouts.length}`,
-        `  skipped: ${skipped.length}`,
-        "",
-      ];
-
-      if (errs.length > 0) {
-        lines.push("errors:");
-        for (const e of errs.slice(0, 10)) {
-          lines.push(`  ${e.provider}/${e.model} — error`);
-        }
-        if (errs.length > 10) lines.push(`  ... and ${errs.length - 10} more`);
-      }
-
-      if (timeouts.length > 0) {
-        lines.push("timeouts:");
-        for (const t of timeouts) {
-          lines.push(`  ${t.provider}/${t.model}`);
-        }
-      }
-
-      lines.push("", `full results → ${path}`);
-      uiOutput(ctx, lines);
-
-      if (ok.length < results.length) {
-        const message = `${ok.length}/${results.length} models responded. Check ${path} for details.`;
-        if (ctx.hasUI && ctx.mode === "tui") initNotice(ctx, "Probe", message, "warning");
-        else log(ctx, message, "warning");
-      } else if (ok.length > 0) {
-        const message = `All ${ok.length} models responded successfully.`;
-        if (ctx.hasUI && ctx.mode === "tui") initNotice(ctx, "Probe", message, "success");
-        else log(ctx, message);
-      }
+      renderProbeResults(ctx, results, path, persisted);
 
       // Clear the probe widget so results don't persist in the TUI.
       if (ctx.hasUI) {

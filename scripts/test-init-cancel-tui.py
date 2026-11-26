@@ -79,11 +79,11 @@ with tempfile.TemporaryDirectory(prefix='bifrost-init-cancel-') as tmp:
         before = config.read_bytes()
         ui.send(master, '/bifrost init\r')
         progress = wait('Refreshing model catalog', 'init-refresh-narrow')
-        first = next(line for line in progress.splitlines() if '◆' in line and '─' in line)
+        first = next(line for line in progress.splitlines() if '━' in line and '─' in line)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             current = '\n'.join(screen().lines())
-            lines = [line for line in current.splitlines() if '◆' in line and '─' in line]
+            lines = [line for line in current.splitlines() if '━' in line and '─' in line]
             if lines and lines[0] != first:
                 break
             time.sleep(.05)

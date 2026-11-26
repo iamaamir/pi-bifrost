@@ -7,7 +7,7 @@ describe("init probe progress presentation", () => {
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
     const output = probeProgressComponent(theme, { phase: "preparing" }).render(80).join("\n");
     assert.match(output, /Refreshing model catalog/);
-    assert.match(output, /◆─{19}/);
+    assert.match(output, /━─{19}/);
     assert.doesNotMatch(output, /%|working|failed|\d+\/\d+/);
   });
 
