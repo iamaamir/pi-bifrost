@@ -1,10 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { performance } from "node:perf_hooks";
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   buildRouteDecisionSummary,
   type ClassificationResult,
@@ -1536,165 +1531,21 @@ describe("routing", () => {
     });
   });
 
-  describe("classify (regex)", () => {
-    it("returns undefined for invalid regex pattern", () => {
-      const result = classify("hello", [{ pattern: "***invalid[", model: "frontier" }]);
-      assert.equal(result, undefined);
-    });
-
-    it("precompiled matching preserves rule-order precedence across positions", () => {
-      // Rule 1 matches later in the text but must still win — guards against
-      // leftmost-first alternatives (e.g. a combined regex) changing precedence.
-      const rules = [
-        { pattern: "foo", model: "first" },
-        { pattern: "bar", model: "second" },
-      ];
-      assert.equal(classify("bar foo", rules), "first");
-      assert.equal(classifyCompiled("bar foo", compileRules(rules)), "first");
-    });
-
-    it("drops rule patterns whose backtracking explodes on a small canary", () => {
-      // Security regression: a repo-provided rule with nested quantifiers
-      // hangs the host event loop synchronously before the message is sent.
-      // compileRules must drop the rule (fail closed to later rules/default)
-      // instead of shipping a pattern that cannot run within a bounded budget.
-      const compiled = compileRules([
-        { pattern: "^(a+)+$", model: "quick" },
-        { pattern: "hello", model: "general" },
-      ]);
-      assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
-    });
-
-    it("falls back to the hosting runtime when the pinned probe binary is absent", () => {
-      // The probe pins `node` so a mutant's verdict does not depend on whichever
-      // runtime hosts the router. A host without `node` on PATH must still
-      // verify rules rather than dropping them.
-      //
-      // The pattern below is deliberately fresh: `compileRules` caches verdicts,
-      // and a pattern another test already verified would be skipped instead of
-      // probed, making this assertion vacuous. A probe failure is fail-closed, so
-      // without the fallback this rule would be dropped and the assertion fails.
-      const previous = process.env.BIFROST_PROBE_NODE;
-      process.env.BIFROST_PROBE_NODE = join(tmpdir(), "bifrost-no-such-node-binary");
-      try {
-        const compiled = compileRules([{ pattern: "fallback-probe-pattern", model: "general" }]);
-        assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
-      } finally {
-        if (previous === undefined) delete process.env.BIFROST_PROBE_NODE;
-        else process.env.BIFROST_PROBE_NODE = previous;
-      }
-    });
-
-    it("does not let PATH choose the probe binary on a Node host", () => {
-      // The probe is a security control: its verdict decides whether a rule can
-      // run. Resolving `node` through PATH let anyone who controls the
-      // environment substitute a binary that answers "safe" for every pattern.
-      // Under Node the hosting binary is the production engine and is used
-      // directly; under Bun there is no Node binary to reuse, so the lookup
-      // stays and this test does not apply.
-      if ((process.versions as Record<string, string | undefined>).bun) return;
-      const dir = mkdtempSync(join(tmpdir(), "bifrost-probe-path-"));
-      const marker = join(dir, "executed");
-      writeFileSync(join(dir, "node"), `#!/bin/sh\ntouch '${marker}'\ncat >/dev/null\necho 0\n`, { mode: 0o755 });
-      const previousPath = process.env.PATH;
-      const previousOverride = process.env.BIFROST_PROBE_NODE;
-      delete process.env.BIFROST_PROBE_NODE;
-      process.env.PATH = `${dir}:${previousPath ?? ""}`;
-      try {
-        const compiled = compileRules([{ pattern: "path-substitution-probe-pattern", model: "general" }]);
-        assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
-        assert.equal(existsSync(marker), false, "the probe executed a binary resolved through PATH");
-      } finally {
-        process.env.PATH = previousPath;
-        if (previousOverride === undefined) delete process.env.BIFROST_PROBE_NODE;
-        else process.env.BIFROST_PROBE_NODE = previousOverride;
-        rmSync(dir, { recursive: true, force: true });
-      }
-    });
-
-    it("parity path drops the same catastrophic pattern", () => {
-      const rules = [{ pattern: "^(a+)+$", model: "quick" }];
-      assert.equal(classify("a".repeat(24) + "b", rules), undefined);
-      assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
-    });
-
-    it("reports a rejected rule once across repeated classify calls", () => {
-      // classify() runs per message, so a rejected configured rule must be
-      // diagnosed once instead of logging on every classified prompt.
-      const messages: string[] = [];
-      const originalError = console.error;
-      console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
-      try {
-        const rules = [{ pattern: "^(zz+)+$", model: "quick" }];
-        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
-        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
-      } finally {
-        console.error = originalError;
-      }
-      const reported = messages.filter((line) => line.includes("rejecting rule pattern"));
-      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking or unverifiable safety: "^(zz+)+$"']);
-    });
-
+  describe("classify (regex) compatibility", () => {
     it("still compiles every shipped default rule", () => {
       assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
     });
 
-    it("rejects lookahead-anchored catastrophic patterns without paying the long probe", () => {
-      // A lookaround can keep every earlier canary cheap and detonate the guard's
-      // own longest probe, so the probe loop must not be the only defense:
-      // this includes the nested-quantifier test even past lookahead guards.
-      const started = performance.now();
-      const compiled = compileRules([
-        { pattern: "^(?=a{26}b)(a+)+$", model: "quick" },
-        { pattern: "^(?=a{32}b)(a+)+$", model: "quick" },
-      ]);
-      assert.deepEqual(compiled, []);
-      assert.ok(performance.now() - started < 250, "rejection must not pay a long probe");
+    it("re-exports the rule engine owned by the rules capability", async () => {
+      // Runtime import, not a static one: this system-owned wiring test must not
+      // bind the module's mutation target to this whole routing suite.
+      const capability = await import(new URL("../modules/rules/rules.ts", import.meta.url).href);
+      assert.equal(classify, capability.classify);
+      assert.equal(classifyCompiled, capability.classifyCompiled);
+      assert.equal(compileRules, capability.compileRules);
+      const compiled = compileRules([{ pattern: "root-re-export", model: "general" }]);
+      assert.equal(classifyCompiled("root-re-export prompt", compiled), "general");
     });
-
-    it("bounds a disguised catastrophic rule while compiling", () => {
-      const moduleUrl = new URL("../routing.ts", import.meta.url).href;
-      const script = `const {compileRules} = await import(process.argv[1]); const rules = compileRules([{ pattern: "first literal", model: "first" }, { pattern: "^(?=a{32}b)(?:a|[a])+$", model: "quick" }, { pattern: "last literal", model: "last" }]); process.stdout.write(JSON.stringify(rules.map(rule => rule.model)));`;
-      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, moduleUrl], { encoding: "utf8", timeout: 2500, killSignal: "SIGKILL" });
-      assert.equal(result.error, undefined, `compilation must finish: ${result.error}`);
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(JSON.parse(result.stdout), ["first", "last"]);
-    });
-
-    it("rejects deterministic-free catastrophic alternations without exec", () => {
-      // (a|aa)+ explodes through branch prefix-overlap, not nested quantifiers.
-      const compiled = compileRules([
-        { pattern: "^((a|aa)+)b", model: "quick" },
-        { pattern: "^(a+)+$", model: "quick" },
-        { pattern: "(?:ab?)+c", model: "quick" },
-      ]);
-      assert.deepEqual(compiled, []);
-    });
-
-    it("accepts lazy fixed repeats and still rejects lazy variable repeats", () => {
-      const safe = compileRules([{ pattern: "^(?:[0-9]{2}?)+$", model: "quick" }]);
-      assert.equal(classifyCompiled("1234", safe), "quick");
-      assert.equal(compileRules([{ pattern: "^(?:a+?)+$", model: "quick" }]).length, 0);
-    });
-
-    it("keeps benign quantified rules that shuttle variable tokens safely", () => {
-      // Fixed-length repetition and non-overlapping alternations must survive
-      // the structural filter untouched.
-      const compiled = compileRules([
-        { pattern: "(\\d{2}:\\d{2})*", model: "quick" },
-        { pattern: "class(?:room|rooms)?", model: "quick" },
-        { pattern: "(foo|bar)+", model: "quick" },
-        { pattern: "(a|b|c)+", model: "quick" },
-        // The `?` that opens a noncapturing group is group syntax, not an
-        // optional quantifier, so a repeated noncapturing group is as safe as
-        // its capturing equivalent and must survive the structural scan.
-        { pattern: "(?:foo)+", model: "quick" },
-        { pattern: "(?:foo|bar)+", model: "quick" },
-      ]);
-      assert.equal(compiled.length, 6);
-    });
-
-
   });
 });
 

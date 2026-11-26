@@ -1,4 +1,5 @@
-import { classifyCompiled, compileRules, type CandidateDiscoveryExclusion, type CompiledRule, type RouteRule, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions, type UnresolvedCandidatePattern } from "./routing.ts";
+import { classifyCompiled, compileRules, type CompiledRule, type RouteRule } from "./modules/rules/rules.ts";
+import { type CandidateDiscoveryExclusion, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions, type UnresolvedCandidatePattern } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 import type { EconomicCandidateEvaluation } from "./routing.ts";

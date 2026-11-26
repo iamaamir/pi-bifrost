@@ -44,6 +44,13 @@ export const TARGETS = {
   // routing.ts keeps its target for the surrounding resolver and rule policy.
   // Measured: 52 mutants in 1.77s on this host -> 0.034 s/mutant.
   "modules/strategies/selection.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.034 },
+  // Issue #273: the route-rule engine moved out of routing.ts, so the focused
+  // suites that own compilation and verification must measure the moved code.
+  // routing.ts keeps its target for the resolver and rule-adjacent policy.
+  // Measured on this host: rules.ts 29 mutants in 9s -> 0.31 s/mutant;
+  // safety.ts 399 mutants in 3m30s -> 0.53 s/mutant (TAP: production engine).
+  "modules/rules/rules.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.31 },
+  "modules/rules/safety.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.53 },
   // A gate script, not a product module. Its bound tests cover the structural
   // rule scope, the duplication threshold, and the parsers that turn tool
   // output into findings. A mutant survives when a gate stops failing a tree it
@@ -134,8 +141,10 @@ export const MUTANT_ESTIMATE = {
   "inline-override.ts": 21,
   "reliability.ts": 352,
   "reliability-v2.ts": 2447,
-  "routing.ts": 1000,
+  "routing.ts": 606,
   "modules/strategies/selection.ts": 52,
+  "modules/rules/rules.ts": 29,
+  "modules/rules/safety.ts": 399,
   "scripts/toolbox.mjs": 855,
 };
 
@@ -228,7 +237,12 @@ export const IN_PLACE_TARGETS = new Set(["scripts/toolbox.mjs"]);
  * by editing a private source copy, so it runs on both runtimes.
  */
 
+const RULE_ENGINE_RUNNER_REASON =
+  "its rule tests deliberately let a catastrophic regex run in-process when a mutant bypasses the backtracking probe, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). A verdict on that code is only faithful under the production engine, so this module runs on Node.";
+
 export const RUNNER_OVERRIDES = {
+  "modules/rules/rules.ts": { runner: "tap", reason: RULE_ENGINE_RUNNER_REASON },
+  "modules/rules/safety.ts": { runner: "tap", reason: RULE_ENGINE_RUNNER_REASON },
   "routing.ts": {
     runner: "tap",
     reason:

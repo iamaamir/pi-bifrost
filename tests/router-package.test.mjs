@@ -296,6 +296,7 @@ describe("packed experimental router consumer", () => {
         const piExtension = await jiti.import("pi-bifrost/index.ts");
         assert.equal(typeof piExtension.default, "function");
         const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
+        const largeModel = { provider: "fixture", id: "large", cost: { input: 0.3, output: 0.4 }, contextWindow: 64000 };
         const router = createRouter({
           config: { models: { quick: ["fixture/small"] }, default: "quick", strategy: "first", rules: [] },
           registry: { knownModels: [model], availableModels: [model] }, now: 1000,
@@ -304,6 +305,22 @@ describe("packed experimental router consumer", () => {
         assert.equal(result.status, "completed");
         assert.equal(result.decision.selected, "fixture/small");
         assert.equal(result.asOf, 1000);
+        // Nonempty route rules must work through the installed package: the rule
+        // engine moved into a capability, and this is the end-to-end proof that
+        // the compiled consumer still routes on a configured regex rule.
+        const ruleRouter = createRouter({
+          config: {
+            models: { quick: ["fixture/small"], general: ["fixture/large"] },
+            default: "quick",
+            strategy: "first",
+            rules: [{ pattern: "installed-rule-request", model: "fixture/large" }],
+          },
+          registry: { knownModels: [model, largeModel], availableModels: [model, largeModel] },
+          now: 1000,
+        });
+        const ruleResult = await ruleRouter.resolve({ prompt: "installed-rule-request please" });
+        assert.equal(ruleResult.status, "completed");
+        assert.equal(ruleResult.decision.selected, "fixture/large", "the installed consumer must route on the configured rule");
         assert.equal(existsSync(".pi/bifrost-reliability.json"), false, "resolve-only import and route do not write reliability state");
         assert.equal(import.meta.resolve("pi-bifrost/inline-override.ts").endsWith("/inline-override.ts"), true);
 
