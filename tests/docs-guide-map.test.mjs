@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GUIDE = "docs/guide";
 const FORMS = ["Tutorial", "How-to", "Reference", "Explanation"];
+// The guide index is navigation, not one of the four forms. It may declare this
+// narrow hybrid label; no substantive page may use it to escape classification.
+const HYBRID = "Navigational (hybrid)";
+const HYBRID_PAGES = new Set([`${GUIDE}/index.md`]);
 const MAP_HEADING = /^## Guide map\s*$/u;
 
 function guidePages(files) {
@@ -71,7 +75,8 @@ function mapProblems({ pages, markdown }) {
       problems.push(`${GUIDE}/index.md: ${row.target} has more than one form`);
     }
     seen.add(file);
-    if (!FORMS.includes(row.form)) {
+    const hybridAllowed = HYBRID_PAGES.has(file) && row.form === HYBRID;
+    if (!FORMS.includes(row.form) && !hybridAllowed) {
       problems.push(`${GUIDE}/index.md: ${row.target} uses unknown form ${JSON.stringify(row.form)}`);
     }
     if (row.task === "") {
@@ -120,6 +125,16 @@ test("fault control: a missing page, a duplicate, a bad form, and a missing map 
     mapProblems({ pages, markdown: markdown.replace("| [Task](task.md) | How-to |", "| [Task](task.md) | Tutorial |") }),
     [],
     "another valid form is accepted",
+  );
+  assert.deepEqual(
+    mapProblems({ pages, markdown: markdown.replace("| [Index](index.md) | Explanation |", "| [Index](index.md) | Navigational (hybrid) |") }),
+    [],
+    "the guide index may declare the narrow hybrid form",
+  );
+  assert.deepEqual(
+    mapProblems({ pages, markdown: markdown.replace("| [Task](task.md) | How-to |", "| [Task](task.md) | Navigational (hybrid) |") }),
+    [`${GUIDE}/index.md: task.md uses unknown form "Navigational (hybrid)"`],
+    "the hybrid label must not become a general escape",
   );
   assert.deepEqual(
     mapProblems({ pages, markdown: markdown.replace("| [Task](task.md) | How-to |", "| [Task](task.md) | Policy |") }),
