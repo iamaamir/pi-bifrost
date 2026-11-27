@@ -5,6 +5,7 @@ export interface ExpandableRow {
   readonly id: string;
   readonly label: string;
   readonly detail?: string;
+  readonly warning?: boolean;
   readonly children?: readonly ExpandableRow[];
 }
 
@@ -48,7 +49,7 @@ export class ExpandableRows {
     this.lastHeight = 0;
   }
 
-  render(width: number): string[] {
+  render(width: number, pad = true): string[] {
     const { rows } = this.size();
     const height = Math.max(1, rows - 2);
     if (width !== this.lastWidth || height !== this.lastHeight) {
@@ -60,7 +61,8 @@ export class ExpandableRows {
     if (!this.wrappedLines.length) this.wrappedLines = this.visible.flatMap(({ row, depth }, index) => {
       this.rowStarts[index] = index ? this.rowStarts[index - 1]! + this.wrappedLineCounts[index - 1]! : 0;
       const marker = row.children?.length ? (this.expanded.has(row.id) ? "▾ " : "▸ ") : "  ";
-      const prefix = `${"  ".repeat(depth)}${marker}`;
+      const indent = Math.min(depth, Math.floor(Math.max(0, width - 14) / 2));
+      const prefix = `${"  ".repeat(indent)}${marker}`;
       const text = `${row.label}${row.detail ? `  ${row.detail}` : ""}`;
       const available = Math.max(1, width - visibleWidth(prefix) - 2);
       const wrapped = wrapCells(text, available);
@@ -86,9 +88,9 @@ export class ExpandableRows {
     const visible = lines.slice(this.offset, this.offset + height).map((line) => {
       const selected = line.rowIndex === this.selected;
       const marker = line.part === 0 && selected ? "› " : "  ";
-      return this.theme.fg(selected ? "accent" : "text", `${marker}${line.prefix}${line.text}`);
+      return this.theme.fg(selected ? "accent" : this.visible[line.rowIndex]?.row.warning ? "warning" : "text", `${marker}${line.prefix}${line.text}`);
     });
-    return [...visible, ...Array.from({ length: Math.max(0, height - visible.length) }, () => "")];
+    return pad ? [...visible, ...Array.from({ length: Math.max(0, height - visible.length) }, () => "")] : visible;
   }
 
   handleInput(data: string): void {
