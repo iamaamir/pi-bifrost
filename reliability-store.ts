@@ -83,9 +83,9 @@ export class ReliabilityStore {
 
   // ── Intent-only writes (config read from store internally) ──
 
-  recordFailure(model: string, source: ReliabilitySource, reason: string, now?: number, observation?: FailureObservation): boolean {
+  recordFailure(model: string, source: ReliabilitySource, reason: string, now?: number, observation?: FailureObservation, allowanceExhaustion?: FailureObservation): boolean {
     if (this.configValue?.enabled === false) return false;
-    this.stateValue = recordModelFailure(this.stateValue, model, this.configValue, now ?? this.nowFn(), source, reason, observation);
+    this.stateValue = recordModelFailure(this.stateValue, model, this.configValue, now ?? this.nowFn(), source, reason, observation, allowanceExhaustion);
     return this.persist();
   }
 

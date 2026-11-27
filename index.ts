@@ -2081,6 +2081,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         "agent_settled",
         observation.category === "billing_denied" ? "billing_denied" : "allowance_exhausted",
         undefined,
+        observation,
         state.config.reliability?.allowanceCooldownScope === "model" ? observation : undefined,
       );
       if (!saved) {
@@ -4046,6 +4047,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           "agent_settled",
           allowanceObservation ? "allowance_exhausted" : outcome.reason ?? "provider request failed",
           undefined,
+          outcome.failureObservation,
           allowanceObservation && state.config.reliability?.allowanceCooldownScope === "model"
             ? allowanceObservation : undefined,
         );

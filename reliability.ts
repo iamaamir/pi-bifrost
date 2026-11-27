@@ -143,14 +143,16 @@ export function recordModelFailure(
   now: number,
   source: string,
   reason: string,
-  observation?: FailureObservation,
+  _observation?: FailureObservation,
+  allowanceExhaustion?: FailureObservation,
 ): ReliabilityState {
   const resolved = resolveReliabilityConfig(config);
   if (!resolved.enabled) return state;
 
   const current = state.models[model] ?? { failures: [] };
-  const normalizedObservation = observation && isNormalizedFailureObservation(observation, { now })
-    ? observation : undefined;
+  // A diagnostic alone is never an instruction to impose an immediate cooldown.
+  const normalizedObservation = allowanceExhaustion && isNormalizedFailureObservation(allowanceExhaustion, { now })
+    ? allowanceExhaustion : undefined;
   const boundAllowanceObservation = normalizedObservation
     && (normalizedObservation.category === "allowance_exhausted" || normalizedObservation.category === "billing_denied")
     && normalizedObservation.source === "runtime"

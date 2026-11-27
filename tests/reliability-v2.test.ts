@@ -371,7 +371,7 @@ describe("experimental reliability v2 transitions", () => {
     }, { now: 2 })!;
     const opened = settleReliabilityV2Dispatch(initial.state, {
       ownerToken: "owner-legacy-quota", dispatchId: "dispatch-legacy-quota", outcomeId: "outcome-legacy-quota",
-      settlement: { kind: "failure", observation }, now: 3,
+      settlement: { kind: "failure", observation, allowanceExhaustion: observation }, now: 3,
     }, config);
     const marker = { modelKey: modelA, openUntil: 13, generation: 1, observedAt: 2 };
     assert.equal(opened.state.scopes[modelScopeKey(modelA)]?.openUntil, marker.openUntil);
@@ -400,7 +400,7 @@ describe("experimental reliability v2 transitions", () => {
     }, { now: 2 })!;
     const settled = settleReliabilityV2Dispatch(admitted.state, {
       ownerToken: "owner-allowance", dispatchId: "dispatch-allowance", outcomeId: "outcome-allowance",
-      settlement: { kind: "failure", observation: allowance }, now: 3,
+      settlement: { kind: "failure", observation: allowance, allowanceExhaustion: allowance }, now: 3,
     }, policy);
     assert.equal(settled.status, "settled");
     assert.equal(scope(settled.state).openUntil, 60_003,
@@ -415,7 +415,7 @@ describe("experimental reliability v2 transitions", () => {
     }, { now: 2 })!;
     const billingSettled = settleReliabilityV2Dispatch(billingAdmitted.state, {
       ownerToken: "owner-billing", dispatchId: "dispatch-billing", outcomeId: "outcome-billing",
-      settlement: { kind: "failure", observation: billingDenied }, now: 3,
+      settlement: { kind: "failure", observation: billingDenied, allowanceExhaustion: billingDenied }, now: 3,
     }, policy);
     assert.equal(billingDenied.category, "billing_denied");
     assert.equal(scope(billingSettled.state).openUntil, 60_003,
@@ -443,7 +443,7 @@ describe("experimental reliability v2 transitions", () => {
     }, { now: 2 })!;
     const optedSettled = settleReliabilityV2Dispatch(optedAdmitted.state, {
       ownerToken: "owner-opt-out", dispatchId: "dispatch-opt-out", outcomeId: "outcome-opt-out",
-      settlement: { kind: "failure", observation: optedObservation }, now: 3,
+      settlement: { kind: "failure", observation: optedObservation, allowanceExhaustion: optedObservation }, now: 3,
     }, optOutConfig);
     assert.equal(scope(optedSettled.state).openUntil, undefined);
 

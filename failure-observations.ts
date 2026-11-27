@@ -190,6 +190,13 @@ function anchoredHttpStatus(text: string): number | undefined {
   return match ? Number(match[1] ?? match[2]) : undefined;
 }
 
+// A leading server-error status in Pi's flattened error message is only a
+// veto of a stronger action, not an authenticated transport fact.
+function serverStatusHint(text: string): number | undefined {
+  const match = /^\s*(?:error:\s*)?(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status\s*[:=]\s*)?(5\d\d))(?=\s|:|$)/i.exec(text);
+  return match ? Number(match[1]) : undefined;
+}
+
 function semanticErrorCodeCategory(input: DataRecord): FailureCategory | undefined {
   const error = asDataRecord(ownValue(input, "error"));
   const code = error ? ownValue(error, "code") : undefined;
@@ -243,6 +250,40 @@ function textCategory(text: string): FailureCategory | undefined {
   return undefined;
 }
 
+type CategoryInterpretation = Pick<FailureObservation, "category" | "categoryEvidence">;
+
+function categoryWithEvidence(category: FailureCategory | undefined, evidence: CategoryEvidence): CategoryInterpretation {
+  return category === undefined ? { category: "unknown", categoryEvidence: "unknown" }
+    : { category, categoryEvidence: evidence };
+}
+
+function isPenaltyCategory(category: FailureCategory | undefined): boolean {
+  return category === "allowance_exhausted" || category === "billing_denied" || category === "rate_limit";
+}
+
+function interpretCategory(input: DataRecord, structured: DataRecord | undefined): CategoryInterpretation {
+  const trustedCategory = structured ? categoryValue(ownValue(structured, "category")) : undefined;
+  const failureText = textFromRawFields(input);
+  const rawStatus = structured ? ownValue(structured, "httpStatus") : undefined;
+  const numericStatus = typeof rawStatus === "number" && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
+    ? rawStatus : undefined;
+  const serverStatus = numericStatus ?? serverStatusHint(failureText);
+  if (serverStatus !== undefined && serverStatus >= 500) {
+    // Neither contradictory quota prose nor a rate-only code warrants an
+    // immediate penalty for a server error. Preserve non-penalty diagnostics.
+    if (trustedCategory && !isPenaltyCategory(trustedCategory)) return categoryWithEvidence(trustedCategory, "structured");
+    return categoryWithEvidence(statusCategory(serverStatus), numericStatus === undefined ? "text_heuristic" : "http_status");
+  }
+
+  if (trustedCategory) return categoryWithEvidence(trustedCategory, "structured");
+  const status = statusCategory(numericStatus ?? anchoredHttpStatus(failureText));
+  const inferred = textCategory(failureText);
+  const flattenedCode = semanticErrorCodeCategory(input);
+  if (status === "rate_limit" && inferred === "allowance_exhausted") return categoryWithEvidence(inferred, "text_heuristic");
+  if (status) return categoryWithEvidence(status, numericStatus === undefined ? "text_heuristic" : "http_status");
+  return categoryWithEvidence(flattenedCode ?? inferred, "text_heuristic");
+}
+
 function normalizeRetryAt(value: unknown, observedAt: number, category: FailureCategory): number | undefined {
   if (value === undefined) return undefined;
   if (!validTimestamp(value)) return undefined;
@@ -257,7 +298,8 @@ function normalizeRetryAt(value: unknown, observedAt: number, category: FailureC
 
 /**
  * Normalize an untrusted dispatch failure to privacy-safe, model-only evidence.
- * Structured category wins over HTTP status, which wins over advisory text hints.
+ * Known server errors and qualified status-shaped hints veto stronger penalty categories.
+ * Other structured categories precede HTTP status and advisory text hints.
  * Unknown shapes or invalid identity/clock fields produce no observation.
  */
 export function normalizeFailureObservation(
@@ -285,26 +327,7 @@ export function normalizeFailureObservation(
   if (observedAt > now) return undefined;
 
   const structured = asDataRecord(ownValue(input, "structured"));
-  const structuredCategory = (structured ? categoryValue(ownValue(structured, "category")) : undefined)
-    ?? semanticErrorCodeCategory(input);
-  const failureText = textFromRawFields(input);
-  const rawStatus = structured ? ownValue(structured, "httpStatus") : undefined;
-  const hasStructuredStatus = typeof rawStatus === "number" && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599;
-  // Status-shaped text is still provider error text. Only an adapter-supplied
-  // numeric status is authoritative transport evidence.
-  const status = hasStructuredStatus ? statusCategory(rawStatus) : statusCategory(anchoredHttpStatus(failureText));
-  const categoryFromText = textCategory(failureText);
-  const quotaTextOverrides429 = status === "rate_limit" && categoryFromText === "allowance_exhausted";
-  const category = structuredCategory ?? (quotaTextOverrides429 ? categoryFromText : status ?? categoryFromText) ?? "unknown";
-  const categoryEvidence: CategoryEvidence = structuredCategory
-    ? "structured"
-    : quotaTextOverrides429
-      ? "text_heuristic"
-    : status
-      ? hasStructuredStatus ? "http_status" : "text_heuristic"
-      : categoryFromText
-        ? "text_heuristic"
-        : "unknown";
+  const { category, categoryEvidence } = interpretCategory(input, structured);
   const retryAt = normalizeRetryAt(
     structured ? ownValue(structured, "retryAt") : undefined,
     observedAt,

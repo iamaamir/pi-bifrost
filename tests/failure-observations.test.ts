@@ -62,11 +62,12 @@ describe("failure observation normalization", () => {
   });
 
   it("does not override an explicit non-429 status with conflicting error text", () => {
-    for (const httpStatus of [200, 500]) {
-      const observation = normalizeFailureObservation({ ...base, structured: { httpStatus }, errorText: "429 Too many requests" }, { now: 1000 });
-      assert.equal(observation?.category, "rate_limit");
-      assert.equal(observation?.categoryEvidence, "text_heuristic");
-    }
+    const ok = normalizeFailureObservation({ ...base, structured: { httpStatus: 200 }, errorText: "429 Too many requests" }, { now: 1000 });
+    assert.equal(ok?.category, "rate_limit");
+    assert.equal(ok?.categoryEvidence, "text_heuristic");
+    const server = normalizeFailureObservation({ ...base, structured: { httpStatus: 500 }, errorText: "429 Too many requests" }, { now: 1000 });
+    assert.equal(server?.category, "unknown");
+    assert.equal(server?.categoryEvidence, "unknown");
   });
 
   it("keeps ambiguous Pi-formatted 429 text as a heuristic", () => {
@@ -142,20 +143,20 @@ describe("failure observation normalization", () => {
     for (const code of ["usage_limit_reached", "insufficient_quota"]) {
       const observation = normalizeFailureObservation({ ...base, error: { code } }, { now: 1000 });
       assert.equal(observation?.category, "allowance_exhausted", code);
-      assert.equal(observation?.categoryEvidence, "structured", code);
+      assert.equal(observation?.categoryEvidence, "text_heuristic", code);
       assert.equal(JSON.stringify(observation).includes(code), false);
     }
 
     const rateLimitCode = normalizeFailureObservation({ ...base, error: { code: "rate_limit_exceeded" } }, { now: 1000 });
     assert.equal(rateLimitCode?.category, "rate_limit");
-    assert.equal(rateLimitCode?.categoryEvidence, "structured");
+    assert.equal(rateLimitCode?.categoryEvidence, "text_heuristic");
 
     const friendlyRateLimit = normalizeFailureObservation({
       ...base,
       error: { code: "rate_limit_exceeded", message: "You have hit your ChatGPT usage limit" },
     }, { now: 1000 });
     assert.equal(friendlyRateLimit?.category, "rate_limit");
-    assert.equal(friendlyRateLimit?.categoryEvidence, "structured");
+    assert.equal(friendlyRateLimit?.categoryEvidence, "text_heuristic");
 
     const explicitRateLimit = normalizeFailureObservation({
       ...base,
@@ -190,6 +191,31 @@ describe("failure observation normalization", () => {
     const structuredWins = normalizeFailureObservation({ ...base, structured: { httpStatus: 402 }, errorText: "429: too many requests" }, { now: 1000 });
     assert.equal(structuredWins?.category, "billing_denied");
     assert.equal(structuredWins?.categoryEvidence, "http_status");
+  });
+
+  it("vetoes stronger penalty categories for known and leading inferred server failures", () => {
+    for (const status of [500, 503]) {
+      const expected = status === 503 ? "overload" : "unknown";
+      for (const input of [
+        { structured: { httpStatus: status, category: "allowance_exhausted" }, errorText: "quota exhausted" },
+        { structured: { httpStatus: status }, error: { code: "rate_limit_exceeded", message: "quota exhausted" } },
+        { errorText: `${status} {"error":{"code":"rate_limit_exceeded","message":"quota exhausted"}}` },
+      ]) {
+        const observation = normalizeFailureObservation({ ...base, ...input }, { now: 1000 });
+        assert.equal(observation?.category, expected);
+        assert.equal(isNormalizedFailureObservation(observation, { now: 1000 }), true);
+        if (!("structured" in input)) assert.notEqual(observation?.categoryEvidence, "http_status");
+      }
+    }
+    const rate = normalizeFailureObservation({ ...base,
+      structured: { httpStatus: 429, category: "rate_limit" }, errorText: "quota exhausted",
+    }, { now: 1000 });
+    assert.equal(rate?.category, "rate_limit", "trusted rate-only category vetoes quota promotion");
+    const compatible = normalizeFailureObservation({ ...base,
+      structured: { httpStatus: 429 }, errorText: "quota exhausted",
+    }, { now: 1000 });
+    assert.equal(compatible?.category, "allowance_exhausted");
+    assert.equal(compatible?.categoryEvidence, "text_heuristic");
   });
 
   it("keeps HTTP 429 and 503 model-scoped and ignores supplied broader scopes", () => {
