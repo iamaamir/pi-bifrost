@@ -391,3 +391,26 @@ export function providerPauseIntent(
   }
   return undefined;
 }
+
+
+/** Qualify the legacy terminal allowance path without claiming transport receipt.
+ * The adapter must supply an owned terminal failure, not merely a diagnostic.
+ * The effect owner still checks its current policy, receipt and lifecycle.
+ */
+export function runtimeAllowanceEvidence(
+  observation: FailureObservation | undefined,
+  context: {
+    modelKey: string;
+    outcomeId?: string;
+    attribution: "provider-response" | "legacy-terminal" | "unconfirmed";
+    now: number;
+  },
+): FailureObservation | undefined {
+  if (context.attribution === "unconfirmed"
+    || !isNormalizedFailureObservation(observation, { now: context.now })
+    || observation.source !== "runtime" || observation.modelKey !== context.modelKey
+    || (context.outcomeId !== undefined && observation.outcomeId !== context.outcomeId)) return undefined;
+  if (observation.category !== "allowance_exhausted" && observation.category !== "billing_denied") return undefined;
+  if (context.attribution === "legacy-terminal" && observation.categoryEvidence !== "text_heuristic") return undefined;
+  return observation;
+}

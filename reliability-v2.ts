@@ -1144,6 +1144,9 @@ export function settleReliabilityV2Dispatch(
     || settlement.kind !== "failure")) {
     return noChange("invalid", "invalid_allowance_exhaustion_binding", checked.state);
   }
+  if (allowanceEvidence && observation && !sameObservationSummary(allowanceEvidence, observation)) {
+    return noChange("invalid", "allowance_observation_mismatch", checked.state);
+  }
   const priorOutcome = mapValue(checked.state.settledOutcomes, outcomeId);
   if (priorOutcome && priorOutcome.expiresAt >= checked.now) {
     if (!sameObservationSummary(priorOutcome.observation, observation)) {

@@ -1,5 +1,5 @@
 import { dispatchTrialPolicy, type DispatchIntent } from "./virtual-routing.ts";
-import type { FailureObservation } from "./failure-observations.ts";
+import { runtimeAllowanceEvidence, type FailureObservation } from "./failure-observations.ts";
 
 interface AssistantOutcome {
   role?: unknown;
@@ -20,6 +20,7 @@ export interface RuntimeFailure {
   outcome: "success" | "failure" | "abandoned";
   reason?: string;
   failureObservation?: FailureObservation;
+  allowanceEvidence?: FailureObservation;
 }
 
 const SUCCESS_STOP_REASONS = new Set(["stop", "length", "toolUse"]);
@@ -116,11 +117,15 @@ export class RuntimeReliabilityTracker {
             && candidate.source === "runtime" && candidate.scope.kind === "model"
             && candidate.scope.modelKey === model) failureObservation = candidate;
         } catch { /* failure classification cannot change host settlement */ }
+        const allowanceEvidence = runtimeAllowanceEvidence(failureObservation, {
+          modelKey: model, attribution: "legacy-terminal", now: Date.now(),
+        });
         this.pending.set(model, {
           model,
           outcome: "failure",
           reason: "provider request failed",
           ...(failureObservation ? { failureObservation } : {}),
+          ...(allowanceEvidence ? { allowanceEvidence } : {}),
         });
       } else if (typeof last.stopReason === "string" && SUCCESS_STOP_REASONS.has(last.stopReason)) {
         this.pending.set(model, { model, outcome: "success" });

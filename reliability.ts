@@ -154,6 +154,7 @@ export function recordModelFailure(
   const normalizedObservation = allowanceExhaustion && isNormalizedFailureObservation(allowanceExhaustion, { now })
     ? allowanceExhaustion : undefined;
   const boundAllowanceObservation = normalizedObservation
+    && source === "agent_settled"
     && (normalizedObservation.category === "allowance_exhausted" || normalizedObservation.category === "billing_denied")
     && normalizedObservation.source === "runtime"
     && normalizedObservation.modelKey === model

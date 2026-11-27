@@ -79,6 +79,7 @@ export interface AutoDispatchReceipt {
   providerTrialClaim?: import("./provider-cooldowns.ts").ProviderTrialClaim;
   outcome: V2ReceiptOutcome;
   failureObservation?: FailureObservation;
+  allowanceEvidence?: FailureObservation;
   assistantEntryId?: string;
   successObservedAt?: number;
   renewalFailed: boolean;
