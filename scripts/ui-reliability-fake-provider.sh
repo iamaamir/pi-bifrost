@@ -19,7 +19,7 @@ export AGENT_TUI_SOCKET="$tmp/a.sock" AGENT_TUI_SESSION_STORE="$tmp/s.jsonl" AGE
 cleanup(){ "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true; kill "$server" 2>/dev/null||true; [[ "${KEEP:-}" == 1 ]] || rm -rf "$tmp"; }; trap cleanup EXIT
 
 poll_until(){ local path="$1" needle="$2" max="${3:-60}"; for _ in $(seq 1 "$max"); do [[ -f "$path" ]] && grep -q "$needle" "$path" && return 0; sleep 1; done; echo "timed out" >&2; return 1; }
-start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "HOME=$home" --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" --env "PI_OFFLINE=1" --env "NODE_OPTIONS=--require=$ROOT/scripts/test-outbound-guard.cjs" --env "BIFROST_TEST_ALLOWED_ORIGIN=http://127.0.0.1:$port" --env "BIFROST_TEST_NETWORK_VIOLATIONS=$tmp/test-network-violations.log" -- "$PI" -e "$ROOT" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
+start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "HOME=$home" --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" --env "PI_OFFLINE=1" --env "NODE_OPTIONS=--require=$ROOT/scripts/test-outbound-guard.cjs" --env "BIFROST_TEST_ALLOWED_ORIGIN=http://127.0.0.1:$port" --env "BIFROST_TEST_NETWORK_VIOLATIONS=$tmp/test-network-violations.log" -- "$PI" -e "$ROOT" "$@" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
 prompt(){ "$A" --session "$1" type "$2" >/dev/null; "$A" --session "$1" press Escape Enter >/dev/null; }
 
 wait_mode_state(){
@@ -141,64 +141,108 @@ echo 'scenario 5: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
 # ── Scenario 6: steer-queued prompts dispatch and settle within one run ──
-echo '--- scenario 6: queued multi-dispatch settlement ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json" "$work/.pi/bifrost-debug.jsonl"
-cat >"$home/.pi/agent/models.json" <<EOF
+# Use the existing fake-provider gate to keep the first request active while
+# entering steer prompts. Native lifecycle events, not elapsed time, prove
+# whether the messages shared the same run.
+observer="$ROOT/tests/fixtures/ui-reliability-run-observer.mjs"
+proof="$ROOT/tests/fixtures/ui-reliability-run-proof.mjs"
+
+generation_gate(){
+  curl -fsS --max-time 5 -X POST "http://127.0.0.1:$port/_generation-gate/$1?model=slow" >/dev/null
+}
+
+wait_settled_count(){
+  local expected="$1"
+  for _ in $(seq 1 60); do
+    if [[ -f "$work/.pi/ui-run.jsonl" ]] &&
+       [[ $(grep -c '"type":"settled"' "$work/.pi/ui-run.jsonl" || true) -ge "$expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "FAIL: native settlement $expected not observed" >&2
+  cat "$work/.pi/ui-run.jsonl" >&2 || true
+  return 1
+}
+
+wait_held_generation(){
+  for _ in $(seq 1 60); do
+    curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/current-stats.json"
+    if node -e '
+const fs = require("node:fs");
+const [before, current] = process.argv.slice(1).map((path) => JSON.parse(fs.readFileSync(path)));
+if (!current.stats.slice(before.stats.length).some((stat) => stat.kind === "generation" && stat.model === "slow" && !stat.completed)) process.exit(1);
+' "$work/before.json" "$work/current-stats.json"; then return 0; fi
+    sleep 1
+  done
+  echo 'FAIL: held initial generation not observed' >&2
+  return 1
+}
+
+run_multi_dispatch(){
+  local mode="$1"
+  home="$tmp/home-$mode"; work="$tmp/work-$mode"
+  mkdir -p "$home/.pi/agent" "$work/.pi"
+  cat >"$home/.pi/agent/models.json" <<EOF
 {"providers":{"fake":{"baseUrl":"http://127.0.0.1:$port/v1","api":"openai-completions","apiKey":"test","models":[{"id":"healthy","reasoning":false},{"id":"fast","reasoning":false},{"id":"strong","reasoning":false},{"id":"slow","reasoning":false}]}}}
 EOF
-cat >"$work/bifrost.json" <<'EOF'
+  echo '{"retry":{"enabled":false},"steeringMode":"one-at-a-time"}' >"$home/.pi/agent/settings.json"
+  cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"quick","strategy":"first","classifier":{"enabled":false},"reliability":{"enabled":true,"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"quick":["fake/fast"],"frontier":["fake/strong"],"hold":["fake/slow"]},"rules":[{"pattern":"hold","model":"hold"}],"debug":{"enabled":true,"path":".pi/bifrost-debug.jsonl"}}
 EOF
-# Seed an expired-cooldown circuit for fake/fast: its steer dispatch must claim
-# and settle a half-open trial inside the shared run.
-mkdir -p "$work/.pi"
-cat >"$work/.pi/bifrost-reliability.json" <<'EOF'
-{"version":1,"models":{"fake/fast":{"failures":[1],"openUntil":1,"trialActive":false}}}
-EOF
-sid=$(start_pi)
-"$A" --session "$sid" wait 'Bifrost' --assert --timeout 15000 >/dev/null
-prompt "$sid" '/model'
-"$A" --session "$sid" type 'Bifrost Auto' >/dev/null
-"$A" --session "$sid" press Enter >/dev/null
-"$A" --session "$sid" wait '(bifrost) auto' --assert --timeout 15000 >/dev/null
-prompt "$sid" 'hold please'
-sleep 1
-# Steer submissions during an active run: Enter queues (Escape would interrupt).
-"$A" --session "$sid" type 'frontier one' >/dev/null
-"$A" --session "$sid" press Enter >/dev/null
-"$A" --session "$sid" type 'quick two' >/dev/null
-"$A" --session "$sid" press Enter >/dev/null
-poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"dispatch","entryType":"event","model":"fake/fast"' 60
-grep -q '"event":"dispatch","entryType":"event","model":"fake/strong"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: steer #1 did not dispatch fake/strong' >&2; exit 1; }
-grep -q '"event":"dispatch","entryType":"event","model":"fake/slow"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: initial prompt did not dispatch fake/slow' >&2; exit 1; }
-grep -q '"event":"trial","entryType":"event","model":"fake/fast","allowed":true,"claimed":true' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: half-open trial was not claimed for fake/fast' >&2; exit 1; }
-# Dispatch is not settlement. Wait for the claimed half-open trial to record
-# a successful outcome; an abandoned trial or a failed/reopened circuit must
-# not satisfy this check. Parse JSON rather than relying on its formatting.
-settled=false
-for _ in $(seq 1 60); do
-  if node -e '
-const fs = require("node:fs");
-const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-const record = state.models?.["fake/fast"];
-if (!record || record.trialActive !== false ||
-    record.openUntil !== undefined ||
-    !Array.isArray(record.failures) || record.failures.length !== 0 ||
-    !Number.isFinite(record.lastSuccessAt) || record.lastSuccessAt <= 1) process.exit(1);
-' "$work/.pi/bifrost-reliability.json" >/dev/null 2>&1; then
-    settled=true
-    break
+  echo '{"version":1,"models":{"fake/fast":{"failures":[1],"openUntil":1,"trialActive":false}}}' >"$work/.pi/bifrost-reliability.json"
+  sid=$(start_pi -e "$observer")
+  "$A" --session "$sid" wait 'Bifrost' --assert --timeout 15000 >/dev/null
+  prompt "$sid" '/model'
+  "$A" --session "$sid" type 'Bifrost Auto' >/dev/null
+  "$A" --session "$sid" press Enter >/dev/null
+  "$A" --session "$sid" wait '(bifrost) auto' --assert --timeout 15000 >/dev/null
+  curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/before.json"
+  generation_gate hold
+  prompt "$sid" 'hold please'
+  wait_held_generation
+  if [[ "$mode" == separate ]]; then
+    generation_gate release
+    wait_settled_count 1
+    prompt "$sid" 'frontier one'
+    wait_settled_count 2
+    prompt "$sid" 'quick two'
+    wait_settled_count 3
+  else
+    "$A" --session "$sid" type 'frontier one' >/dev/null
+    "$A" --session "$sid" press Enter >/dev/null
+    if [[ "$mode" == positive ]]; then
+      "$A" --session "$sid" type 'quick two' >/dev/null
+      "$A" --session "$sid" press Enter >/dev/null
+    fi
+    generation_gate release
+    wait_settled_count 1
   fi
-  sleep 1
-done
-if [[ "$settled" != true ]]; then
-  echo 'FAIL: half-open trial did not settle successfully after multi-dispatch' >&2
-  cat "$work/.pi/bifrost-reliability.json" >&2 || true
-  tail -n 80 "$work/.pi/bifrost-debug.jsonl" >&2 || true
-  exit 1
-fi
+  # The observer runs after the Bifrost extension. Wait for its buffered debug
+  # events to become visible; do not treat dispatch or an early state as success.
+  local expected=3
+  [[ "$mode" != missing ]] || expected=2
+  for _ in $(seq 1 60); do
+    if [[ -f "$work/.pi/bifrost-debug.jsonl" ]] &&
+       [[ $(grep -c '"event":"legacy_outcome_observed"' "$work/.pi/bifrost-debug.jsonl" || true) -ge "$expected" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/after.json"
+  if ! node "$proof" "$mode" "$work" "$work/before.json" "$work/after.json"; then
+    cat "$work/.pi/ui-run.jsonl" "$work/.pi/bifrost-reliability.json" >&2 || true
+    tail -n 80 "$work/.pi/bifrost-debug.jsonl" >&2 || true
+    exit 1
+  fi
+  "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true
+  "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
+}
+echo '--- scenario 6: queued multi-dispatch settlement and runtime controls ---'
+run_multi_dispatch positive
+run_multi_dispatch missing
+run_multi_dispatch separate
 echo 'scenario 6: pass'
-"$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
 if [[ -s "$tmp/test-network-violations.log" ]]; then
   echo 'FAIL: test network guard recorded a blocked external request' >&2
