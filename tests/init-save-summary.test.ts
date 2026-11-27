@@ -33,3 +33,11 @@ it("preserves classifier fallback and configured display", () => {
   assert.equal(initClassifierSummary(true, { backend: "prompt", auto: true }, undefined, undefined), "prompt (no eligible model; regex fallback)");
   assert.equal(initClassifierSummary(true, { backend: "prompt", auto: false }, ["a", "b"], undefined), "prompt (a,b, configured)");
 });
+
+it("ignores v3 model description metadata while retaining legacy description tiers", () => {
+  const bytes = (value: unknown) => Buffer.from(JSON.stringify(value));
+  const v3 = initSaveSummary(null, bytes({ schemaVersion: 3, models: { description: "notes", general: ["p/m"] } }), new Set(["p/m"]));
+  assert.doesNotMatch(v3.modelTiers, /description/);
+  const legacy = initSaveSummary(null, bytes({ schemaVersion: 2, models: { description: "p/m" } }), new Set(["p/m"]));
+  assert.match(legacy.modelTiers, /description 1/);
+});

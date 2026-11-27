@@ -1388,9 +1388,10 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
       assert.equal(saved.classifier.backend, "typesafe");
       assert.equal(saved.$schema, join(tempDir, "schema.json"));
-      assert.ok(Array.isArray(saved.rules));
-      assert.ok(saved.rules.length > 0);
-      assert.ok(saved.rules.every((rule: { model?: string }) => rule.model === "quick"));
+      assert.equal(saved.rules, undefined);
+      saved.models.frontier = ["fixture/chat"];
+      writeFileSync(configPath, JSON.stringify(saved));
+      assert.ok(loadConfigForReload(tempDir, tempDir).config.rules?.some((rule) => rule.model === "frontier"));
       assert.ok(existsSync(join(tempDir, ".pi", "bifrost-reconcile-ownership.json")));
     } finally {
       process.chdir(previousCwd);
@@ -1427,9 +1428,7 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
       assert.equal(saved.classifier.backend, "typesafe");
       assert.equal(saved.$schema, join(tempDir, "schema.json"));
-      assert.ok(Array.isArray(saved.rules));
-      assert.ok(saved.rules.length > 0);
-      assert.ok(saved.rules.every((rule: { model?: string }) => rule.model === "quick"));
+      assert.equal(saved.rules, undefined);
       assert.ok(existsSync(join(agentDir, "bifrost-reconcile-ownership.json")));
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
     } finally {
