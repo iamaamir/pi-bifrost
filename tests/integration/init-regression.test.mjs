@@ -208,7 +208,7 @@ it("escalates cleanup when a child ignores SIGTERM", async () => {
   assert.equal(child.signalCode, "SIGKILL");
 });
 
-async function runRpcInit(env, args, command = "init") {
+async function runRpcInit(env, args, command = "init", confirmed) {
   const base = Object.fromEntries(["PATH", "TMPDIR", "LANG", "TERM"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
   const child = spawn(PI, ["-e", env.extensionPath, "--approve", "--no-tools", "--no-session", "--mode", "rpc"], {
     cwd: env.work, env: { ...base, HOME: env.home, PI_CODING_AGENT_DIR: join(env.home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.address().port}`, BIFROST_TEST_NETWORK_VIOLATIONS: join(env.home, "network-violations.log") }, stdio: ["pipe", "pipe", "pipe"],
@@ -220,7 +220,7 @@ async function runRpcInit(env, args, command = "init") {
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   child.stdout.on("data", (chunk) => {
     const lines = (buffer + chunk).split("\n"); buffer = lines.pop();
-    for (const line of lines) { try { records.push(JSON.parse(line)); } catch {} }
+    for (const line of lines) { try { const record = JSON.parse(line); records.push(record); if (confirmed !== undefined && record.type === "extension_ui_request" && record.method === "confirm") child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: record.id, confirmed })}\n`); } catch {} }
   });
   try {
     child.stdin.write(`${JSON.stringify({ id: "init", type: "prompt", message: `/bifrost ${command} ${args}` })}\n`);
@@ -287,7 +287,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
       assert.equal(saved.classifier?.model, "fake/healthy");
       assert.equal(saved.cache?.enabled, true);
       assert.equal(saved.reliability?.failureThreshold, 3);
-      assert.ok(Array.isArray(saved.rules));
+      assert.equal(saved.rules, undefined);
     } else {
       for (const key of ["classifier", "cache", "reliability", "rules"]) {
         assert.equal(Object.hasOwn(saved, key), false, `${args} ${targetKind} target pinned inherited ${key}`);
@@ -297,7 +297,8 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /memberships: \+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Fields added/, `expected settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Model tiers\s+quick 1(?:\s|$)/, `expected unchanged tier total: ${JSON.stringify(result)}`);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
@@ -331,9 +332,44 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
   }
 }
 
+function registerRpcConfirmationTests(getPort) {
+  for (const confirmed of [true, false]) it(`RPC init confirmation ${confirmed ? "accepts" : "rejects"} reviewed changes`, async () => {
+    const env = fixture(getPort(), ["healthy"]);
+    const target = join(env.work, ".pi", "bifrost.json");
+    try {
+      const records = await runRpcInit(env, "", "init", confirmed);
+      const dialogs = records.filter((r) => r.type === "extension_ui_request" && r.method === "confirm");
+      assert.equal(dialogs.length, 1, JSON.stringify(records));
+      assert.match(dialogs[0].message, /Model tiers.*quick 1 \(\+1\)/);
+      assert.match(dialogs[0].message, /Fields added/);
+      assert.match(dialogs[0].message, /Save to\s+.*\.pi\/bifrost\.json/);
+      assert.equal(existsSync(target), confirmed);
+      if (!confirmed) assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+}
+
 describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () => {
   let port;
   before(async () => { port = await startFakeProvider(); });
+  registerRpcConfirmationTests(() => port);
+
+  it("restores implicit default rules when tiers expand after init", async () => {
+    const env = fixture(port, ["healthy"]);
+    const target = join(env.work, ".pi", "bifrost.json");
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(env.home, ".pi", "agent");
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      const saved = JSON.parse(readFileSync(target, "utf8"));
+      assert.equal(saved.rules, undefined);
+      saved.models.frontier = ["fake/healthy"];
+      writeFileSync(target, JSON.stringify(saved));
+      assert.ok(loadConfigForReload(env.work, dirname(env.extensionPath)).config.rules.some((rule) => rule.model === "frontier"));
+    } finally { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
   for (const layer of ["user", "workspace"]) {
@@ -490,7 +526,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
         const target = selected === "global" ? "user" : "project";
-        assert.match(result.stdout + result.stderr, new RegExp(`save target: ${target}`));
+        assert.match(result.stdout + result.stderr, new RegExp(`Save to\\s+${target}`));
         assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
         for (const layer of ["workspace", "user"]) {
           if (layer === "workspace" && selected === "default-global-only") {
@@ -540,6 +576,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(requests.filter((model) => model === "credits-exhausted").length, 1, "a provider error must not trigger a second session probe");
       const config = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
       assert.ok(Object.values(config.models).flat().includes("fake/healthy"));
+      assert.equal(config.$schema, `${env.home}/extension/schema.json`, "fresh init should write schema pointer to bundled schema");
       assert.equal(Object.values(config.models).flat().includes("fake/credits-exhausted"), false, JSON.stringify({ requests, stdout: result.stdout, stderr: result.stderr, config }));
       assert.equal(config.cache.threshold, 1);
       assert.equal(config.reliability.failureThreshold, 3);
@@ -595,7 +632,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const preparation = cached.findIndex((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.includes("Refreshing model catalog"));
       assert.ok(preparation >= 0 && cached.slice(preparation + 1).some((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.length === 0));
       assert.ok(!cached.some((r) => r.method === "setWidget" && r.widgetKey === "bifrost-probe" && r.widgetLines?.some((line) => /Probing models:/.test(line))));
-      assert.ok(cached.some((r) => r.method === "notify" && /saved probe results/i.test(r.message)));
+      assert.ok(cached.some((r) => r.method === "notify" && /Using model check from/i.test(r.message)));
       requests = [];
       const forced = await runRpcInit(env, "-f --write");
       assert.deepEqual([...new Set(requests)].sort(), ["credits-exhausted", "healthy"]);
@@ -632,7 +669,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(cached.code, 0, cached.stderr);
       assert.equal(cached.violations, "");
       assert.deepEqual(requests, [], "ordinary init must reuse a complete recent report without new provider requests");
-      assert.match(cached.stderr + cached.stdout, /Using \d+ saved probe results \(\d+[smhd.]+ old\)\. Run \/bifrost init -f to check again\./u);
+      assert.match(cached.stderr + cached.stdout, /Using model check from \d+[smhd.]+ ago: \d+ worked\./u);
       assert.doesNotMatch(cached.stderr + cached.stdout, /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
       const configPath = join(env.work, ".pi", "bifrost.json");
       const cachedConfigBytes = readFileSync(configPath);
@@ -651,9 +688,8 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(forced.code, 0, forced.stderr);
       assert.equal(forced.violations, "");
       assert.deepEqual([...new Set(requests)], ["healthy", "credits-exhausted"], "forced init must disregard even a complete recent cache");
-      assert.match(forced.stderr + forced.stdout, /Checking 2 models \(forced by -f\)\./u);
-      assert.match(forced.stderr + forced.stdout, /Using \d+ working models from this check\./u);
-      assert.doesNotMatch(forced.stderr + forced.stdout, /saved probe results \(|file mtime|provider-data freshness/i);
+      assert.match(forced.stderr + forced.stdout, /1 model worked; 1 failed\./u);
+      assert.doesNotMatch(forced.stderr + forced.stdout, /Using model check from|file mtime|provider-data freshness/i);
       const forcedBytes = readFileSync(configPath);
       const forcedConfig = JSON.parse(forcedBytes);
       assert.equal(Object.values(forcedConfig.models).flat().includes("fake/credits-exhausted"), false);
@@ -676,6 +712,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
       const config = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(config.$schema, `${env.home}/extension/schema.json`, "init should add schema pointer when filling an existing empty config");
       assert.ok(config.models[config.default]?.includes("fake/healthy"));
       assert.equal(Object.values(config.models).flat().includes("fake/credits-exhausted"), false);
       assert.deepEqual(Object.keys(config.categoryStrategies), Object.keys(config.models));

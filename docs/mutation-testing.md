@@ -46,16 +46,19 @@ classifier-semantics.ts 1.0m  shards 1 ->  1.0m/leg
 inline-override.ts      1.0m  shards 1 ->  1.0m/leg
 reliability.ts          1.0m  shards 1 ->  1.0m/leg
 reliability-v2.ts       4.8m  shards 1 ->  4.8m/leg
-routing.ts             22.4m  shards 1 -> 22.4m/leg   (TAP: production engine)
+routing.ts             13.6m  shards 1 -> 13.6m/leg   (TAP: production engine)
 scripts/toolbox.mjs      2.1m  shards 1 ->  2.1m/leg   (in place: reads git ls-files)
+modules/rules/rules.ts           1.0m  shards 1 ->  1.0m/leg   (TAP: production engine)
+modules/rules/safety.ts         10.6m  shards 1 -> 10.6m/leg   (TAP: production engine)
+modules/strategies/selection.ts   1.0m  shards 1 ->  1.0m/leg
 ```
 
 Real `node mutation/workflow.mjs plan` output:
 
 ```
-targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, reliability-v2.ts, routing.ts, scripts/toolbox.mjs
-matrix legs: 7 (concurrency 4)
-projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 7 leg(s) across 8 lanes (per-leg hard bound 48m)
+targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, reliability-v2.ts, routing.ts, scripts/toolbox.mjs, modules/rules/rules.ts, modules/rules/safety.ts, modules/strategies/selection.ts
+matrix legs: 10 (concurrency 4)
+projected wall clock: 25.6m of the 60m planning budget, 2 wave(s) of 10 leg(s) across 8 lanes (per-leg hard bound 48m)
 the projection is a planning objective, not a deadline: GitHub enforces no workflow-wide wall clock
   cache.ts: mutate cache.ts
   classifier-semantics.ts: mutate classifier-semantics.ts
@@ -64,11 +67,15 @@ the projection is a planning objective, not a deadline: GitHub enforces no workf
   reliability-v2.ts: mutate reliability-v2.ts
   routing.ts: mutate routing.ts
   scripts/toolbox.mjs: mutate scripts/toolbox.mjs
+  modules/rules/rules.ts: mutate modules/rules/rules.ts
+  modules/rules/safety.ts: mutate modules/rules/safety.ts
+  modules/strategies/selection.ts: mutate modules/strategies/selection.ts
 ```
 
-Sharding is currently unused. Seven legs fit in one wave, so the plan projects
-34.5 minutes. The machinery stays because a future module can outgrow the
-budget. The plan switches to shards automatically when a module outgrows it.
+Sharding is currently unused. Ten legs fit in two waves across eight lanes, so
+the plan projects 25.6 minutes. The machinery stays because a future module can
+outgrow the budget. The plan switches to shards automatically when a module
+outgrows it.
 
 ### The gate script target
 
@@ -106,19 +113,20 @@ GitHub only guarantees that at most `max-parallel` jobs run at once. As a
 result, this calculation is a projection assumption, not a dispatch guarantee. A
 different order can take longer than the projection. The previous formula was
 `max(leg) + reserve`. That formula assumed that every leg started at the same
-time. It is exact only while the leg count is at or below the lane count. Six
-modules with four shards each is 24 legs. The plan lists the legs of the large
-modules last, so under the modeled order they start after the earlier waves
-drain:
+time. It is exact only while the leg count is at or below the lane count. With
+four shards per target the plan produces 40 legs. The plan lists the legs of the
+large modules last, so under the modeled order they start after the earlier
+waves drain:
 
 ```
 node mutation/workflow.mjs plan            # SHARDS=4
-matrix legs: 24 (concurrency 4)
-projected wall clock: 18.1m of the 60m planning budget, 3 wave(s) of 24 leg(s) across 8 lanes
+targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, reliability-v2.ts, routing.ts, scripts/toolbox.mjs, modules/rules/rules.ts, modules/rules/safety.ts, modules/strategies/selection.ts
+matrix legs: 40 (concurrency 4)
+projected wall clock: 17.1m of the 60m planning budget, 5 wave(s) of 40 leg(s) across 8 lanes (per-leg hard bound 48m)
 ```
 
-`max(leg)` gives 17.6m. The difference is the wait before the plan dispatches
-the long legs. A test asserts that `MATRIX.maxParallel` matches
+`max(leg) + reserve` gives 15.4m. The difference is the wait before the plan
+dispatches the long legs. A test asserts that `MATRIX.maxParallel` matches
 `strategy.max-parallel` in the workflow. As a result, the two values cannot
 drift apart.
 
@@ -194,11 +202,12 @@ injected no fault at all, and its "tolerated" assertions passed for the wrong
 reason. The test now injects the fault by an edit of a private source copy, and
 this works on both runtimes.
 
-`RUNNER_OVERRIDES` in `mutation/config.mjs` carries the reason that a module
-deviates from the default runner. At this time three entries use `tap`:
-`routing.ts` keeps the production-engine verdict, and the two `modules/rules/`
-targets run their in-process scan and decode controls there. The other modules
-use Bun. A test asserts that any future override names a reason.
+`RUNNER_OVERRIDES` in `mutation/config.mjs` carries the reason that a central
+module deviates from the default runner. At this time one central entry uses
+`tap`: `routing.ts` keeps the production-engine verdict. The two `modules/rules/`
+targets run their in-process scan and decode controls on `tap` too, and their
+reasons live beside them in `modules/rules/mutation.json`. The other modules use
+Bun. A test asserts that any present or future override names a reason.
 
 Three properties hold for both runners, and a measurement covered all three:
 
@@ -287,28 +296,32 @@ that count inflates the score instead of failing the run. A measured eight-file
 reliability binding produced 208 of 352 mutants as timeouts and a reported
 99.43%.
 
-Everything is in one directory, [`mutation/`](../mutation), with a single config
-file to tune:
+Everything is in one directory, [`mutation/`](../mutation), with one shared policy
+file and one optional data-only descriptor per capability:
 
 | Piece | Location |
 | --- | --- |
-| All tunable parameters: targets, per-module budgets, Stryker options, thresholds, tolerance, summary limits | [`mutation/config.mjs`](../mutation/config.mjs) |
+| Shared policy: runner, Stryker options, thresholds, tolerance, sharding, summary limits | [`mutation/config.mjs`](../mutation/config.mjs) |
+| Capability-owned measured facts and runner reasons | `modules/<capability>/mutation.json` |
+| Enrollment discovery and normalization | [`mutation/enrollment.mjs`](../mutation/enrollment.mjs) |
 | Target/binding derivation (reusable, no config) | [`mutation/targets.mjs`](../mutation/targets.mjs) |
 | Summary, scores, survivor extract | [`mutation/report.mjs`](../mutation/report.mjs) |
 | Workflow helpers | [`mutation/workflow.mjs`](../mutation/workflow.mjs) |
 | Local runner | [`mutation/run.mjs`](../mutation/run.mjs) |
 | Stryker entry point (thin shim, no options) | [`stryker.config.mjs`](../stryker.config.mjs) |
 
-`mutation/config.mjs` is the only file to edit for a normal change:
+`mutation/config.mjs` owns shared policy:
 
-- `TARGETS`: which modules the run measures, the `timeoutFactor` and `timeoutMS`
-  of each one, and its measured `secondsPerMutant`. With `MUTANT_ESTIMATE`, this
-  value drives the cost and shard planning.
+- `TARGETS`: the seven non-capability targets, the `timeoutFactor` and
+  `timeoutMS` of each one, and its measured `secondsPerMutant`. Capability
+  targets are composed into the same map from their descriptor, so every
+  consumer sees one inventory.
 - `TEST_RUNNER`: the default runner (`bun`). See the section above. This is the
   setting that decides everything else.
-- `RUNNER_OVERRIDES`: per-target runner overrides with a stated reason. At this
-  time, `routing.ts` and the two `modules/rules/` targets use `tap`; the other
-  modules use Bun. Each override's reason is recorded in `mutation/config.mjs`.
+- `RUNNER_OVERRIDES`: central per-target runner overrides with a stated reason.
+  At this time, `routing.ts` uses `tap`; the capability descriptors carry the
+  `modules/rules/` reasons. Each override's reason is recorded next to the
+  target that needs it.
 - `TAP_NODE_ARGS`: how the TAP runner invokes `node:test`.
 - `STRYKER_OPTIONS`: `checkers`, `thresholds`, reporters, `disableTypeChecks`.
 - `SHARDING`: overlap width, max shards, and the cost threshold that starts
@@ -317,12 +330,59 @@ file to tune:
 - `TIMEOUT_TOLERANCE`: when a run has too many timeouts to trust.
 - `SUMMARY`: how many survivors to show per module.
 
-To add a module, edit only `TARGETS` and `MUTANT_ESTIMATE`. The workflow matrix,
-the local runner, the binding derivation and the summary all read from them. A
-missing planning estimate fails the plan and does not drop the module. The
-derivation helpers in `targets.mjs` are plain functions over the file tree, so
-you can reuse them without the config. For example, they answer "which tests
-import this module?".
+### Capability-owned enrollment
+
+A capability that owns a measured source file declares it in
+`modules/<capability>/mutation.json`. The descriptor is data only:
+
+```json
+{
+  "targets": [
+    {
+      "file": "selection.ts",
+      "mutants": 52,
+      "secondsPerMutant": 0.034,
+      "timeoutFactor": 2,
+      "timeoutMS": 20000
+    }
+  ]
+}
+```
+
+- `file` is capability-relative. It must be a real `.ts` or `.mjs` runtime
+  source under the capability, not a declaration, test file, glob, absolute
+  path, traversal path, hidden path or symlink. It must not contain a comma or
+  line break: the workflow passes the target list through a comma-separated
+  value. The capability directory must also have a plain name without commas,
+  line breaks or path separators. Hidden capability directories are not
+  enrolled.
+- `mutants` is a positive integer, `secondsPerMutant` a finite positive number,
+  `timeoutFactor` a finite positive number and `timeoutMS` a positive integer.
+  Preserve the measured values.
+- `runner` is optional and must be `bun` or `tap`. A runner needs a non-empty
+  `reason`; a reason without a runner is invalid.
+- Unknown fields are rejected. The descriptor cannot hold executable code,
+  Stryker options, thresholds, shards or workflow policy.
+
+Discovery reads only `modules/<capability>/mutation.json`. A capability without
+a descriptor is not enrolled. Descriptors are normalized once by
+`mutation/enrollment.mjs`; the runner, planner, Stryker shim and reporter all use
+that same inventory. Order is the central non-capability declaration order,
+followed by discovered capability targets sorted by a stable code-unit
+comparison.
+
+To add a capability-owned target, add one record to its descriptor. To add a
+non-capability target, edit `TARGETS` and `MUTANT_ESTIMATE` in
+`mutation/config.mjs`. A missing planning estimate fails the plan and does not
+drop the module. The derivation helpers in `targets.mjs` are plain functions
+over the file tree, so you can reuse them without the config. For example, they
+answer "which tests import this module?".
+
+Removing a record or deleting a whole descriptor is an explicit reviewed change,
+not a silent opt-out. A missing descriptor looks identical to a capability that
+never enrolled, so a review must compare the base and candidate inventory and
+check whole-descriptor deletion or rename. The tooling does not keep a second
+permanent registry to prove intent.
 
 ## Binding is derived, not hand-written
 
@@ -629,12 +689,11 @@ nightly never enables it.
 | `reliability-v2.ts` | 2447 | 1m35s | 1 |
 | `routing.ts` | 989 | 1m16s | 1 |
 
-The runner change removed the reason to shard. The plan sets the slowest leg at
-22.5 minutes (`routing.ts` on TAP, with the CI factor). As a result, every module
-is one leg, and the whole matrix projects to 34.5 minutes wall clock
-(`node mutation/workflow.mjs plan`). Sharding stays configured for a module that
-outgrows the budget. The plan shards the module automatically when it outgrows
-the budget.
+The runner change removed the reason to shard. At that measurement the plan set
+the slowest leg at 22.5 minutes (`routing.ts` on TAP, with the CI factor). As a
+result, every module was one leg, and the whole matrix projected to 34.5 minutes
+wall clock. Sharding stays configured for a module that outgrows the budget. The
+plan shards the module automatically when it outgrows the budget.
 
 ## Measured results
 

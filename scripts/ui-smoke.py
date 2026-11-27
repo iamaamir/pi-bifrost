@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pty
 import re
 import select
-import fcntl
-import termios
-import struct
 import signal
-import shutil
+import struct
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
@@ -405,10 +404,8 @@ def load_font(size: int) -> Any:
     _, _, ImageFont = pillow()
     for item in candidates:
         if Path(item).exists():
-            try:
+            with suppress(Exception):
                 return ImageFont.truetype(item, size=size)
-            except Exception:
-                pass
     return ImageFont.load_default()
 
 
@@ -838,13 +835,19 @@ def capture(
                 "criteria": {"general": "keep this criterion"},
             }:
                 raise AssertionError("manual init changed explicit classifier settings")
-            init_screen = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
-            if init_screen.count("save bifrost setup?") != 1:
+            init_raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
+            init_screen = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", init_raw).split()).lower()
+            if init_screen.count("apply this configuration?") != 1:
                 raise AssertionError("manual init must ask exactly once to save the refreshed setup")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "save memberships: +2 / -0" not in init_screen or "to project (.pi/bifrost.json)" not in init_screen:
-                raise AssertionError("manual init did not preview the exact project membership changes")
+            if "save to project (.pi/bifrost.json)" not in init_screen or "model tiers" not in init_screen:
+                raise AssertionError("manual init did not preview the project and model tiers")
+            for tier, models in saved.get("models", {}).items():
+                if not re.search(rf"(?<!\S){re.escape(tier.lower())} {len(models)}(?!\d)", init_screen):
+                    raise AssertionError(f"manual init did not preview the saved total for tier {tier}")
+            if sum(int(n) for n in re.findall(r"\+(\d+)", init_screen[init_screen.index("model tiers"):init_screen.index("classifier", init_screen.index("model tiers"))])) != 2:
+                raise AssertionError("manual init did not preview two added model assignments")
 
         time.sleep(2.0)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
@@ -881,21 +884,15 @@ def capture(
         return png_path
     finally:
         stop.set()
-        try:
+        with suppress(ProcessLookupError):
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            try:
+            with suppress(ProcessLookupError):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        try:
+        with suppress(OSError):
             os.close(master)
-        except OSError:
-            pass
         tmp.cleanup()
 
 
