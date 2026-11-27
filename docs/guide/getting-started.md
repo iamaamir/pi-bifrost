@@ -35,7 +35,7 @@ pi install npm:pi-bifrost
 
 Restart Pi if the extension is not loaded in the current session.
 
-To inspect usage Pi recorded for the current session, run `/bifrost cost`. The interactive view groups requests and models for the current branch, while all-retained totals can include copied fork history or alternate branches. Unknown costs stay unknown. See [the cost report](commands.md#cost-report) for the estimate boundary.
+To inspect usage Pi recorded for the current session, run `/bifrost cost`. The interactive view groups requests and models for the current branch, while all-retained totals can include copied fork history or alternate branches. Unknown costs stay unknown. See [the cost report](commands.md#cost-reporting) for the estimate boundary.
 
 ## Understand four terms
 
