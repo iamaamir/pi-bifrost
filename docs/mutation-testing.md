@@ -685,12 +685,11 @@ nightly never enables it.
 | `reliability-v2.ts` | 2447 | 1m35s | 1 |
 | `routing.ts` | 989 | 1m16s | 1 |
 
-The runner change removed the reason to shard. The plan sets the slowest leg at
-22.5 minutes (`routing.ts` on TAP, with the CI factor). As a result, every module
-is one leg, and the whole matrix projects to 34.5 minutes wall clock
-(`node mutation/workflow.mjs plan`). Sharding stays configured for a module that
-outgrows the budget. The plan shards the module automatically when it outgrows
-the budget.
+The runner change removed the reason to shard. At that measurement the plan set
+the slowest leg at 22.5 minutes (`routing.ts` on TAP, with the CI factor). As a
+result, every module was one leg, and the whole matrix projected to 34.5 minutes
+wall clock. Sharding stays configured for a module that outgrows the budget. The
+plan shards the module automatically when it outgrows the budget.
 
 ## Measured results
 

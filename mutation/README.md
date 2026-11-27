@@ -21,24 +21,33 @@ The workflow lives at `.github/workflows/mutation.yml`. The narrative guide is
 
 ## Adding a module
 
-You make two edits in one file.
+A capability that owns a measured source file declares it in a data-only
+`modules/<capability>/mutation.json`. A target that does not belong to a
+capability stays central in `mutation/config.mjs`.
 
 ### 1. Declare the target
 
-In `mutation/config.mjs`:
+For a capability target, add one record to its descriptor:
 
-```js
-export const TARGETS = {
-  // ...
-  "inline-override.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.02 },
-};
-
-export const MUTANT_ESTIMATE = {
-  // ...
-  "inline-override.ts": 40,
-};
+```json
+{
+  "targets": [
+    {
+      "file": "selection.ts",
+      "mutants": 52,
+      "secondsPerMutant": 0.034,
+      "timeoutFactor": 2,
+      "timeoutMS": 20000
+    }
+  ]
+}
 ```
 
+For a non-capability target, add the same fields to `TARGETS` and the mutant
+count to `MUTANT_ESTIMATE` in `mutation/config.mjs`. Capability targets are
+composed into those same maps at load, so every consumer sees one inventory.
+
+- `file` is capability-relative and names a runtime source.
 - `timeoutFactor` / `timeoutMS`: Stryker's per-mutant timeout is
   `dryRunDuration * timeoutFactor + timeoutMS`. Size it to the bound test suite
   of this module. A value that is too small reports genuine mutants as `Timeout`.
@@ -47,12 +56,12 @@ export const MUTANT_ESTIMATE = {
   If the dry run fails, raise the value.
 - `secondsPerMutant`: the measured wall-clock throughput. Start with a placeholder
   (`0.02` is a reasonable guess). Replace it in step 2.
-- `MUTANT_ESTIMATE`: a planning input for budget and shard arithmetic only. The
-  report always carries the real counts. Set it to the reported total in step 2 so
-  that planning reflects reality.
+- `mutants`: a planning input for budget and shard arithmetic only. The report
+  always carries the real counts. Set it to the reported total in step 2 so that
+  planning reflects reality.
 
 You do not touch anything else. The matrix, the artifact names, the shard
-planning, the summary, and the gate all derive from `TARGETS`.
+planning, the summary, and the gate all derive from the composed inventory.
 
 ### 2. Get the real numbers
 
@@ -67,11 +76,11 @@ time node mutation/run.mjs inline-override.ts        # full run, measure the cos
 `--list` shows every target with its estimate, its shard count, and its bound
 files.
 
-You edit `mutation/config.mjs` a second time here. That is expected. Set
+You edit the declaration a second time here. That is expected. Set
 `secondsPerMutant` to `elapsed_seconds / mutant_count` from the run above. Set
-`MUTANT_ESTIMATE` to the mutant total that the run reported. Both values are
-planning inputs. As a result, a placeholder affects the projection only. It never
-affects a reported score.
+`mutants` to the mutant total that the run reported. Both values are planning
+inputs. As a result, a placeholder affects the projection only. It never affects
+a reported score.
 
 Use the process wall clock (`time`), not `Done in N seconds` from Stryker. For a
 small module, the per-process startup dominates. The figure from Stryker then
@@ -247,8 +256,8 @@ lanes       = MATRIX.maxParallel (8), matching the workflow's max-parallel
 
 ```bash
 node mutation/workflow.mjs plan
-# matrix legs: 6 (concurrency 4)
-# projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 6 leg(s) across 8 lanes (per-leg hard bound 48m)
+# matrix legs: 10 (concurrency 4)
+# projected wall clock: 25.6m of the 60m planning budget, 2 wave(s) of 10 leg(s) across 8 lanes (per-leg hard bound 48m)
 ```
 
 `projectWallClock()` packs legs through those lanes in one possible dispatch
@@ -259,18 +268,18 @@ value is a projection assumption, not a dispatch guarantee. A different order ca
 produce a longer wall clock than the projection. This is why the number is a
 planning objective. The old formula was `max(leg) + reserve`. It assumed that
 every leg started at once, so it was exact only while the leg count is at or below
-the lane count. Sharding six modules four ways is 24 legs:
+the lane count. With four shards per target the plan produces 40 legs:
 
 ```
 SHARDS=4 node mutation/workflow.mjs plan
-# matrix legs: 24 (concurrency 4)
-# projected wall clock: 18.1m of the 60m planning budget, 3 wave(s) of 24 leg(s) across 8 lanes
+# matrix legs: 40 (concurrency 4)
+# projected wall clock: 17.1m of the 60m planning budget, 5 wave(s) of 40 leg(s) across 8 lanes
 ```
 
-The old `max(leg)` formula gives 17.6m for this case. The difference is the wait
-before the dispatch of the legs of the large modules, which the matrix lists last.
-A test asserts that `MATRIX.maxParallel` matches the workflow, so the two cannot
-drift.
+The old `max(leg) + reserve` formula gives 15.4m for this case. The difference is
+the wait before the dispatch of the legs of the large modules, which the matrix
+lists last. A test asserts that `MATRIX.maxParallel` matches the workflow, so the
+two cannot drift.
 
 `ciSlowdownFactor: 3` converts a 10-core local measurement into an estimate for a
 4-core runner. Measured ratios were `routing.ts` 2.7× and `reliability-v2.ts` 3.9×.
@@ -317,10 +326,11 @@ from a clean `.stryker-tmp`:
   the older "226 of 227, one `ObjectLiteral` at line 221" claim. On current HEAD,
   both engines kill that mutant, and the figure is not reproducible.
 
-`routing.ts` is the module where the engine decides the verdict, and it is the
-only override. `^(a+)+$` on a 25-character canary takes 475ms on V8 and 66ms on
-JavaScriptCore. When a mutant bypasses the backtracking probe, the regex runs in
-the host process. As a result, only the production engine answers the question
+`routing.ts` is the central module where the engine decides the verdict. The two
+`modules/rules/` targets have the same dependency and carry their reasons in
+their descriptor. `^(a+)+$` on a 25-character canary takes 475ms on V8 and 66ms
+on JavaScriptCore. When a mutant bypasses the backtracking probe, the regex runs
+in the host process. As a result, only the production engine answers the question
 that production asks. Subprocess pinning did not fix it.
 
 Measurement establishes equivalence, not proof. The project trusts Bun for a
@@ -328,9 +338,10 @@ module because its verdicts match TAP within the noise floor of that module. Thi
 method does not catch a module that depends on engine behavior that no sampled
 mutant exercises. The mitigation is the override plus a record of the reason.
 
-To add an override, edit `RUNNER_OVERRIDES` and give a reason. A test requires the
-reason. Two reasons are legitimate: Bun cannot run a bound test at all, or the
-verdict differs between the engines.
+To add an override, edit `RUNNER_OVERRIDES` (central target) or the capability
+descriptor, and give a reason. A test requires the reason. Two reasons are
+legitimate: Bun cannot run a bound test at all, or the verdict differs between
+the engines.
 
 ## Edge cases worth knowing
 
@@ -362,17 +373,19 @@ phantom `CallExpression` mutants).
 
 Every report carries the measurement that it belongs to. The runner stamps each
 report with a content identity. The identity includes the bytes of the module. It
-also includes the local modules that the module and its bound tests import, and
-`mutation/config.mjs`. It includes the binding rules (`mutation/targets.mjs`), the
-Stryker shim, and the resolved dependency set (`package-lock.json`). The
-summariser accepts a report only if that identity matches the current checkout.
-The identity is per module, because one measurement of a module covers its
-population. A single per-run value accepts everything or rejects everything. The
-summariser rejects a report from a different revision, binding, or config, and
-names it. It never merges that report. The identity also means that the artifact
-file name does not have to encode provenance. That is why the download pattern
-stays `mutation-report-*`. A pattern scoped to the current `run_attempt` hides the
-legs that a partial re-run did not retry.
+also includes the local modules that the module and its bound tests import,
+`mutation/config.mjs`, the enrollment/normalization boundary
+(`mutation/enrollment.mjs`), the capability descriptor that enrolled the target,
+the binding rules (`mutation/targets.mjs`), the Stryker shim, and the resolved
+dependency set (`package-lock.json`). The summariser accepts a report only if that
+identity matches the current checkout. The identity is per module, because one
+measurement of a module covers its population. A single per-run value accepts
+everything or rejects everything. The summariser rejects a report from a
+different revision, binding, or config, and names it. It never merges that
+report. The identity also means that the artifact file name does not have to
+encode provenance. That is why the download pattern stays `mutation-report-*`. A
+pattern scoped to the current `run_attempt` hides the legs that a partial re-run
+did not retry.
 
 A report records the scope that it measured. An unsharded `<module>.json` stands
 for the whole module. As a result, a run that mutates only a line range must name
@@ -486,9 +499,10 @@ node mutation/run.mjs cache.ts --dry-run         # check binding, no mutants
 node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 ```
 
-The prerequisites are Node 24 and Bun 1.4.0. Five of six modules run under
-`bun test`, so `bun` must be on `PATH`. `routing.ts` uses TAP and does not need
-Bun. There is no per-invocation runner flag. The choice is `RUNNER_OVERRIDES`.
+The prerequisites are Node 24 and Bun 1.4.0. Most modules run under `bun test`, so
+`bun` must be on `PATH`. `routing.ts` and the two `modules/rules/` targets use TAP
+and do not need Bun. There is no per-invocation runner flag. The choice is
+`RUNNER_OVERRIDES` plus the capability descriptors.
 
 `--report` names one output file. The runner writes it exactly where you point it,
 under `reports/`, and clears only that file. The runner enforces the boundary.
@@ -538,7 +552,7 @@ merged workflow has no `push:` trigger.
 ## Extending this module
 
 The project evaluated one addition and did not implement it. That addition is not
-necessary while the nightly fits in 34.5 minutes:
+necessary while the nightly fits in 25.6 minutes:
 
 The idea is to snap shard boundaries to mutant-free lines. 87 of the 244 lines of
 `cache.ts` produce no mutants. As a result, you can place a boundary where no mutant
@@ -569,8 +583,8 @@ both the numerator and the denominator. Only `routing.ts` changes.
 
 CI (4-core, before the addition of `inline-override.ts`) took 19 minutes for five
 modules. `inline-override.ts` adds 21 mutants and 1.3 seconds. The projection
-holds it at the one-minute floor (`estimatedMinutes` never returns less than 1),
-so the plan stays at 34.5m.
+held it at the one-minute floor (`estimatedMinutes` never returns less than 1),
+so the plan stayed at 34.5m at that point.
 
 Its two survivors are genuine test gaps. Both are in the `firstWord` regex at
 `inline-override.ts:28`:
