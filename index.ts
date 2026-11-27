@@ -2866,6 +2866,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return reason;
   }
 
+  function logUnconfirmedRuntimeFailure(ctx: ExtensionContext, model: string, allowanceObservation: ReturnType<typeof runtimeAllowanceEvidence>): void {
+    const reason = allowanceObservation ? takeAllowanceRetryStopReason(ctx) : undefined;
+    const notice = `Bifrost could not confirm failure state for ${model}; inspect local reliability state.`;
+    log(ctx, reason ? `${notice} ${reason}` : notice, "warning");
+  }
+
   function currentAllowanceRetry(ctx: ExtensionContext, boundary: AutoUserBoundary, now = Date.now()): AllowanceRetryToken | undefined {
     const token = allowanceRetryBySession.get(ctx.sessionManager);
     if (!token) return undefined;
@@ -4084,7 +4090,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             ? allowanceObservation : undefined,
         );
         if (!saved) {
-          log(ctx, `Bifrost could not confirm failure state for ${outcome.model}; inspect local reliability state.`, "warning");
+          logUnconfirmedRuntimeFailure(ctx, outcome.model, allowanceObservation);
           continue;
         }
         if (allowanceObservation && state.config.reliability?.cooldownOnAllowanceExhausted !== false) {
