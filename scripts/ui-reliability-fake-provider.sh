@@ -148,7 +148,7 @@ observer="$ROOT/tests/fixtures/ui-reliability-run-observer.mjs"
 proof="$ROOT/tests/fixtures/ui-reliability-run-proof.mjs"
 
 generation_gate(){
-  curl -fsS --max-time 5 -X POST "http://127.0.0.1:$port/_generation-gate/$1?model=slow" >/dev/null
+  curl -fsS --max-time 5 -X POST "http://127.0.0.1:$port/_generation-gate/$1?model=$2" >/dev/null
 }
 
 wait_settled_count(){
@@ -166,13 +166,14 @@ wait_settled_count(){
 }
 
 wait_held_generation(){
+  local model="$1"
   for _ in $(seq 1 60); do
     curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/current-stats.json"
     if node -e '
 const fs = require("node:fs");
-const [before, current] = process.argv.slice(1).map((path) => JSON.parse(fs.readFileSync(path)));
-if (!current.stats.slice(before.stats.length).some((stat) => stat.kind === "generation" && stat.model === "slow" && !stat.completed)) process.exit(1);
-' "$work/before.json" "$work/current-stats.json"; then return 0; fi
+const [before, current] = process.argv.slice(1, 3).map((path) => JSON.parse(fs.readFileSync(path)));
+if (!current.stats.slice(before.stats.length).some((stat) => stat.kind === "generation" && stat.model === process.argv[3] && !stat.completed)) process.exit(1);
+' "$work/before.json" "$work/current-stats.json" "$model"; then return 0; fi
     sleep 1
   done
   echo 'FAIL: held initial generation not observed' >&2
@@ -198,11 +199,12 @@ EOF
   "$A" --session "$sid" press Enter >/dev/null
   "$A" --session "$sid" wait '(bifrost) auto' --assert --timeout 15000 >/dev/null
   curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/before.json"
-  generation_gate hold
+  generation_gate hold slow
+  if [[ "$mode" == positive ]]; then generation_gate hold fast; fi
   prompt "$sid" 'hold please'
-  wait_held_generation
+  wait_held_generation slow
   if [[ "$mode" == separate ]]; then
-    generation_gate release
+    generation_gate release slow
     wait_settled_count 1
     prompt "$sid" 'frontier one'
     wait_settled_count 2
@@ -215,7 +217,15 @@ EOF
       "$A" --session "$sid" type 'quick two' >/dev/null
       "$A" --session "$sid" press Enter >/dev/null
     fi
-    generation_gate release
+    generation_gate release slow
+    if [[ "$mode" == positive ]]; then
+      wait_held_generation fast
+      # Real negative control: the third dispatch exists, but it is held
+      # before completion and its trial is still active. The same proof must
+      # reject this snapshot before accepting the eventual settled run.
+      node "$proof" pending "$work" "$work/before.json" "$work/current-stats.json"
+      generation_gate release fast
+    fi
     wait_settled_count 1
   fi
   # The observer runs after the Bifrost extension. Wait for its buffered debug

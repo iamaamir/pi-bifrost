@@ -62,7 +62,21 @@ function assertDebug(debug, models, runs) {
   // Legacy outcome traces are model/session attributed, not turn attributed.
   // Native run boundaries plus isolated process and exact provider/branch identity
   // establish the relationship; do not invent a legacy per-dispatch receipt.
-  assert.equal(outcomes.length, runs.reduce((sum, count) => sum + count, 0));
+  const lifecycle = debug.filter((event) => dispatches.includes(event) || outcomes.includes(event));
+  let offset = 0;
+  const expected = runs.flatMap((count) => {
+    const group = keys(models.slice(offset, offset + count));
+    offset += count;
+    return [...group.map((model) => ["dispatch", model]),
+      ...group.map((model) => ["legacy_outcome_observed", model])];
+  });
+  assert.deepEqual(lifecycle.map(({ event, model }) => [event, model]), expected,
+    "settlement occurred outside the expected dispatch group");
+  if (claims.length) {
+    assert.ok(debug.indexOf(claims[0]) > debug.indexOf(dispatches.find((event) => event.model === "fake/fast"))
+      && debug.indexOf(claims[0]) < debug.indexOf(outcomes.find((event) => event.model === "fake/fast")),
+    "half-open claim does not precede its outcome");
+  }
 }
 
 function assertState(state, events) {
@@ -86,6 +100,21 @@ function assertObserved({ events, requests, debug, state }, prompts, models, run
 
 export function assertSingleRun(evidence) {
   assertObserved(evidence, PROMPTS, MODELS, [3], true);
+}
+
+export function assertPending(evidence) {
+  assertSession(evidence.events);
+  assert.deepEqual(evidence.events.map((event) => event.type), ["start", "turn", "turn"],
+    "held final request must be in an unfinished three-dispatch run");
+  assert.ok(evidence.events.every((event) => event.run === 1), "held request is in another run");
+  assert.deepEqual(evidence.events.filter((event) => event.type === "turn")
+    .map(({ provider, model, stopReason }) => [provider, model, stopReason]),
+  [["fake", "slow", "stop"], ["fake", "strong", "stop"]], "held request must follow two successful turns");
+  assert.deepEqual(evidence.requests.map(({ model, completed, userMessageDigest }) => [model, completed, userMessageDigest]),
+    MODELS.map((model, index) => [model, index !== 2, digest(PROMPTS[index])]), "wrong pending provider requests");
+  assert.equal(evidence.state.models["fake/fast"].trialActive, true, "held half-open trial was not claimed");
+  assert.throws(() => assertSingleRun(evidence), /incorrect run boundaries or turn count/,
+    "an unfinished real run must not pass");
 }
 
 export function assertControl(evidence, mode) {
@@ -122,6 +151,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [mode, work, before, after] = process.argv.slice(2);
   const evidence = loadEvidence(work, before, after);
   if (mode === "positive") assertSingleRun(evidence);
+  else if (mode === "pending") assertPending(evidence);
   else assertControl(evidence, mode);
   console.log("scenario 6 " + mode + " lifecycle proof passed");
 }
