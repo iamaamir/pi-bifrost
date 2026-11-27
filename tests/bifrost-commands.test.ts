@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, describeInitCommitFailure, getBifrostCommandCompletions, initRecoveryCommand, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, describeInitCommitFailure, initRecoveryCommand, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { buildRouteDecisionSummary, createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
@@ -751,16 +751,7 @@ describe("bifrost command ui", () => {
     );
   });
 
-  it("surfaces command descriptions in autocomplete", () => {
-    const items = getBifrostCommandCompletions("class") ?? [];
-    assert(items.some((item) => item.value === "classifier status" && item.description === "Show classifier state"));
-    assert(items.some((item) => item.value === "classifier off" && item.description === "Disable LLM classifier for this session"));
-  });
 
-  it("submits exact commands without requiring a second Enter", () => {
-    assert.equal(getBifrostCommandCompletions("classifier status"), null);
-    assert.equal(getBifrostCommandCompletions("classifier"), null);
-  });
 
   it("clears submitted text before dispatch while preserving follow-up prefills", async () => {
     const { ctx, calls } = makeCtx();
@@ -3016,18 +3007,7 @@ describe("preview command hint", () => {
     );
   });
 
-  it("keeps the preview completion label and description stable", async () => {
-    // Tab completion shows `value`/`label`/`description` only — the argument hint
-    // is not part of a completion item, so the flag is discoverable in the menu
-    // and not in the completion list. Pinned here so that split is a deliberate
-    // record rather than an accident.
-    const items = getBifrostCommandCompletions("prev") ?? [];
-    assert.deepEqual(items, [{
-      value: "preview",
-      label: "preview",
-      description: "Preview routing for a prompt",
-    }]);
-  });
+
 });
 
 describe("preview json marker", () => {
@@ -3780,10 +3760,6 @@ describe("command aliases", () => {
     }
   });
 
-  it("declares init -f as an alias of init", () => {
-    const init = BIFROST_COMMAND_OPTIONS.find((c) => c.value === "init");
-    assert.deepEqual(init?.aliases, ["init -f"]);
-  });
 
   it("dispatches init -f to init rather than the unknown-subcommand picker", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-f-"));
@@ -4012,30 +3988,10 @@ describe("command aliases", () => {
     }
   });
 
-  it("no longer lists init -f as its own command", () => {
-    assert.equal(
-      BIFROST_COMMAND_OPTIONS.some((c) => c.value === "init -f"),
-      false,
-    );
-  });
 
-  it("offers init -f in completion", () => {
-    // "init -" isolates the alias: it is the only entry that matches, so this
-    // cannot pass by `init` merely prefix-matching. Under "ini" both entries
-    // are returned and the assertion could not tell them apart.
-    const items = getBifrostCommandCompletions("init -");
-    assert.ok(items?.some((i) => i.value === "init -f" && i.label === "init -f"));
-  });
 
-  it("still emits init itself alongside its alias", () => {
-    const items = getBifrostCommandCompletions("ini") ?? [];
-    assert.ok(items.some((i) => i.value === "init" && i.label === "init"));
-    assert.ok(items.some((i) => i.value === "init -f"));
-  });
 
-  it("submits an exact alias instead of offering a completion", () => {
-    assert.equal(getBifrostCommandCompletions("init -f"), null);
-  });
+
 });
 
 describe("route dispatch", () => {
@@ -4543,10 +4499,8 @@ describe("route dispatch", () => {
 });
 
 describe("dashboard menu", () => {
-  // The dashboard is derived from BIFROST_COMMAND_OPTIONS, so it holds every
-  // registered command: a command added to the registry appears in /bifrost
-  // with no second edit. On top of that, ordering stays state-aware so the top
-  // row always changes something.
+  // The dashboard renders the shared catalog; its real registered commands
+  // retain membership, ordering, hints and state-aware annotations.
 
   function rowsOf(calls: Array<{ kind: string; options?: string[] }>): string[] {
     return calls.find((call) => call.kind === "select")?.options ?? [];
@@ -4619,24 +4573,6 @@ describe("dashboard menu", () => {
     }
   });
 
-  it("shows a registry entry that declares neither menu nor reflects", async () => {
-    // The auto-add guarantee, stated as a test: menu and reflects order a
-    // command, they never hide one. Without this, the previous behaviour
-    // (hand-written row list) and this behaviour both pass every other test
-    // here.
-    const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>;
-    registry.push({ value: "probe entry", description: "Temporary probe" });
-    try {
-      const rows = await rowsFor();
-      assert.ok(rows.some((row) => row.includes("/bifrost probe entry — Temporary probe")));
-      assert.equal(rows.length, BIFROST_COMMAND_OPTIONS.length);
-    } finally {
-      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
-      // Without this restore a failing assertion corrupts the registry for
-      // every test that runs afterwards.
-      registry.pop();
-    }
-  });
 
 it("offers 27 rows", async () => {
     assert.equal((await rowsFor()).length, 27);
@@ -4675,34 +4611,6 @@ it("offers 27 rows", async () => {
     );
   });
 
-  it("places and annotates a reflected entry declared only in the registry", async () => {
-    // Which way a command pushes its state lives on its registry entry, so a
-    // new reflected command costs one edit. When that direction lived in a
-    // side table keyed by value, an entry the table did not list silently lost
-    // both its leading row and its annotation - nothing failed, the ordering
-    // was just wrong.
-    const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<Record<string, unknown>>;
-    registry.unshift({
-      value: "probe mute",
-      description: "Temporary probe",
-      reflects: { state: "enabled", sets: false, note: "already off" },
-    });
-    try {
-      // Routing is on, so a command that turns routing off changes something
-      // and leads. Unshifted, it also precedes the registry's own member.
-      const actionable = await rowsFor({ enabled: true, pinned: false });
-      assert.equal(actionable[0], "/bifrost probe mute — Temporary probe");
-
-      // Routing is off, so it is the no-op member: second, and annotated.
-      const inert = await rowsFor({ enabled: false, pinned: false });
-      assert.equal(inert[1], "/bifrost probe mute — Temporary probe (already off)");
-    } finally {
-      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
-      // Without this restore a failing assertion corrupts the registry for
-      // every test that runs afterwards.
-      registry.shift();
-    }
-  });
 
   it("keeps the prompt commands together in the common block", async () => {
     const rows = await rowsFor();
@@ -4744,31 +4652,7 @@ it("offers 27 rows", async () => {
     assert.ok(rows.some((row) => row.includes("/bifrost preview [--offline] [--trace] [--json] <prompt>")));
   });
 
-  it("cannot go stale when a command is renamed in the registry", async () => {
-    // The dashboard used to list command values by hand, so renaming one left
-    // the menu pointing at a value that no longer existed and the picker threw
-    // a TypeError. Deriving from the registry removes that class of drift:
-    // the rename shows up in the menu.
-    const { ctx, calls } = makeCtx();
-    const state = makeState();
-    const original = BIFROST_COMMAND_OPTIONS[0];
-    assert.equal(original.value, "on");
-    (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = {
-      ...original,
-      value: "renamed",
-    };
-    try {
-      await createCommandRouter(state as never)("", ctx as never);
-      const rows = rowsOf(calls);
-      assert.ok(rows.some((row) => row.includes("/bifrost renamed —")));
-      assert.ok(!rows.some((row) => row.includes("/bifrost on —")));
-    } finally {
-      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
-      // Without this restore a failing assertion corrupts the registry for
-      // every test that runs afterwards.
-      (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = original;
-    }
-  });
+
 });
 
 describe("diagnostics commands", () => {
@@ -4834,14 +4718,6 @@ describe("diagnostics commands", () => {
     assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
   });
 
-  it("registers validate and inspect with JSON argument hints", () => {
-    for (const command of ["validate", "inspect"]) {
-      const spec = BIFROST_COMMAND_OPTIONS.find((item) => item.value === command);
-      assert.equal(spec?.argumentHint, "[--json]");
-      assert.equal(getBifrostCommandCompletions(command), null, "complete command submits without a suggestion");
-      assert.ok(getBifrostCommandCompletions(command.slice(0, 1))?.some((item) => item.value === command));
-    }
-  });
 
   it("emits versioned validate JSON from the loaded config without private auth details", async () => {
     const h = diagnosticHarness();

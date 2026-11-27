@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BIFROST_COMMAND_OPTIONS } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS } from "../modules/commands/catalog.ts";
 
 const demo = readFileSync(new URL("../docs/terminal-demo.js", import.meta.url), "utf8");
 const page = readFileSync(new URL("../docs/index.html", import.meta.url), "utf8");

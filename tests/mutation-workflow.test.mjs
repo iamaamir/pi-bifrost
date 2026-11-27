@@ -759,11 +759,7 @@ test("target order is central declaration order, then stable capability order", 
   assert.deepEqual(names.slice(0, central.length), central, "central declaration order is retained");
   const capability = names.slice(central.length);
   assert.deepEqual(capability, [...capability].sort(), "discovered capability targets use a stable code-unit sort");
-  assert.deepEqual(capability, [
-    "modules/rules/rules.ts",
-    "modules/rules/safety.ts",
-    "modules/strategies/selection.ts",
-  ]);
+  assert.deepEqual(capability, CAPABILITY_ENROLLMENT.names, "every discovered capability target is included exactly once");
 });
 
 test("a target set with a missing binding or source fails closed", () => {

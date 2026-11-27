@@ -1,0 +1,13 @@
+{
+  "targets": [
+    {
+      "file": "catalog.ts",
+      "mutants": 123,
+      "secondsPerMutant": 0.11,
+      "timeoutFactor": 2,
+      "timeoutMS": 20000,
+      "runner": "tap",
+      "reason": "The first Bun campaign emitted interior coverage-gap warnings for all three node:test consumer files; use the repository's Node/TAP runner to verify attribution and survivor disposition."
+    }
+  ]
+}
