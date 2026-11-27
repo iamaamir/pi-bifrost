@@ -1,3 +1,4 @@
+import { stripConfigMetadata } from "./config-schema.ts";
 import { log as logNotice } from "./ui/notice.ts";
 import {
   clearProbeProgress,
@@ -12,6 +13,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
+import { initClassifierSummary, initSavePreviewLines, initSaveSummary, initSummaryPanel } from "./ui/init-save-summary.ts";
 import {
   constants,
   closeSync,
@@ -46,6 +48,7 @@ import {
   validateTierPolicyConfig,
 } from "./config.ts";
 import {
+  configLayerPaths,
   loadConfigForReload,
   loadConfigWithSourceOverride,
   readBoundedConfigText,
@@ -81,7 +84,6 @@ import {
   PROBE_PROMPT_TEXT,
   readRecentCompleteProbeReportCacheHit,
   describeProbeReportCacheAge,
-  describeProbeReuseReason,
 } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
@@ -400,9 +402,10 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
   return selected;
 }
 
-function uiOutput(ctx: ExtensionContext, lines: string[]) {
+function uiOutput(ctx: ExtensionContext, lines: string[], summary = false) {
   if (ctx.mode === "tui" && ctx.hasUI) {
-    ctx.ui.setWidget("bifrost-output", lines);
+    if (summary) ctx.ui.setWidget("bifrost-output", (_tui, theme) => initSummaryPanel(theme, lines));
+    else ctx.ui.setWidget("bifrost-output", lines);
   } else {
     for (const line of lines) console.error(`[bifrost] ${line}`);
   }
@@ -764,7 +767,7 @@ async function runInitProbe(
   const errors = results.filter((r) => r.status === "error").length;
   const timeouts = results.filter((r) => r.status === "timeout").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
-  initLog(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
+  initLog(ctx, `${ok} model${ok === 1 ? "" : "s"} worked; ${errors} failed${timeouts ? `; ${timeouts} timed out` : ""}${skipped ? `; ${skipped} skipped` : ""}.`);
   return {
     workingModels: results
       .filter((r) => r.status === "ok")
@@ -1809,7 +1812,7 @@ function initMembershipFailureMessage(status: string, reason: string | undefined
   return status === "advisory"
     ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
     : reason === "no_changes"
-      ? "The refreshed catalog has no safe membership changes; no files were changed."
+      ? "No changes to apply from this check. Your config was kept."
       : "Init could not safely prepare a membership update (" +
         (reason ?? "unknown source state") +
         "); no files were changed.";
@@ -2020,7 +2023,6 @@ async function handleInitInner(
 
   if (!reused) {
     ranProbe = true;
-    initLog(ctx, `Checking ${available.length} models (${describeProbeReuseReason(forced)}).`);
     const probeRun = await runInitProbe(ctx, state, initConfig, available, initLog);
     if (!probeRun) return;
     workingModels = probeRun.workingModels;
@@ -2054,12 +2056,10 @@ async function handleInitInner(
     }
   }
 
-  if (ranProbe) {
-    initLog(ctx, `Using ${workingModels.length} working models from this check.`);
-  } else {
+  if (!ranProbe) {
     initLog(
       ctx,
-      `Using ${workingModels.length} saved probe results (${probeAge} old). Run /bifrost init -f to check again.`,
+      `Using model check from ${probeAge} ago: ${workingModels.length} worked. Run /bifrost init -f to check again.`,
     );
   }
 
@@ -2126,19 +2126,18 @@ async function handleInitInner(
       return;
     }
   }
+  const semanticSource = stripConfigMetadata(sourceConfig);
   const sourceModels =
-    sourceConfig.models &&
-    typeof sourceConfig.models === "object" &&
-    !Array.isArray(sourceConfig.models)
-      ? (sourceConfig.models as Record<string, unknown>)
+    semanticSource.models &&
+    typeof semanticSource.models === "object" &&
+    !Array.isArray(semanticSource.models)
+      ? (semanticSource.models as Record<string, unknown>)
       : {};
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
-  let inheritedTiers: ReadonlySet<string> = new Set<string>();
   if (selectedSource === "project") {
     try {
       const inherited = readInheritedPools(["user", "workspace"]);
       inheritedSources = inherited.snapshots;
-      inheritedTiers = inherited.tierNames;
       const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
       if (shadowedTiers.length > 0) {
         initLog(
@@ -2173,6 +2172,18 @@ async function handleInitInner(
         ? "workspace"
         : "global";
   const targetLayerIndex = layerOrder.indexOf(targetLayer);
+  const inheritedSourceLayers = [
+    ...new Set(
+      configLayers.sourceFields
+        .filter(
+          ({ layer, fields }) =>
+            fields.length > 0 &&
+            layer !== "effective" &&
+            layerOrder.indexOf(layer as (typeof layerOrder)[number]) < targetLayerIndex,
+        )
+        .map(({ layer }) => layer),
+    ),
+  ];
   const inheritedFields = new Set(
     configLayers.sourceFields
       .filter(
@@ -2218,15 +2229,9 @@ async function handleInitInner(
       );
     }
   }
-  const effectiveClassifierSummary = !classifierEnabled
-    ? "off"
-    : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
-      ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
-      : initConfig.classifier?.model
-        ? `prompt (${initConfig.classifier.model}, configured)`
-        : classifierModel
-          ? `prompt (${classifierModel}, detected default)`
-          : "prompt (no eligible model; regex fallback)";
+  const effectiveClassifierSummary = initClassifierSummary(
+    classifierEnabled, detectedClassifier, initConfig.classifier?.model, classifierModel,
+  );
 
   const proposal = buildInitProposal(
     models,
@@ -2272,19 +2277,13 @@ async function handleInitInner(
         "first",
     ]),
   );
-  const finalTiers = new Set([
-    ...Object.keys(models),
-    ...Object.keys(sourceModels),
-    ...inheritedTiers,
-  ]);
-  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
+  if (sourceConfig.rules !== undefined) proposal.rules = sourceConfig.rules;
+  else delete proposal.rules;
   const defaultTier = sourceConfig.default ?? publicDefaults.default;
   if (typeof defaultTier === "string" && models[defaultTier]?.length)
     proposal.default = defaultTier;
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];
   let receiptOnly = false;
-  let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
-  let settingsAdded = false;
   if (source.configBytes !== null) {
     const byProvider = new Map<string, Record<string, string[]>>();
     for (const model of available) {
@@ -2333,10 +2332,10 @@ async function handleInitInner(
           unknown
         >;
         let addedSetting = false;
+        const addSchemaPointer = Object.keys(existing).length === 0;
         for (const [key, value] of Object.entries(proposal)) {
           if (
-            key !== "$schema" &&
-            (key === "models" || !inheritedFields.has(key)) &&
+            (key === "$schema" ? addSchemaPointer : key === "models" || !inheritedFields.has(key)) &&
             existing[key] === undefined
           ) {
             existing[key] = value;
@@ -2344,7 +2343,6 @@ async function handleInitInner(
           }
         }
         if (addedSetting) {
-          settingsAdded = true;
           const nextConfigBytes = Buffer.from(JSON.stringify(existing, null, 2) + "\n", "utf8");
           const ownershipBytes =
             source.ownershipBytes ??
@@ -2371,12 +2369,11 @@ async function handleInitInner(
             nextConfigBytes,
             nextOwnershipBytes: ownershipBytes,
           };
-          changes = [];
         } else {
           if (source.ownershipBytes !== null) {
             initLog(
               ctx,
-              "The refreshed catalog has no safe membership or settings changes; no files were changed.",
+              "No changes to apply from this check. Your config was kept.",
             );
             return;
           }
@@ -2394,7 +2391,6 @@ async function handleInitInner(
               "utf8",
             ),
           };
-          changes = [];
         }
       } else {
         initLog(
@@ -2408,14 +2404,14 @@ async function handleInitInner(
       const reconciled = JSON.parse(
         Buffer.from(plan.transaction.nextConfigBytes).toString("utf8"),
       ) as Record<string, unknown>;
+      const sourceConfig = JSON.parse(Buffer.from(source.configBytes!).toString("utf8")) as Record<string, unknown>;
+      const addSchemaPointer = Object.keys(sourceConfig).length === 0;
       for (const [key, value] of Object.entries(proposal)) {
         if (
-          key !== "$schema" &&
-          (key === "models" || !inheritedFields.has(key)) &&
+          (key === "$schema" ? addSchemaPointer : key === "models" || !inheritedFields.has(key)) &&
           reconciled[key] === undefined
         ) {
           reconciled[key] = value;
-          settingsAdded = true;
         }
       }
       const nextConfigBytes = Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8");
@@ -2431,7 +2427,6 @@ async function handleInitInner(
         return;
       }
       transaction = { ...plan.transaction, nextConfigBytes };
-      changes = plan.changes;
     }
   } else {
     if (source.ownershipBytes !== null) {
@@ -2479,60 +2474,17 @@ async function handleInitInner(
       nextConfigBytes: configBytes,
       nextOwnershipBytes: ownershipBytes,
     };
-    settingsAdded = true;
-    changes = Object.entries(models).flatMap(([tier, keys]) =>
-      keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
-    );
   }
-  const savedPools = (
-    JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
-  ).models as Record<string, unknown>;
-  const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
-    typeof pool === "string"
-      ? [pool]
-      : Array.isArray(pool)
-        ? pool.filter((key): key is string => typeof key === "string")
-        : [],
-  );
-  const unverifiedSavedCount = savedModelKeys.filter((key) => !probeVerified.has(key)).length;
-  const added = changes.filter((change) => change.kind === "add");
-  const removed = changes.filter((change) => change.kind === "remove");
-  const tierSummary = [...new Set(changes.map((change) => change.tier))]
-    .sort()
-    .map(
-      (tier) =>
-        tier +
-        ": +" +
-        added.filter((change) => change.tier === tier).length +
-        "/-" +
-        removed.filter((change) => change.tier === tier).length,
-    )
-    .slice(0, 5);
-  const deltaSummary =
-    "memberships: +" +
-    added.length +
-    " / -" +
-    removed.length +
-    (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
-  uiOutput(
-    ctx,
-    [
-      "--- init ---",
-      `source: ${ranProbe ? `probe (${workingModels.length} working)` : `saved probe (${workingModels.length} working, ${probeAge} old)`}`,
-      `save target: ${initSourceLabel(source)}`,
-      deltaSummary,
-      `classifier: ${effectiveClassifierSummary}`,
-      settingsAdded ? "settings: standard routing defaults added where missing" : "",
-      `uncategorized: ${uncategorized.length}`,
-      "proposed config: classifier and routing defaults detected from Pi's available models",
-      "----------------",
-
-      uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
-      unverifiedSavedCount
-        ? `${unverifiedSavedCount} saved model membership(s) were not probe-verified; handwritten entries are preserved.`
-        : "",
-    ].filter(Boolean),
-  );
+  const summary = initSaveSummary(source.configBytes, transaction.nextConfigBytes, probeVerified);
+  const inheritedLines = configLayerPaths(process.cwd(), state.extensionDir)
+    .filter(([layer]) => inheritedSourceLayers.includes(layer))
+    .map(([layer, path], index) => `${index === 0 ? "Lower layers" : "            "}    ${layer} (${displayPath(path)})`);
+  const previewLines = initSavePreviewLines({
+    sourceLabel: initSourceLabel(source), workingCount: workingModels.length, ranProbe, probeAge,
+    summary, receiptOnly, classifier: effectiveClassifierSummary, inheritedLines,
+    uncategorizedCount: uncategorized.length,
+  });
+  uiOutput(ctx, previewLines, true);
 
   if (uncategorized.length > 0) {
     initLog(
@@ -2550,8 +2502,8 @@ async function handleInitInner(
   const ok =
     writeWithoutPrompt ||
     (await ctx.ui.confirm(
-      "Save Bifrost setup?",
-      `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
+      "Apply this configuration?",
+      ctx.mode === "tui" ? "" : previewLines.join("\n"),
     ));
   if (!ok) {
     initLog(ctx, "config not written");
@@ -2693,9 +2645,12 @@ async function handleInitInner(
     ),
   });
   const classifier = state.effectiveClassifierBackend(state.config, ctx);
+  const classifierStatus = classifierEnablementFor(state, ctx).enabled
+    ? `${classifier.backend} (${classifier.auto ? "detected default" : "configured"})`
+    : "off";
   initLog(
     ctx,
-    `Updated ${initSourceLabel(source)} and reloaded config. Routing ${state.enabled ? "enabled" : "disabled"} with ${Object.keys(state.config.models ?? {}).length} tier(s). Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`,
+    `${receiptOnly ? "Setup information saved" : `Configuration saved to ${initSourceLabel(source)}`}. Routing ${state.enabled ? "enabled" : "disabled"}. Classifier: ${classifierStatus}.`,
   );
 
   // Clear the init widget so it doesn't persist in the TUI.
@@ -4462,6 +4417,10 @@ function persistBootstrapConfig(
   if (!stillFresh && source.configBytes === null && !classifierChoice) {
     state.bootstrapModelsInMemory = false;
     return true;
+  }
+  if (stillFresh) {
+    if (!Object.hasOwn(current, "$schema"))
+      current.$schema = `${state.extensionDir.replace(/\/$/, "")}/schema.json`;
   }
   const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
   const ownership = stillFresh

@@ -9,8 +9,19 @@
 // This is a scheduled measurement, not a release gate. See
 // ../docs/mutation-testing.md.
 
+import { discoverCapabilityTargets } from "./enrollment.mjs";
+
 /**
- * Measured modules, their per-module timeout budgets, and measured cost.
+ * Normalized capability-owned enrollment. Only the three extracted capability
+ * targets are enrolled this way; the seven non-capability targets below stay
+ * central because they do not belong to a capability. See
+ * ../docs/mutation-testing.md for the descriptor contract.
+ */
+export const CAPABILITY_ENROLLMENT = discoverCapabilityTargets();
+
+/**
+ * Central non-capability mutation targets, their timeout budgets and measured
+ * cost.
  *
  * Stryker's per-mutant timeout is `dryRunDuration * timeoutFactor + timeoutMS`,
  * so the budget must be sized to the module's own bound suite. A shared budget
@@ -32,25 +43,13 @@
  *   reliability-v2.ts      2447 mutants  1m35s  -> 0.039 s/mutant
  *   routing.ts             1000 mutants  7m29s  -> 0.449 s/mutant (TAP: production engine)
  */
-export const TARGETS = {
+const CENTRAL_TARGETS = {
   "cache.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.013 },
   "classifier-semantics.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.019 },
   "inline-override.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.062 },
   "reliability.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.04 },
   "reliability-v2.ts": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.039 },
   "routing.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.449 },
-  // Issue #272 pilot: the built-in selection contract now lives in its own
-  // capability, so its focused suite must measure the moved implementation.
-  // routing.ts keeps its target for the surrounding resolver and rule policy.
-  // Measured: 52 mutants in 1.77s on this host -> 0.034 s/mutant.
-  "modules/strategies/selection.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.034 },
-  // Issue #273: the route-rule engine moved out of routing.ts, so the focused
-  // suites that own compilation and verification must measure the moved code.
-  // routing.ts keeps its target for the resolver and rule-adjacent policy.
-  // Measured on this host: rules.ts 29 mutants in 9s -> 0.31 s/mutant;
-  // safety.ts 399 mutants in 3m30s -> 0.53 s/mutant (TAP: production engine).
-  "modules/rules/rules.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.31 },
-  "modules/rules/safety.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.53 },
   // A gate script, not a product module. Its bound tests cover the structural
   // rule scope, the duplication threshold, and the parsers that turn tool
   // output into findings. A mutant survives when a gate stops failing a tree it
@@ -59,6 +58,13 @@ export const TARGETS = {
   // and Stryker's instrumented copy inflates the numbers that suite asserts.
   "scripts/toolbox.mjs": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.05 },
 };
+
+/**
+ * Every mutation target: central declaration order first, then the discovered
+ * capability targets in stable code-unit order. The previous incidental order
+ * is deliberately not recreated with ordinals or a hidden path list.
+ */
+export const TARGETS = { ...CENTRAL_TARGETS, ...CAPABILITY_ENROLLMENT.targets };
 
 /**
  * Self-imposed wall-clock cap for the whole measurement, in minutes.
@@ -142,10 +148,8 @@ export const MUTANT_ESTIMATE = {
   "reliability.ts": 352,
   "reliability-v2.ts": 2447,
   "routing.ts": 606,
-  "modules/strategies/selection.ts": 52,
-  "modules/rules/rules.ts": 29,
-  "modules/rules/safety.ts": 399,
   "scripts/toolbox.mjs": 855,
+  ...CAPABILITY_ENROLLMENT.estimates,
 };
 
 /**
@@ -235,20 +239,19 @@ export const IN_PLACE_TARGETS = new Set(["scripts/toolbox.mjs"]);
  * fault by patching `node:fs`, which Bun cannot do (`syncBuiltinESMExports()` is
  * a no-op there, and a `node:fs` mock cannot be undone). It now injects the fault
  * by editing a private source copy, so it runs on both runtimes.
+ *
+ * Capability-owned overrides live in the capability descriptor; the reasons move
+ * with the target that needs them.
  */
-
-const RULE_ENGINE_RUNNER_REASON =
-  "its bound tests exercise regex compilation, the structural scan and verdict decoding in the host process, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). The two potentially blocking match cases run in bounded children, but the scan and decode controls do not, so only the production Node engine gives a faithful verdict.";
-
-export const RUNNER_OVERRIDES = {
-  "modules/rules/rules.ts": { runner: "tap", reason: RULE_ENGINE_RUNNER_REASON },
-  "modules/rules/safety.ts": { runner: "tap", reason: RULE_ENGINE_RUNNER_REASON },
+const CENTRAL_RUNNER_OVERRIDES = {
   "routing.ts": {
     runner: "tap",
     reason:
       "its resolver suite is measured on the production Node engine. Removing this override is a budget/CI decision deferred past #273, not a change to make here.",
   },
 };
+
+export const RUNNER_OVERRIDES = { ...CENTRAL_RUNNER_OVERRIDES, ...CAPABILITY_ENROLLMENT.overrides };
 
 /**
  * Node arguments for the TAP runner. `{{hookFile}}` injects Stryker's coverage
@@ -571,7 +574,7 @@ export function measurementDiagnostics(data, options = {}) {
         "unexpected-module",
         BLOCKING,
         `unexpected module reports: ${data.unexpectedTargets.join(", ")}; they were excluded from the score, but a report outside the selected set means the artifact set is not the planned one`,
-        "Update `mutation/config.mjs` if the target set changed.",
+        "Update the target declaration (central config or the owning capability descriptor) if the target set changed.",
       ),
     );
   }
@@ -595,7 +598,7 @@ export function measurementDiagnostics(data, options = {}) {
         "timeout-burst",
         BLOCKING,
         `${timeouts} timed-out mutants exceed the tolerance of ${timeoutsAllowed}; the per-mutant budget is too small for the bound suite, so the Stryker score is not trustworthy`,
-        "Stryker counts a timeout as detected, so the Stryker score is inflated. Raise the module's `timeoutFactor`/`timeoutMS` in `mutation/config.mjs` before trusting this run.",
+        "Stryker counts a timeout as detected, so the Stryker score is inflated. Raise the module's `timeoutFactor`/`timeoutMS` in its declaration (central config or its capability descriptor) before trusting this run.",
       ),
     );
   } else if (timeouts > 0) {

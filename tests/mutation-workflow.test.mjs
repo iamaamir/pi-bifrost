@@ -14,9 +14,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
-import { ROOT, allTestFiles, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
+import { ROOT, allTestFiles, assertUniqueReportStems, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames, validateTargetSet } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
+  CAPABILITY_ENROLLMENT,
   MATRIX,
   MUTANT_ESTIMATE,
   RUNNER_OVERRIDES,
@@ -696,10 +697,9 @@ test("a module with no consumers fails loudly instead of measuring nothing", () 
   assert.throws(() => targetConfig("typesafe-classifier.ts"), /unknown mutation target/u);
 });
 
-test("all tunable Stryker parameters live in one config file", () => {
-  // The point of mutation/config.mjs is that a maintainer has one file to edit.
-  // The Stryker entry point must be a shim that delegates, not a second place
-  // holding options that could drift from it.
+test("shared Stryker policy lives in one config file, capability facts live with the capability", () => {
+  // The point of mutation/config.mjs is that a maintainer has one file for shared
+  // policy. A capability owns only its own measured facts and runner reason.
   const shim = readFileSync(join(ROOT, "stryker.config.mjs"), "utf8");
   assert.match(shim, /from "\.\/mutation\/targets\.mjs"/u, "the root config must delegate to mutation/");
   for (const option of ["timeoutFactor", "timeoutMS", "coverageAnalysis", "checkers", "thresholds", "disableTypeChecks"]) {
@@ -708,8 +708,8 @@ test("all tunable Stryker parameters live in one config file", () => {
   assert.match(shim, /MUTATION_TARGET/u, "the shim only selects the target");
   assert.doesNotMatch(shim, /mutate:\s*\[/u, "the shim must not restate the target list");
 
-  // The single config exports every knob a maintainer would want.
-  assert.ok(TARGETS["cache.ts"], "targets are declared in config");
+  // The single config exports every shared knob a maintainer would want.
+  assert.ok(TARGETS["cache.ts"], "central targets are declared in config");
   assert.ok(["bun", "tap"].includes(TEST_RUNNER), "the runner choice lives in config");
   assert.ok(Array.isArray(TAP_NODE_ARGS) && TAP_NODE_ARGS.length > 0, "the TAP node args live in config");
   assert.ok(typeof BUN_RUNNER_PLUGIN === "string" && BUN_RUNNER_PLUGIN.length > 0, "the Bun plugin id lives in config");
@@ -718,6 +718,80 @@ test("all tunable Stryker parameters live in one config file", () => {
   assert.ok(Array.isArray(SANDBOX_IGNORES));
   assert.ok(SUMMARY.survivorsPerModule > 0);
   assert.ok(TIMEOUT_TOLERANCE.share > 0 && TIMEOUT_TOLERANCE.minimum > 0);
+
+  // Capability targets are composed from their descriptor, not restated here.
+  // The loop is generic: adding a record to a descriptor needs no test edit,
+  // while removing a currently enrolled capability target still fails.
+  const configSource = readFileSync(join(ROOT, "mutation", "config.mjs"), "utf8");
+  for (const target of ["modules/rules/rules.ts", "modules/rules/safety.ts", "modules/strategies/selection.ts"]) {
+    assert.ok(
+      CAPABILITY_ENROLLMENT.records.some((entry) => entry.target === target),
+      `${target} must stay enrolled`,
+    );
+  }
+  for (const record of CAPABILITY_ENROLLMENT.records) {
+    assert.deepEqual(TARGETS[record.target], {
+      timeoutFactor: record.timeoutFactor,
+      timeoutMS: record.timeoutMS,
+      secondsPerMutant: record.secondsPerMutant,
+    }, `${record.target} must be composed from its descriptor`);
+    assert.equal(MUTANT_ESTIMATE[record.target], record.mutants);
+    if (record.runner) {
+      assert.deepEqual(RUNNER_OVERRIDES[record.target], { runner: record.runner, reason: record.reason });
+    } else {
+      assert.equal(RUNNER_OVERRIDES[record.target], undefined, `${record.target} uses the default runner`);
+    }
+    assert.equal(configSource.includes(record.target), false, `${record.target} is owned by its capability descriptor, not the central allowlist`);
+  }
+});
+
+test("target order is central declaration order, then stable capability order", () => {
+  const central = [
+    "cache.ts",
+    "classifier-semantics.ts",
+    "inline-override.ts",
+    "reliability.ts",
+    "reliability-v2.ts",
+    "routing.ts",
+    "scripts/toolbox.mjs",
+  ];
+  const names = targetNames();
+  assert.deepEqual(names.slice(0, central.length), central, "central declaration order is retained");
+  const capability = names.slice(central.length);
+  assert.deepEqual(capability, [...capability].sort(), "discovered capability targets use a stable code-unit sort");
+  assert.deepEqual(capability, [
+    "modules/rules/rules.ts",
+    "modules/rules/safety.ts",
+    "modules/strategies/selection.ts",
+  ]);
+});
+
+test("a target set with a missing binding or source fails closed", () => {
+  const fake = "stryker.config.mjs";
+  const budget = { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.01 };
+  try {
+    TARGETS[fake] = budget;
+    MUTANT_ESTIMATE[fake] = 1;
+    assert.throws(() => validateTargetSet(), /no bindable test consumers/u, "a source with no bound test cannot be measured");
+  } finally {
+    delete TARGETS[fake];
+    delete MUTANT_ESTIMATE[fake];
+  }
+
+  const missing = "mutation/__missing__.ts";
+  try {
+    TARGETS[missing] = budget;
+    MUTANT_ESTIMATE[missing] = 1;
+    assert.throws(() => validateTargetSet(), /has no source file/u, "a target with no source cannot be measured");
+  } finally {
+    delete TARGETS[missing];
+    delete MUTANT_ESTIMATE[missing];
+  }
+
+  assert.throws(
+    () => assertUniqueReportStems(["modules/alpha/x/y.ts", "modules/alpha/x__y.ts"]),
+    /share report stem/u,
+  );
 });
 
 test("the local runner lists every target and its binding", () => {
@@ -2460,11 +2534,20 @@ test("a symlinked reporting root is refused", () => {
 
 test("the identity covers the measurement's execution inputs", () => {
   // The population depends on more than the mutated bytes: how Stryker is
-  // configured, how bindings are derived, and which dependency versions resolve.
+  // configured, how bindings and enrollment are derived, and which dependency
+  // versions resolve.
   const inputs = identityInputs("cache.ts");
-  for (const file of ["stryker.config.mjs", "mutation/targets.mjs", "package-lock.json", "mutation/config.mjs"]) {
+  for (const file of ["stryker.config.mjs", "mutation/targets.mjs", "mutation/enrollment.mjs", "package-lock.json", "mutation/config.mjs"]) {
     assert.ok(inputs.includes(file), `${file} must be an identity input`);
   }
+  assert.ok(
+    identityInputs("modules/strategies/selection.ts").includes("modules/strategies/mutation.json"),
+    "a capability target's descriptor is part of its identity",
+  );
+  assert.ok(
+    !identityInputs("cache.ts").some((file) => file.endsWith("mutation.json")),
+    "a central target has no capability descriptor",
+  );
   // An unreadable input must not collide with a readable one.
   assert.notEqual(identityDigest(["a.ts"], () => "unreadable"), identityDigest(["a.ts"], () => ""));
 });

@@ -8,11 +8,15 @@
 // four modules across all of them. Most of its survivors measured absent tests
 // rather than weak tests.
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertEnrollmentCurrent, assertUniqueReportStems, capabilityDescriptorFor, reportStem } from "./enrollment.mjs";
+
+export { assertUniqueReportStems, reportStem };
 import {
   IN_PLACE_TARGETS,
+  MUTANT_ESTIMATE,
   SANDBOX_IGNORES,
   SHARDING,
   STRYKER_OPTIONS,
@@ -165,14 +169,21 @@ export function bindingFor(target) {
  * the question that matters -- did the bytes involved in the measurement change?
  */
 export function identityInputs(target) {
+  const descriptor = capabilityDescriptorFor(target);
   return [
-    // The measurement configuration, the binding rules, the Stryker shim and the
-    // resolved dependency set: each decides what runs, so a change in any of them
-    // makes a stored result incomparable even when the module's bytes are equal.
+    // The measurement configuration, the enrollment/normalization boundary, the
+    // binding rules, the Stryker shim and the resolved dependency set: each
+    // decides what runs, so a change in any of them makes a stored result
+    // incomparable even when the module's bytes are equal.
     "mutation/config.mjs",
+    "mutation/enrollment.mjs",
     "mutation/targets.mjs",
     "stryker.config.mjs",
     "package-lock.json",
+    // A capability's measured facts and effective enrollment inputs. Editing,
+    // adding, removing or replacing a record changes these bytes and invalidates
+    // an old report. Central targets have no descriptor.
+    ...(descriptor === null ? [] : [descriptor]),
     ...localImportClosure([target, ...bindingFor(target)]),
   ];
 }
@@ -209,6 +220,10 @@ function readRepoFile(file) {
 
 /** The identity of one measurement: its inputs, digested. */
 export function measurementIdentity(target) {
+  // A capability target whose descriptor was removed or replaced during the run
+  // must not be stamped with a cached enrollment. This re-reads from disk and
+  // throws when the target is no longer enrolled.
+  assertEnrollmentCurrent(target);
   return identityDigest(identityInputs(target), readRepoFile);
 }
 
@@ -318,19 +333,6 @@ export function targetNames() {
   return Object.keys(TARGETS);
 }
 
-/**
- * Flat on-disk stem for one target's reports.
- *
- * A target can sit in a subdirectory (`scripts/toolbox.mjs`). Naming the report
- * after the target path puts it in a nested directory, which the workflow's
- * collection glob and the artifact upload both read as a top-level file, so the
- * run published no report and failed its own completeness gate. One flat stem
- * keeps every report beside the others.
- */
-export function reportStem(target) {
-  return target.replaceAll("/", "__");
-}
-
 /** The report file name for one target measurement, with the shard when sharded. */
 export function reportNameFor(target, shardIndex = null) {
   const stem = reportStem(target);
@@ -427,8 +429,37 @@ export function targetConfig(
   return config;
 }
 
+/**
+ * Validate the composed target set before any consumer uses it.
+ *
+ * This is the lazy half of the enrollment boundary: descriptor discovery is
+ * cheap and runs at config load, while binding derivation reads the test tree and
+ * stays on demand. The runner, planner and inventory all pass through here, so a
+ * missing source, missing binding, missing estimate or report-stem collision
+ * fails closed instead of silently shrinking the measured population.
+ */
+export function validateTargetSet({ binding = true } = {}) {
+  const names = targetNames();
+  assertUniqueReportStems(names);
+  for (const target of names) {
+    if (!(target in TARGETS)) throw new Error(`mutation target ${target} has no timeout budget`);
+    if (!(target in MUTANT_ESTIMATE)) throw new Error(`mutation target ${target} has no mutant estimate`);
+    let stat;
+    try {
+      stat = lstatSync(join(ROOT, target));
+    } catch {
+      throw new Error(`mutation target ${target} has no source file`);
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`mutation target ${target} must be a regular source file, not a symlink or directory`);
+    }
+    if (binding) bindingFor(target);
+  }
+}
+
 /** Machine-readable target inventory for the workflow matrix and local scripts. */
 export function targetInventory() {
+  validateTargetSet({ binding: false });
   return targetNames().map((target) => ({
     target,
     runner: runnerFor(target),
