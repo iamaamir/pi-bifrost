@@ -17,6 +17,7 @@ import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingR
 import { ROOT, allTestFiles, assertUniqueReportStems, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames, validateTargetSet } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
+  CAPABILITY_ENROLLMENT,
   MATRIX,
   MUTANT_ESTIMATE,
   RUNNER_OVERRIDES,
@@ -719,30 +720,28 @@ test("shared Stryker policy lives in one config file, capability facts live with
   assert.ok(TIMEOUT_TOLERANCE.share > 0 && TIMEOUT_TOLERANCE.minimum > 0);
 
   // Capability targets are composed from their descriptor, not restated here.
-  const capabilityOwned = [
-    ["strategies", "modules/strategies/selection.ts", "selection.ts"],
-    ["rules", "modules/rules/rules.ts", "rules.ts"],
-    ["rules", "modules/rules/safety.ts", "safety.ts"],
-  ];
+  // The loop is generic: adding a record to a descriptor needs no test edit,
+  // while removing a currently enrolled capability target still fails.
   const configSource = readFileSync(join(ROOT, "mutation", "config.mjs"), "utf8");
-  for (const [capability, target, file] of capabilityOwned) {
-    const descriptorPath = join(ROOT, "modules", capability, "mutation.json");
-    assert.ok(existsSync(descriptorPath), `${target} must be enrolled by ${capability}/mutation.json`);
-    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8"));
-    const record = descriptor.targets.find((entry) => entry.file === file);
-    assert.ok(record, `${target} must have a descriptor record`);
-    assert.deepEqual(TARGETS[target], {
+  for (const target of ["modules/rules/rules.ts", "modules/rules/safety.ts", "modules/strategies/selection.ts"]) {
+    assert.ok(
+      CAPABILITY_ENROLLMENT.records.some((entry) => entry.target === target),
+      `${target} must stay enrolled`,
+    );
+  }
+  for (const record of CAPABILITY_ENROLLMENT.records) {
+    assert.deepEqual(TARGETS[record.target], {
       timeoutFactor: record.timeoutFactor,
       timeoutMS: record.timeoutMS,
       secondsPerMutant: record.secondsPerMutant,
-    });
-    assert.equal(MUTANT_ESTIMATE[target], record.mutants);
+    }, `${record.target} must be composed from its descriptor`);
+    assert.equal(MUTANT_ESTIMATE[record.target], record.mutants);
     if (record.runner) {
-      assert.deepEqual(RUNNER_OVERRIDES[target], { runner: record.runner, reason: record.reason });
+      assert.deepEqual(RUNNER_OVERRIDES[record.target], { runner: record.runner, reason: record.reason });
     } else {
-      assert.equal(RUNNER_OVERRIDES[target], undefined, `${target} uses the default runner`);
+      assert.equal(RUNNER_OVERRIDES[record.target], undefined, `${record.target} uses the default runner`);
     }
-    assert.equal(configSource.includes(target), false, `${target} is owned by its capability descriptor, not the central allowlist`);
+    assert.equal(configSource.includes(record.target), false, `${record.target} is owned by its capability descriptor, not the central allowlist`);
   }
 });
 
