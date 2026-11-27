@@ -2645,9 +2645,12 @@ async function handleInitInner(
     ),
   });
   const classifier = state.effectiveClassifierBackend(state.config, ctx);
+  const classifierStatus = classifierEnablementFor(state, ctx).enabled
+    ? `${classifier.backend} (${classifier.auto ? "detected default" : "configured"})`
+    : "off";
   initLog(
     ctx,
-    `${receiptOnly ? "Setup information saved" : `Configuration saved to ${initSourceLabel(source)}`}. Routing ${state.enabled ? "enabled" : "disabled"}. Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}).`,
+    `${receiptOnly ? "Setup information saved" : `Configuration saved to ${initSourceLabel(source)}`}. Routing ${state.enabled ? "enabled" : "disabled"}. Classifier: ${classifierStatus}.`,
   );
 
   // Clear the init widget so it doesn't persist in the TUI.

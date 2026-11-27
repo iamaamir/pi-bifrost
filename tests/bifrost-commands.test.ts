@@ -2257,6 +2257,7 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.models.quick, ["manual/keep", "fixture/chat"]);
       assert.deepEqual(saved.customSetting, { preserve: true });
       assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier: off.")));
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("Probing models")), false);
       assert.equal(calls.some((call) => call.kind === "select"), false);
       const reusedNotice = calls.find((call) => call.kind === "notify" && String(call.value).includes("Using model check from"));
