@@ -962,7 +962,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const pipelineConfig = state.config;
       const pipelineGeneration = state.configGeneration;
       const pipelineSignal = session.controller.signal;
-      const pipelineSessionId = ctx.sessionManager.getHeader()?.id;
+      const pipelineSessionId = ctx.sessionManager.getHeader?.()?.id;
       session.pipeline = buildPipeline(
         ctx,
         state.config,
@@ -1009,7 +1009,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         },
         async (model, status, retryAfter, errorText, allowTextInference) => {
           if (pipelineSignal.aborted || ctx.signal?.aborted || state.config !== pipelineConfig
-            || state.configGeneration !== pipelineGeneration || ctx.sessionManager.getHeader()?.id !== pipelineSessionId) return;
+            || state.configGeneration !== pipelineGeneration || pipelineSessionId === undefined
+            || ctx.sessionManager.getHeader?.()?.id !== pipelineSessionId) return;
           try { await recordClassifierProviderFailure(model, status, retryAfter, errorText, allowTextInference); }
           catch {
             providerCooldownWriteFailed = true;

@@ -237,8 +237,28 @@ describe("classifier", () => {
     assert.equal(subprocessCalls, 0);
   });
 
-  for (const terminal of ["network", "missing", "cancel", "new-rate"] as const) {
-    it(`does not reuse an earlier 429 response as terminal authority (${terminal})`, async () => {
+  type TerminalResponse = { content: never[]; stopReason: "error"; errorMessage: string };
+  type ReportRate = (retryAfter: string) => Promise<void>;
+  const networkFailure: TerminalResponse = { content: [], stopReason: "error", errorMessage: "network error" };
+  const terminalCases: {
+    name: string;
+    finish: (controller: AbortController, reportRate: ReportRate) => Promise<TerminalResponse>;
+    expected: Array<{ status: number; retryAfter?: string }>;
+  }[] = [
+    { name: "network", finish: async () => networkFailure, expected: [] },
+    { name: "missing", finish: async () => { throw new Error("network error"); }, expected: [] },
+    { name: "cancel", finish: async (controller) => { controller.abort(); return networkFailure; }, expected: [] },
+    {
+      name: "new-rate",
+      finish: async (_controller, reportRate) => {
+        await reportRate("2");
+        return { content: [], stopReason: "error", errorMessage: "429 Too Many Requests" };
+      },
+      expected: [{ status: 429, retryAfter: undefined }],
+    },
+  ];
+  for (const terminal of terminalCases) {
+    it(`does not reuse an earlier 429 response as terminal authority (${terminal.name})`, async () => {
       const model = makeModel("fixture", "classifier");
       const controller = new AbortController();
       const observed: Array<{ status: number; retryAfter?: string }> = [];
@@ -248,10 +268,9 @@ describe("classifier", () => {
           streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
             result: async () => {
               await options.onResponse?.({ status: 429, headers: { "retry-after": "120" } }, model);
-              if (terminal === "cancel") controller.abort();
-              if (terminal === "missing") throw new Error("network error");
-              if (terminal === "new-rate") await options.onResponse?.({ status: 429, headers: { "retry-after": "2" } }, model);
-              return { content: [], stopReason: "error", errorMessage: terminal === "new-rate" ? "429 Too Many Requests" : "network error" };
+              return terminal.finish(controller, async (retryAfter) => {
+                await options.onResponse?.({ status: 429, headers: { "retry-after": retryAfter } }, model);
+              });
             },
           }),
         },
@@ -261,7 +280,7 @@ describe("classifier", () => {
         spawnImpl: (() => { throw new Error("an uncertain prior rejection must not create a subprocess retry"); }) as unknown as typeof import("node:child_process").spawn,
       });
       assert.equal(result, undefined);
-      assert.deepEqual(observed, terminal === "new-rate" ? [{ status: 429, retryAfter: undefined }] : []);
+      assert.deepEqual(observed, terminal.expected);
     });
   }
 
