@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { ExpandableRows, type ExpandableRow } from "../ui/expandable-rows.ts";
 
 function harness(rows: ExpandableRow[], dimensions = { columns: 24, rows: 5 }) {
@@ -37,6 +38,26 @@ describe("expandable rows", () => {
     h.viewer.render(30);
     h.viewer.handleInput("\r");
     assert.deepEqual(h.selected, ["next"]);
+  });
+
+  it("keeps deeply nested keys and values readable at narrow widths", () => {
+    let row: ExpandableRow = { id: "leaf", label: "deepKey", detail: "deepValue" };
+    Array.from({ length: 10 }, (_, i) => 9 - i).forEach((i) => { row = { id: `level${i}`, label: `level${i}`, children: [row] }; });
+    const h = harness([row], { columns: 16, rows: 30 });
+    Array.from({ length: 10 }).forEach(() => {
+      h.viewer.render(16);
+      h.viewer.handleInput("l");
+      h.viewer.handleInput("j");
+    });
+    const screen = h.viewer.render(16);
+    assert(screen.every((line) => visibleWidth(line) <= 16));
+    assert(screen.join(" ").includes("deepKey"));
+    assert(screen.join(" ").includes("deepValue"));
+    h.viewer.handleInput("\r");
+    assert.deepEqual(h.selected, ["leaf"]);
+    h.viewer.handleInput("h");
+    h.viewer.handleInput("h");
+    assert.match(h.viewer.render(16).join("\n"), /▸ level9/);
   });
 
   it("wraps prose between words when it fits", () => {

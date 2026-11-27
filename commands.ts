@@ -1,3 +1,4 @@
+import type { AffinityInspectEvidence, EconomicInspectEvidence, ReliabilityV2InspectEvidence } from "./diagnostics.ts";
 import { stripConfigMetadata } from "./config-schema.ts";
 import { log as logNotice } from "./ui/notice.ts";
 import {
@@ -134,6 +135,7 @@ import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 import {
   inspectDiagnostics,
+  safeInteractiveDiagnosticPath,
   validateDiagnostics,
   type BifrostDiagnostic,
   type InspectDiagnosticsReport,
@@ -166,6 +168,7 @@ import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 import { getCostReportData } from "./cost-report.ts";
 import { formatCostText, showCostView } from "./ui/cost-view.ts";
+import { showInspectView } from "./ui/inspect-view.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -507,12 +510,7 @@ export type BifrostTierDisplay = {
 };
 
 type ResolvedTierDisplay = BifrostTierDisplay & { resolution: RoutedModelResolution };
-type AffinityInspectEvidence = {
-  mode: "off" | "observe" | "retain-within-tier";
-  source: "config" | "auto_default" | "physical_default";
-  status: "anchored" | "locality_unknown" | "disabled";
-  anchor?: { model: string; provider: string; lastSuccessfulAt: string; ageMs: number };
-};
+
 
 function inspectAffinity(
   state: BifrostState,
@@ -3768,60 +3766,6 @@ function readBoundedRegularSnapshot(
   }
 }
 
-const DIAGNOSTIC_FIELD_PATHS = new Set([
-  "schemaVersion",
-  "tierPolicies",
-  "tierPolicies.*",
-  "tierPolicies.*.fallbackTiers",
-]);
-
-interface EconomicInspectEvidence {
-  readonly mode: "off" | "observe" | "policy" | "invalid";
-  readonly sources: readonly {
-    readonly source: string;
-    readonly scope: string;
-    readonly authority: string;
-    readonly freshness: "missing" | "current" | "expired" | "future";
-    readonly observedAgeMs?: number;
-    readonly periods: readonly {
-      readonly window: string;
-      readonly period: string;
-      readonly unit: string;
-      readonly applicability: "current" | "reset" | "expired" | "future";
-    }[];
-  }[];
-  readonly diagnostics: readonly {
-    readonly code: string;
-    readonly severity: string;
-    readonly source?: string;
-    readonly scope?: string;
-  }[];
-}
-
-interface ReliabilityV2InspectEvidence {
-  readonly version: 2;
-  readonly status: "initialized" | "unavailable";
-  readonly revision?: number;
-  readonly observationsEnabled: boolean;
-  readonly cooldownOnAllowanceExhausted: boolean;
-  readonly scopes?: readonly {
-    readonly model: string;
-    readonly generation: number;
-    readonly recentFailureCount: number;
-    readonly openUntil?: number;
-  }[];
-  readonly observations?: readonly {
-    readonly model: string;
-    readonly category: string;
-    readonly categoryEvidence: string;
-    readonly observedAt: number;
-    readonly retryAt?: number;
-    readonly source: string;
-  }[];
-  readonly observationCount?: number;
-  readonly reasonCode?: string;
-}
-
 function inspectReliabilityV2(state: BifrostState): ReliabilityV2InspectEvidence | undefined {
   if (state.config.reliability?.stateVersion !== 2) return undefined;
   const observationsEnabled = state.config.reliability.observations?.enabled === true;
@@ -3935,7 +3879,7 @@ function inspectEconomicEvidence(state: BifrostState, now = Date.now()): Economi
 }
 
 function renderDiagnostic(item: BifrostDiagnostic): string {
-  const fieldPath = item.path && DIAGNOSTIC_FIELD_PATHS.has(item.path) ? `path=${item.path}` : "";
+  const fieldPath = safeInteractiveDiagnosticPath(item.path) ? `path=${item.path}` : "";
   const location = [
     fieldPath,
     item.tier ? `tier=${item.tier}` : "",
@@ -4165,8 +4109,8 @@ async function handleDiagnosticsCommand(
           ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
           ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
           modelPoolSource: state.bootstrapModelsInMemory
-            ? "session_catalog_in_memory"
-            : "configured",
+            ? "session_catalog_in_memory" as const
+            : "configured" as const,
         };
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
@@ -4179,6 +4123,7 @@ async function handleDiagnosticsCommand(
       0,
       `model pool source: ${state.bootstrapModelsInMemory ? "Pi catalog (in memory; run /bifrost init to refresh and save)" : "configuration"}`,
     );
+  if (report.kind === "inspection" && await showInspectView(ctx, report, state.config)) return;
   await uiResult(ctx, `Bifrost ${command}`, lines);
 }
 
