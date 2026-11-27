@@ -110,7 +110,23 @@ function bifrostConfigCheckSse(response) {
  * request handler keeps a bounded branch count as fixtures accumulate.
  * Returns true when this call handled the response.
  */
+const failureAuthorityFixtures = new Map([
+  ["authority-500-quota", { status: 500, error: { message: "The usage limit has been reached." } }],
+  ["authority-503-quota", { status: 503, error: { message: "The usage limit has been reached." } }],
+  ["authority-500-rate-code", { status: 500, error: { code: "rate_limit_exceeded", message: "The usage limit has been reached." } }],
+  ["authority-503-rate-code", { status: 503, error: { code: "rate_limit_exceeded", message: "The usage limit has been reached." } }],
+  ["authority-500-ambiguous", { status: 500, error: { message: "Could not retrieve quota information." } }],
+]);
+
+function failureAuthorityFixture(response, model) {
+  const fixture = failureAuthorityFixtures.get(model);
+  if (!fixture) return false;
+  json(response, fixture.status, { error: fixture.error });
+  return true;
+}
+
 function simpleFixture(response, model) {
+  if (failureAuthorityFixture(response, model)) return true;
   if (model === "probe-background-slow-fail") {
     setTimeout(() => sse(response, "slow-generation-done"), 4_000);
     return true;

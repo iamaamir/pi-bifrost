@@ -677,6 +677,66 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
     }
   });
 
+  // The threshold is deliberately greater than one: an immediate pause or
+  // replay cannot be explained away as ordinary circuit accounting.
+  for (const mode of ["v1", "v2"]) {
+    for (const model of ["authority-500-quota", "authority-503-quota", "authority-500-rate-code", "authority-503-rate-code", "authority-500-ambiguous"]) {
+      for (const scope of ["model", "provider"]) {
+        it(`keeps ${model} an ordinary failure in ${mode} Auto (${scope} scope)`, async () => {
+          const home = mkdtempSync(join(tmpdir(), "bifrost-authority-home-"));
+          const work = mkdtempSync(join(tmpdir(), "bifrost-authority-work-"));
+          try {
+            const failedKey = `fake/${model}`;
+            writeFixture({
+              home, work, port: server.port,
+              models: [{ id: model, reasoning: false }, { provider: "fake-backup", id: "healthy", reasoning: false }],
+              bifrost: {
+                ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+                enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+                models: { quick: [failedKey, "fake-backup/healthy"] },
+                reliability: {
+                  enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 1,
+                  cooldownOnAllowanceExhausted: true, allowanceCooldownScope: scope, retryOnAllowanceExhausted: true,
+                  ...(mode === "v2" ? { stateVersion: 2, observations: { enabled: true } } : {}),
+                },
+              },
+              retry: { enabled: false, provider: { maxRetries: 0 } },
+            });
+            const observer = writeOutcomeObserver(work);
+            const before = await fakeStats(server.port);
+            const result = await runPi({ home, work, extraExtensions: [observer.extension],
+              messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"] });
+            const after = await fakeStats(server.port);
+            assert.equal(result.timedOut, false, result.stderr);
+            const generation = after.stats.slice(before.stats.length).filter(entry => entry.kind === "generation");
+            const stateFile = mode === "v2" ? "bifrost-reliability-v2.json" : "bifrost-reliability.json";
+            const state = JSON.parse(readFileSync(join(work, ".pi", stateFile), "utf8"));
+            const record = mode === "v2" ? state.scopes[`model:${failedKey.length}:${failedKey}`] : state.models[failedKey];
+            const providerFile = join(work, ".pi", "bifrost-provider-reliability.json");
+            const providerState = existsSync(providerFile) ? JSON.parse(readFileSync(providerFile, "utf8")) : { scopes: {} };
+            const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+            assertNoBlockedNetwork(home);
+            assert.equal(record?.failures.length, 1, "one ordinary model failure must be accounted");
+            assert.equal(record.openUntil, undefined, "diagnostic prose cannot open the model circuit below threshold");
+            assert.ok(Object.values(providerState.scopes).every(entry => entry.openUntil === undefined),
+              "a server error must not immediately pause a provider");
+            assert.deepEqual(generation.map(entry => [entry.provider, entry.model]), [["fake", model]],
+              "neither allowance opt-in nor diagnostic quota prose authorizes another generation");
+            assert.notEqual(result.code, 0, "the initial server rejection remains terminal");
+            assert.equal(outcome.userCount, 1, "the original user message is not re-enqueued");
+            assert.equal(outcome.assistants.length, 1, "no allowance continuation or alternate response");
+            assert.equal(outcome.assistants[0].contentLength, 0);
+            assert.equal(outcome.contextEdits.length, 0);
+            assert.doesNotMatch(result.stderr, /paused until|retrying once with/);
+          } finally {
+            rmSync(home, { recursive: true, force: true });
+            rmSync(work, { recursive: true, force: true });
+          }
+        });
+      }
+    }
+  }
+
   for (const mode of ["v1", "v2"]) {
     it(`retries one zero-effect allowance failure with a configured alternate in ${mode} Auto`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-home-`));
