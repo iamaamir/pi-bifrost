@@ -4813,6 +4813,27 @@ describe("diagnostics commands", () => {
     return lines;
   }
 
+  it("shows runtime and loaded configuration context in the interactive inspection", async () => {
+    const h = diagnosticHarness();
+    let viewer: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+    Object.assign(h.context, { hasUI: true, mode: "tui" });
+    (h.context as any).ui.custom = async (factory: Function) => {
+      viewer = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_role: string, text: string) => text }, {}, () => {});
+    };
+    await withStubs(() => createCommandRouter(h.state as never)("inspect", h.context as never));
+    assert.ok(viewer);
+    const first = viewer.render(100).join("\n");
+    assert.match(first, /Loaded configuration/);
+    assert.doesNotMatch(first, /Tier: general/);
+    assert.match(first, /Classification/);
+    assert.match(first, /Full configuration/);
+    assert.match(first, /Diagnostics/);
+    viewer.handleInput("j"); viewer.handleInput("\r");
+    assert.match(viewer.render(100).join("\n"), /"models":/);
+    assert.match(viewer.render(100).join("\n"), /"strategy":/);
+    assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
+  });
+
   it("registers validate and inspect with JSON argument hints", () => {
     for (const command of ["validate", "inspect"]) {
       const spec = BIFROST_COMMAND_OPTIONS.find((item) => item.value === command);
