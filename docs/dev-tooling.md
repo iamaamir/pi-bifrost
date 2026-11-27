@@ -16,11 +16,11 @@ The Node checks need no other install. The security and workflow checks use
 separate tools. Install the pinned versions:
 
 ```bash
-# actionlint, osv-scanner, and Vale (Go)
+# actionlint and osv-scanner (Go). CI installs Vale through the pinned
+# vale-action in .github/workflows/docs-style.yml; a local Vale is only needed
+# for the on-demand `npm run check:docs-style` command.
 GOBIN="$HOME/.local/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 GOBIN="$HOME/.local/bin" go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.7.0
-GOBIN="$HOME/.local/bin" go install github.com/vale-cli/vale/v3/cmd/vale@v3.28.1
-vale sync
 
 # semgrep and zizmor (Python)
 uv tool install semgrep==1.182.0
@@ -50,7 +50,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
 | `npm run check:package` | Builds `dist/router`, then publint reports problems in the packed package | `npm ci` |
 | `npm run lint` | Oxlint reports code findings; errors stop the command | `npm ci` |
-| `npm run check:docs-style` | Vale style findings in `docs/guide/`; advisory, so findings do not gate a PR (see [`guide/STYLE.md`](guide/STYLE.md)). CI publishes the full report in the job summary and log; style packages are pinned by release URL in `.vale.ini` | `vale`, `vale sync` |
+| `npm run check:docs-style` | Vale style findings in `docs/guide/`; advisory, so findings do not gate a PR (see [`guide/STYLE.md`](guide/STYLE.md)). CI uses the pinned [official Vale action](../.github/workflows/docs-style.yml) with an advisory reporter; style packages are pinned by release URL in `.vale.ini` | local `vale` (optional, on demand only) |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
 | `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
@@ -340,6 +340,7 @@ marker to the budget reddened only the report bound, at 121 lines.
 | [`report-publisher-checks.yml`](../.github/workflows/report-publisher-checks.yml) | Pull request, push to `main` | `node --test tests/ci-report-publish.test.mjs` for the trusted report publisher |
 | [`acceptance-report.yml`](../.github/workflows/acceptance-report.yml) | `workflow_run` of Verification | adds one marker-owned report comment to the pull request. It uses only default-branch code and never operates pull-request code |
 | [`docs-links-scheduled.yml`](../.github/workflows/docs-links-scheduled.yml) | Weekly cron, manual dispatch | advisory external URL check (lychee), reported in the job summary; never runs on pull requests or gates a merge |
+| [`docs-style.yml`](../.github/workflows/docs-style.yml) | Pull request, push to `main` | advisory Vale prose lint of `docs/guide/` through the pinned official action; findings annotate the PR but do not gate it |
 
 External documentation URLs are checked on a schedule, not on pull requests.
 The deterministic docs tests already resolve relative links and heading anchors,

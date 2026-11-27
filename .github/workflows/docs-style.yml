@@ -1,0 +1,32 @@
+name: Docs style
+
+# Report-only prose linting for the guide. The action's default reporter
+# annotates the pull request without changing its result, so style findings
+# stay advisory; a Vale runtime failure still fails the job.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  vale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the candidate revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Vale (report-only)
+        uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
+        with:
+          version: "3.28.1"
+          files: docs/guide
+          config: .vale.ini
+          filter_mode: nofilter
+          reporter: github-pr-annotations

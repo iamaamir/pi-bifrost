@@ -55,8 +55,8 @@
     // Optional host tool for on-demand benchmarks, documented in
     // docs/dev-tooling.md. It is not an npm dependency by design.
     "hyperfine",
-    // Installed by the docs-style CI job, documented in docs/dev-tooling.md.
-    // It is a host prose linter, not an npm dependency.
+    // Optional local prose linter for `npm run check:docs-style`, documented in
+    // docs/dev-tooling.md. CI uses the pinned vale-action, not a host binary.
     "vale",
     // Provided by @stryker-mutator/core, which the mutation runner invokes.
     "stryker",

@@ -121,32 +121,6 @@ jobs:
       - name: Verify host integration contracts
         run: npm run check:contracts
 
-  # Vale is report-only: findings go to the step summary and do not fail the
-  # job. A Vale runtime error still fails, so a broken config cannot look like a
-  # clean report.
-  docs-style:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out the candidate revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - name: Install Go for the pinned Vale build
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.27.4"
-          cache: false
-      - name: Install Vale 3.28.1
-        run: |
-          GOBIN="$HOME/.local/bin" go install github.com/vale-cli/vale/v3/cmd/vale@v3.28.1
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Sync Vale style packages
-        run: vale sync
-      - name: Vale (report-only)
-        run: bash scripts/vale-report.sh
-
   workflow-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
