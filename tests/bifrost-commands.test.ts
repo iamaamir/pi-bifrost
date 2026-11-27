@@ -3367,8 +3367,13 @@ describe("preview source values", () => {
   function normalPreviewSection(doc: string): string | undefined {
     const start = doc.indexOf("### Normal preview JSON");
     if (start === -1) return undefined;
-    const next = doc.indexOf("\n### ", start + 1);
-    return doc.slice(start, next === -1 ? undefined : next);
+    // Any later heading ends the section, not only the next level-three one. A
+    // level-two heading would otherwise let an unrelated table satisfy the
+    // assertion after this section is closed.
+    const ends = ["\n# ", "\n## ", "\n### "]
+      .map((heading) => doc.indexOf(heading, start + 1))
+      .filter((index) => index !== -1);
+    return doc.slice(start, ends.length > 0 ? Math.min(...ends) : undefined);
   }
 
   function findSourceRow(doc: string): string | undefined {
@@ -3414,6 +3419,26 @@ describe("preview source values", () => {
     // never finding any row at all.
     const inside = doc.replace("| `tier` | inside the canonical section |", "| `source` | inside the canonical section |");
     assert.match(findSourceRow(inside) ?? "", /inside the canonical section/u);
+  });
+
+  it("rejects a source row under a level-two heading after the section", () => {
+    // The section ends at a level-one or level-two heading too. Without that
+    // boundary, a row in a later top-level table would satisfy the assertion
+    // while the canonical contract was missing.
+    const doc = [
+      "### Normal preview JSON (`--json`, no `--trace`)",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `tier` | inside the canonical section |",
+      "",
+      "## Persistence summary",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `source` | unrelated later table |",
+    ].join("\n");
+    assert.equal(findSourceRow(doc), undefined);
   });
 
   it("rejects a source outside the union at compile time", () => {
