@@ -41,7 +41,7 @@ Preview runs in the Pi command context. Behavior depends on flags:
 
 - **`--offline`**: uses only local cache, rules, and the default tier for that request. It does not send the preview prompt to a configured classifier for that request and does not change session classifier settings (`/bifrost classifier off` / `on`). It does not generate a response and does not activate a model.
 - **Without `--offline`**: the normal tier pipeline runs. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled for that path, it may receive the preview prompt. This is the same classifier path described in the classifier guide; see [Classifiers](classifiers.md). Run `/bifrost classifier off` for a rules-and-default-only preview for the current session when you want to avoid that classifier call for this session.
-- **Leading flags**: put leading flags before the prompt. Supported leading flags are `--json`, `--trace`, and `--offline` in any order; use each once. A token that is not one of these leading flags is part of the prompt.
+- **Leading flags**: put leading flags before the prompt. Supported leading flags are `--json`, `--trace`, and `--offline` in any order; use each once. Flag parsing stops at the first duplicate or unrecognized token, and that token and the remaining text become the prompt. For example, in `preview --json --json --offline review this code` the second `--json` ends flag parsing, so `--offline` is not applied.
 - **`--json`**: writes one machine-readable line on stderr prefixed with `[bifrost-json] ` (in addition to normal `[bifrost]` progress and messages in non-TUI contexts). Find that line and parse the JSON on the rest of that line. Other stderr lines may appear. Ignore lines that do not start with that marker.
 - **`--trace`**: adds a versioned route-trace summary. Use alone for human-readable trace output or with `--json` for the trace JSON form on the same `[bifrost-json] ` line. Route traces describe the resolver selection and do not include the prompt or model objects. If classifier routing is enabled, Bifrost warns before classification when the run may send the prompt to a classifier; the trace includes that disclosure. The trace summarizes selection; it does not report activation success or classifier stage timings.
 - Preview does not generate a response and does not activate the selected model. These boundaries apply to all preview forms.
@@ -148,3 +148,18 @@ For safe migration, follow the [existing-user migration steps](reliability-and-c
 | `/bifrost classifier on` / `off` / `inherit` | No | No; choice applies to this Pi session only |
 
 Pin is a hard lock. A tier name at the start of a message is not applied while pinned.
+
+<!-- Former command-reference section anchors. The procedures moved to workflows.md; these ids keep existing deep links pointing at the relocation notice instead of a missing heading. -->
+<a id="common-workflows"></a>
+<a id="preview-before-generation"></a>
+<a id="scripted-preview"></a>
+<a id="keep-one-model-for-a-long-session"></a>
+<a id="route-one-unpinned-prompt-through-a-known-tier"></a>
+<a id="change-config"></a>
+<a id="migrate-a-config-schema"></a>
+<a id="reconcile-generated-model-membership"></a>
+<a id="diagnose-unavailable-models"></a>
+
+## Relocated procedures
+
+Preview, migration, reconciliation, and diagnostic procedures moved to [Common workflows](workflows.md).

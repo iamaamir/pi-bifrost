@@ -14,7 +14,8 @@ New to Bifrost? Start with [Install and initialize](getting-started.md). Init is
 6. [Configure optional prompt, TypeSafe/Jev, or Pi-native classifiers](classifiers.md)
 7. [Troubleshoot setup and routing](troubleshooting.md)
 8. [Use the command reference](commands.md)
-9. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
+9. [Perform common routing tasks](workflows.md)
+10. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
 
 ## Guide map
 
@@ -65,7 +66,7 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 |----------|---------------|
 | What do I need before installing? | [Prerequisites](getting-started.md#before-installing) |
 | Will init contact models or cost money? | [Probe usage warning](getting-started.md#probe-usage-warning) |
-| Does preview send my prompt anywhere? | [Preview before generation](getting-started.md#preview-before-generation) |
+| Does preview send my prompt anywhere? | [Preview before generation](workflows.md#preview-before-generation) |
 | How do prefixes and pinning interact? | [Routing controls](routing-controls.md) |
 | What happens across A → B → A or N model switches? | [Provider prompt caching](prompt-caching.md) |
 | What does Jev decide? | [TypeSafe/Jev](classifiers.md#typesafejev) |
