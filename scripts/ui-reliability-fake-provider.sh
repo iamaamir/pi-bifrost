@@ -142,7 +142,7 @@ echo 'scenario 5: pass'
 
 # ── Scenario 6: steer-queued prompts dispatch and settle within one run ──
 echo '--- scenario 6: queued multi-dispatch settlement ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json" "$work/.pi/bifrost-debug.jsonl"
 cat >"$home/.pi/agent/models.json" <<EOF
 {"providers":{"fake":{"baseUrl":"http://127.0.0.1:$port/v1","api":"openai-completions","apiKey":"test","models":[{"id":"healthy","reasoning":false},{"id":"fast","reasoning":false},{"id":"strong","reasoning":false},{"id":"slow","reasoning":false}]}}}
 EOF
@@ -172,8 +172,30 @@ poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"dispatch","entryType":"even
 grep -q '"event":"dispatch","entryType":"event","model":"fake/strong"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: steer #1 did not dispatch fake/strong' >&2; exit 1; }
 grep -q '"event":"dispatch","entryType":"event","model":"fake/slow"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: initial prompt did not dispatch fake/slow' >&2; exit 1; }
 grep -q '"event":"trial","entryType":"event","model":"fake/fast","allowed":true,"claimed":true' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: half-open trial was not claimed for fake/fast' >&2; exit 1; }
-if grep -q '"trialActive":true' "$work/.pi/bifrost-reliability.json" 2>/dev/null; then
-  echo 'FAIL: trial wedged after multi-dispatch settle' >&2; exit 1
+# Dispatch is not settlement. Wait for the claimed half-open trial to record
+# a successful outcome; an abandoned trial or a failed/reopened circuit must
+# not satisfy this check. Parse JSON rather than relying on its formatting.
+settled=false
+for _ in $(seq 1 60); do
+  if node -e '
+const fs = require("node:fs");
+const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const record = state.models?.["fake/fast"];
+if (!record || record.trialActive !== false ||
+    record.openUntil !== undefined ||
+    !Array.isArray(record.failures) || record.failures.length !== 0 ||
+    !Number.isFinite(record.lastSuccessAt) || record.lastSuccessAt <= 1) process.exit(1);
+' "$work/.pi/bifrost-reliability.json" >/dev/null 2>&1; then
+    settled=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$settled" != true ]]; then
+  echo 'FAIL: half-open trial did not settle successfully after multi-dispatch' >&2
+  cat "$work/.pi/bifrost-reliability.json" >&2 || true
+  tail -n 80 "$work/.pi/bifrost-debug.jsonl" >&2 || true
+  exit 1
 fi
 echo 'scenario 6: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
