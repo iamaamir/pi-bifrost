@@ -574,7 +574,7 @@ export function measurementDiagnostics(data, options = {}) {
         "unexpected-module",
         BLOCKING,
         `unexpected module reports: ${data.unexpectedTargets.join(", ")}; they were excluded from the score, but a report outside the selected set means the artifact set is not the planned one`,
-        "Update `mutation/config.mjs` if the target set changed.",
+        "Update the target declaration (central config or the owning capability descriptor) if the target set changed.",
       ),
     );
   }
@@ -598,7 +598,7 @@ export function measurementDiagnostics(data, options = {}) {
         "timeout-burst",
         BLOCKING,
         `${timeouts} timed-out mutants exceed the tolerance of ${timeoutsAllowed}; the per-mutant budget is too small for the bound suite, so the Stryker score is not trustworthy`,
-        "Stryker counts a timeout as detected, so the Stryker score is inflated. Raise the module's `timeoutFactor`/`timeoutMS` in `mutation/config.mjs` before trusting this run.",
+        "Stryker counts a timeout as detected, so the Stryker score is inflated. Raise the module's `timeoutFactor`/`timeoutMS` in its declaration (central config or its capability descriptor) before trusting this run.",
       ),
     );
   } else if (timeouts > 0) {
