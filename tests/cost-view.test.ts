@@ -78,3 +78,17 @@ it("marks partial token data even when another record has unknown cost", () => {
   const tokensOnly = formatCostText(getCostReportData(entries.slice(0, 1), entries.slice(0, 1))).join("\n");
   assert.match(tokensOnly, /Current branch: \$0\.100000 · partial/);
 });
+
+it("preserves independent expanded request and model trees across tab switches", () => {
+  const entries = [{ type: "message", message: { role: "user" } }, { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } } } }] as any;
+  const view = new CostView(getCostReportData(entries, entries), () => ({ columns: 100, rows: 40 }), { fg: (_color, value) => value }, () => {}, () => {});
+  view.handleInput("\r");
+  assert.match(view.render(90).join("\n"), /p\/m/);
+  view.handleInput("\t");
+  view.handleInput("\r");
+  assert.match(view.render(90).join("\n"), /Input 1/);
+  view.handleInput("\t");
+  assert.match(view.render(90).join("\n"), /p\/m/);
+  view.handleInput("\t");
+  assert.match(view.render(90).join("\n"), /Input 1/);
+});
