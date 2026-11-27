@@ -265,16 +265,15 @@ export function capabilityDescriptorFor(target) {
  *
  * A measurement must not stamp a target whose descriptor was removed or
  * replaced during the run. Re-reading here makes identity computation fail
- * closed instead of trusting the cached normalized inventory.
+ * closed instead of trusting the cached normalized inventory. Central targets
+ * return null without a filesystem walk.
  */
-export function assertEnrollmentCurrent(target) {
-  const descriptor = capabilityDescriptorFor(target);
-  if (descriptor === null) return null;
-  const current = discover(ROOT);
-  const record = current.records.find((entry) => entry.target === target);
+export function assertEnrollmentCurrent(target, { root = ROOT } = {}) {
+  if (!target.startsWith(`${MODULES}/`)) return null;
+  const record = discover(root).records.find((entry) => entry.target === target);
   if (!record) {
     throw new Error(
-      `enrollment descriptor ${descriptor} no longer enrolls ${target}; rerun from the current descriptor`,
+      `mutation target ${target} is no longer enrolled by an on-disk capability descriptor; rerun from the current descriptor`,
     );
   }
   return record;
