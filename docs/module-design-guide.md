@@ -178,16 +178,14 @@ Verify execution and discovery in full and applicable quick suites, TypeScript, 
 
 Preserve existing contract-sensitive fault controls and issue-specific focused mutation acceptance. Manual fault controls and a scoped Stryker campaign are distinct evidence.
 
-The preferred direction for future research is opt-in, dynamically discoverable module mutation targets with independent execution:
+Mutation measurement is optional. Follow the [mutation-testing contract](mutation-testing.md#capability-owned-enrollment) and [shared tooling instructions](../mutation/README.md) when enrolling a capability.
 
-- Modules own implementation scope, behavioral contracts, relevant tests and the decision to opt in through authorized policy.
-- Shared tooling owns discovery and validation, Stryker defaults, target/test binding, execution, time budgets, sharding, reporting and CI orchestration.
-- Reuse the existing mutation runner and dynamic CI matrix. Do not require a separate Stryker config or workflow per module. Investigate whether declarative local metadata is justified; no manifest format is prescribed here.
-- Investigate individual, selected, affected and scheduled all-opted-in campaigns. Affected selection must conservatively fall back to broader verification when mapping is incomplete.
-- Do not assume module-local tests cover every relevant consumer contract. Compare local bindings with relevant system tests, including transitive and indirect consumers. Missing required bindings must fail explicitly.
-- Preserve existing scheduled campaigns and obligations during migration. Make target populations, binding changes and status categories visible; do not compare incomparable scores. NoCoverage=0 without appropriate coverage analysis is not proof of full exercise.
+- Modules own implementation scope, behavioral contracts, relevant tests and explicit opt-in through authorized policy. Enrolled capabilities declare measured source files and target-specific facts in an optional data-only `mutation.json`.
+- Shared tooling owns discovery, validation, runner defaults, test binding, execution, planning, sharding, reporting and CI orchestration. Use the existing runner and normalized inventory; do not introduce separate configs, registries or workflows.
+- Preserve direct-consumer mutation bindings. Widen only for a demonstrated relevant and instrumentable gap. Missing required bindings MUST fail explicitly; module-local tests do not establish every consumer contract.
+- Review enrollment population changes explicitly. Preserve scheduled obligations, verify actual binding and planning parity, and require fresh measurement provenance when inputs change. Distinguish mutation status categories and measurement usability from contract correctness.
 
-Systematic mutation discovery, affected-test selection and faster CI remain separate evidence-driven research. They do not authorize removing existing targets or full gates, nor make mutation campaigns mandatory for every module.
+Affected-test selection remains deferred until evidence demonstrates safe, meaningful feedback improvements. No implicit enrollment, mandatory per-module mutation campaigns, weakened verification gates or automatic test skipping is implied.
 
 ## Compatibility and distribution
 
