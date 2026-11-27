@@ -410,7 +410,9 @@ test("a nested runtime source is enrollable but tests and declarations are not",
     withFixture(
       {
         capabilities: { alpha: descriptor([record({ file })]) },
-        sources: {},
+        // The source must exist, otherwise a missing-source error would satisfy
+        // the expected regex without exercising the runtime/comma guard.
+        sources: { [`modules/alpha/${file}`]: SOURCE },
       },
       (root) => assert.throws(() => discoverCapabilityTargets({ root }), expected, name),
     );
