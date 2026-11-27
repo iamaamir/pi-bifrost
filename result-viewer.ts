@@ -1,8 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 type ResultTheme = Pick<ExtensionContext["ui"]["theme"], "fg">;
 
-const MAX_VISIBLE_LINES = 10;
 
 /** Match legacy Esc plus Kitty CSI-u and xterm modifyOtherKeys encodings. */
 export function isEscapeKey(data: string): boolean {
@@ -12,31 +12,43 @@ export function isEscapeKey(data: string): boolean {
 }
 
 export function wrapResultLines(lines: readonly string[], width: number): string[] {
-  const safeWidth = Math.max(1, width);
-  const wrapped: string[] = [];
-
-  for (const line of lines) {
-    if (!line) {
-      wrapped.push("");
-      continue;
+  const limit = Math.max(2, width);
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  return lines.flatMap((line) => line.split("\n").flatMap((paragraph) => {
+    const wrapped: string[] = [];
+    let part = "";
+    for (const { segment } of segmenter.segment(paragraph)) {
+      if (visibleWidth(part + segment) > limit) {
+        const boundary = part.search(/\s+\S*$/u);
+        if (boundary >= 0 && /\S/u.test(part.slice(boundary))) {
+          const end = boundary + part.slice(boundary).match(/^\s+/u)![0].length;
+          wrapped.push(part.slice(0, end));
+          part = part.slice(end);
+        } else {
+          wrapped.push(part);
+          part = "";
+        }
+      }
+      if (visibleWidth(part + segment) > limit) {
+        wrapped.push(part);
+        part = "";
+      }
+      part += segment;
     }
-
-    for (let offset = 0; offset < line.length; offset += safeWidth) {
-      wrapped.push(line.slice(offset, offset + safeWidth));
-    }
-  }
-
-  return wrapped;
+    return [...wrapped, part];
+  }));
 }
 
 class ResultViewer {
   private scrollOffset = 0;
   private maxOffset = 0;
+  private visibleLines = 1;
   private readonly title: string;
   private readonly lines: readonly string[];
   private readonly theme: ResultTheme;
   private readonly done: () => void;
   private readonly requestRender: () => void;
+  private readonly terminalRows: () => number;
 
   constructor(
     title: string,
@@ -44,12 +56,14 @@ class ResultViewer {
     theme: ResultTheme,
     done: () => void,
     requestRender: () => void,
+    terminalRows: () => number,
   ) {
     this.title = title;
     this.lines = lines;
     this.theme = theme;
     this.done = done;
     this.requestRender = requestRender;
+    this.terminalRows = terminalRows;
   }
 
   handleInput(data: string): void {
@@ -60,37 +74,43 @@ class ResultViewer {
 
     if (data === "\x1b[A" || data === "k") this.scrollOffset = Math.max(0, this.scrollOffset - 1);
     else if (data === "\x1b[B" || data === "j") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + 1);
-    else if (data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - MAX_VISIBLE_LINES);
-    else if (data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + MAX_VISIBLE_LINES);
+    else if (data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - this.visibleLines);
+    else if (data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + this.visibleLines);
     else return;
 
     this.requestRender();
   }
 
   render(width: number): string[] {
-    const contentWidth = Math.max(1, width - 4);
+    // Match Pi overlay percentage rounding and one-row margins.
+    const height = Math.max(1, Math.min(Math.floor(this.terminalRows() * 0.8), this.terminalRows() - 2));
+    const framed = width >= 6 && height >= 5;
+    const header = height >= (framed ? 5 : 3);
+    this.visibleLines = height - (framed ? 2 : 0) - (header ? 2 : 0);
+    const contentWidth = framed ? width - 4 : Math.max(0, width);
+    if (contentWidth === 1) return Array.from("Resize wider", (character) => this.theme.fg("dim", character)).slice(0, height);
     const lines = wrapResultLines(this.lines, contentWidth);
-    this.maxOffset = Math.max(0, lines.length - MAX_VISIBLE_LINES);
+    this.maxOffset = Math.max(0, lines.length - this.visibleLines);
     this.scrollOffset = Math.min(this.scrollOffset, this.maxOffset);
-    const visible = lines.slice(this.scrollOffset, this.scrollOffset + MAX_VISIBLE_LINES);
+    const visible = lines.slice(this.scrollOffset, this.scrollOffset + this.visibleLines);
     const border = (text: string) => this.theme.fg("border", text);
     const row = (text: string, color: "text" | "accent" | "dim" = "text") => {
-      const padded = text.slice(0, contentWidth).padEnd(contentWidth);
-      return `${border("│")} ${this.theme.fg(color, padded)} ${border("│")}`;
+      const clipped = truncateToWidth(text, contentWidth, "");
+      const padded = clipped + " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)));
+      return framed ? `${border("│")} ${this.theme.fg(color, padded)} ${border("│")}` : this.theme.fg(color, padded);
     };
-    const title = this.title.slice(0, contentWidth);
-    const scroll = lines.length > MAX_VISIBLE_LINES
+    const title = this.title;
+    const scroll = lines.length > this.visibleLines
       ? `${this.scrollOffset + 1}-${this.scrollOffset + visible.length}/${lines.length} · ↑↓/jk scroll · esc close`
       : "esc close";
 
     return [
-      border(`╭${"─".repeat(contentWidth + 2)}╮`),
-      row(title, "accent"),
-      row(scroll, "dim"),
+      ...(framed ? [border(`╭${"─".repeat(contentWidth + 2)}╮`)] : []),
+      ...(header ? [row(title, "accent"), row(scroll, "dim")] : []),
       ...visible.map((line) => row(line)),
-      ...Array.from({ length: MAX_VISIBLE_LINES - visible.length }, () => row("")),
-      border(`╰${"─".repeat(contentWidth + 2)}╯`),
-    ];
+      ...Array.from({ length: this.visibleLines - visible.length }, () => row("")),
+      ...(framed ? [border(`╰${"─".repeat(contentWidth + 2)}╯`)] : []),
+    ].map((line) => truncateToWidth(line, Math.max(0, width), ""));
   }
 
   invalidate(): void {}
@@ -104,7 +124,7 @@ export async function showBifrostResult(
   if (!ctx.hasUI || ctx.mode !== "tui") return false;
 
   await ctx.ui.custom<void>(
-    (tui, theme, _keybindings, done) => new ResultViewer(title, lines, theme, done, () => tui.requestRender()),
+    (tui, theme, _keybindings, done) => new ResultViewer(title, lines, theme, done, () => tui.requestRender(), () => tui.terminal.rows),
     {
       overlay: true,
       overlayOptions: {

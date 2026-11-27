@@ -952,10 +952,18 @@ def main() -> int:
         ),
         ("validate", True, [(0.5, "/bifrost validate\r")]),
         ("inspect", True, [(0.5, "/bifrost inspect\r")]),
+        ("inspect-expanded", True, [(0.5, "/bifrost inspect\r"), (0.5, "\r")]),
+        ("inspect-config", True, [(0.5, "/bifrost inspect\r"), (0.5, "j\r"), (0.5, "jjj\r")]),
+        ("inspect-escape", True, [(0.5, "/bifrost inspect\r"), (0.5, "\x1b"), (0.5, "escape-check")]),
+        ("inspect-report", True, [(0.5, "/bifrost inspect\r"), (0.5, "jj\r")]),
+        ("inspect-narrow", True, [(0.5, "/bifrost inspect\r"), (0.5, "\r")], None, [], False, False, False, None, None, False, (60, 24)),
+        ("inspect-short", True, [(0.5, "/bifrost inspect\r")], None, [], False, False, False, None, None, False, (60, 12)),
+        ("inspect-short-expanded", True, [(0.5, "/bifrost inspect\r"), (0.5, "\rjj")], None, [], False, False, False, None, None, False, (60, 12)),
+        ("inspect-narrow-scrolled", True, [(0.5, "/bifrost inspect\r"), (0.5, "jj\r"), (0.5, "jjj\r"), (0.5, "\x1b[6~")], None, [], False, False, False, None, None, False, (60, 24)),
         (
             "inspect-reserve",
             True,
-            [(0.5, "/bifrost inspect\r"), (0.5, "jjjjjj")],
+            [(0.5, "/bifrost inspect\r"), (0.5, "jj\r"), (0.5, "jjjj\r")],
             {
                 "schemaVersion": 2,
                 "economics": {
@@ -1128,14 +1136,46 @@ def main() -> int:
                 if "validation (loaded effective config)" not in validate_text:
                     raise AssertionError("validate UI did not render the loaded-config label")
             if name == "inspect":
-                inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
-                if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
-                    raise AssertionError("inspect UI did not render its local snapshot labels")
-                if "Registry refresh threshold: 30s" not in inspect_text:
-                    raise AssertionError("inspect UI did not render the registry refresh threshold")
+                text = (OUT / "inspect.txt").read_text(errors="ignore")
+                if "Loaded configuration · local snapshot" not in text or "Tier: general" in text or "Full configuration" not in text or "Diagnostics" not in text:
+                    raise AssertionError("inspect did not show the interactive local snapshot")
+            if name == "inspect-expanded":
+                text = (OUT / "inspect-expanded.txt").read_text(errors="ignore")
+                for required in ("Classification", "Setting source:", "Readiness:"):
+                    if required not in text:
+                        raise AssertionError(f"expanded inspect missing {required}")
+            if name == "inspect-config":
+                text = (OUT / "inspect-config.txt").read_text(errors="ignore")
+                if "Full configuration" not in text or '"backend": "prompt"' not in text or '"enabled": false' not in text:
+                    raise AssertionError("inspect did not expand effective configuration")
+            if name == "inspect-escape":
+                text = (OUT / "inspect-escape.txt").read_text(errors="ignore")
+                if "escape-check" not in text or "Bifrost inspect" in text:
+                    raise AssertionError("escape did not close inspect")
+            if name == "inspect-report":
+                text = (OUT / "inspect-report.txt").read_text(errors="ignore")
+                for required in ("Diagnostics · local snapshot", "Model catalog", "Models by tier", "Reliability ·"):
+                    if required not in text:
+                        raise AssertionError(f"inspect report missing {required}")
+            if name == "inspect-narrow":
+                text = (OUT / "inspect-narrow.txt").read_text(errors="ignore")
+                if "Bifrost inspect" not in text or "Setting source: configuration" not in text or "Enter expand" not in text:
+                    raise AssertionError("narrow inspect did not expose expanded classification and controls")
+            if name == "inspect-short":
+                text = (OUT / "inspect-short.txt").read_text(errors="ignore")
+                if "▸ Classification" not in text or "Enter expand" not in text or "Esc close" not in text:
+                    raise AssertionError("short inspect did not show the compact classification and controls")
+            if name == "inspect-short-expanded":
+                text = (OUT / "inspect-short-expanded.txt").read_text(errors="ignore")
+                if "Setting source: configuration" not in text or "Enter expand" not in text:
+                    raise AssertionError("short inspect did not navigate to expanded classification")
+            if name == "inspect-narrow-scrolled":
+                text = (OUT / "inspect-narrow-scrolled.txt").read_text(errors="ignore")
+                if "Bifrost inspect" not in text or "Cooldown scope:" not in text:
+                    raise AssertionError("narrow inspect did not reveal report content after scrolling")
             if name == "inspect-reserve":
                 reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
-                if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
+                if "Reserve policy · observe" not in reserve_text or "Source: manual-estimate · scope: example-provider · authority: estimated" not in reserve_text:
                     raise AssertionError("inspect UI did not render sanitized reserve policy evidence")
             if name == "classifier-degradation":
                 degradation_text = (OUT / "classifier-degradation.txt").read_text(errors="ignore").lower()
@@ -1155,9 +1195,10 @@ def main() -> int:
                     raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
             if name == "strict-no-route-pending-inspect":
                 pending_text = (OUT / "strict-no-route-pending-inspect.txt").read_text(errors="ignore")
-                if "turn was not sent" not in pending_text:
+                pending_log = (OUT / "strict-no-route-pending-inspect.ansi.log").read_text(errors="ignore")
+                if "turn was not sent" not in pending_log:
                     raise AssertionError("pending-state scenario did not reject the no-route turn")
-                if "Model catalog: refresh needed" not in pending_text:
+                if "Warning: Model catalog refresh needed." not in pending_text:
                     raise AssertionError("inspect did not show the refresh-needed state after a no-route turn")
             if name == "auto-large-pool":
                 large_pool_text = (OUT / "auto-large-pool.txt").read_text(errors="ignore").lower()
