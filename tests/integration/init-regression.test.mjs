@@ -349,7 +349,10 @@ function registerRpcConfirmationTests(getPort) {
   });
 }
 
-describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () => {
+// Each serial group has a separate provider lifecycle and deadline. Keep the
+// subprocess and RPC deadlines unchanged: the groups bound cumulative fixture
+// work, rather than treating all configuration and probe cases as one test.
+describe("Pi init configuration-source regression", { concurrency: 1, timeout: 120_000 }, () => {
   let port;
   before(async () => { port = await startFakeProvider(); });
   registerRpcConfirmationTests(() => port);
@@ -562,6 +565,13 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
   }
+
+});
+
+describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () => {
+  let port;
+  before(async () => { port = await startFakeProvider(); });
+  after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
   it("probes on ordinary init and saves only successful models", async () => {
     const env = fixture(port, ["healthy", "credits-exhausted"]);
