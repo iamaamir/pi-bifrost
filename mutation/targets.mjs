@@ -11,7 +11,9 @@ import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertEnrollmentCurrent, capabilityDescriptorFor } from "./enrollment.mjs";
+import { assertEnrollmentCurrent, assertUniqueReportStems, capabilityDescriptorFor, reportStem } from "./enrollment.mjs";
+
+export { assertUniqueReportStems, reportStem };
 import {
   IN_PLACE_TARGETS,
   MUTANT_ESTIMATE,
@@ -329,37 +331,6 @@ export function legEstimateMinutes(target) {
 
 export function targetNames() {
   return Object.keys(TARGETS);
-}
-
-/**
- * Flat on-disk stem for one target's reports.
- *
- * A target can sit in a subdirectory (`scripts/toolbox.mjs`). Naming the report
- * after the target path puts it in a nested directory, which the workflow's
- * collection glob and the artifact upload both read as a top-level file, so the
- * run published no report and failed its own completeness gate. One flat stem
- * keeps every report beside the others.
- */
-export function reportStem(target) {
-  return target.replaceAll("/", "__");
-}
-
-/**
- * Refuse two targets whose flat report names would collide. The reporter writes
- * one file per target/shard, so a collision would silently merge two modules or
- * overwrite one measurement with another.
- */
-export function assertUniqueReportStems(targets) {
-  const stems = new Map();
-  for (const target of targets) {
-    const stem = reportStem(target);
-    if (stems.has(stem)) {
-      throw new Error(
-        `mutation targets ${stems.get(stem)} and ${target} share report stem ${stem}; their reports would collide`,
-      );
-    }
-    stems.set(stem, target);
-  }
 }
 
 /** The report file name for one target measurement, with the shard when sharded. */

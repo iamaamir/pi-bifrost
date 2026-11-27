@@ -10,6 +10,7 @@
 // Stryker options, sharding, thresholds, report policy) stays in
 // ./config.mjs; a capability only declares which of its files are measured and
 // the measured facts about that file.
+import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,34 @@ const RECORD_FIELDS = new Set([
 ]);
 
 let defaultDiscovery = null;
+
+/**
+ * Flat on-disk stem for one target's reports.
+ *
+ * A target can sit in a subdirectory (`scripts/toolbox.mjs`). Naming the report
+ * after the target path puts it in a nested directory, which the workflow's
+ * collection glob and the artifact upload both read as a top-level file, so the
+ * run published no report and failed its own completeness gate. One flat stem
+ * keeps every report beside the others. Path naming is part of enrollment, so
+ * the same rule validates a descriptor and names its report.
+ */
+export function reportStem(target) {
+  return target.replaceAll("/", "__");
+}
+
+/** Refuse two targets whose flat report names would collide. */
+export function assertUniqueReportStems(targets) {
+  const stems = new Map();
+  for (const target of targets) {
+    const stem = reportStem(target);
+    if (stems.has(stem)) {
+      throw new Error(
+        `mutation targets ${stems.get(stem)} and ${target} share report stem ${stem}; their reports would collide`,
+      );
+    }
+    stems.set(stem, target);
+  }
+}
 
 function fail(descriptor, message) {
   throw new Error(`mutation enrollment ${descriptor}: ${message}`);
@@ -82,6 +111,11 @@ function validateFile(file, descriptor) {
     fail(descriptor, `file "${file}" must be capability-relative, not absolute`);
   }
   if (/[*?[\]{}!]/u.test(file)) fail(descriptor, `file "${file}" must not contain glob characters`);
+  // The workflow passes plan-cli's target list through a comma-separated string;
+  // a comma or line break in a path would split it into unknown module names.
+  if (/[,\r\n]/u.test(file)) {
+    fail(descriptor, `file "${file}" must not contain a comma or line break; the workflow serializes targets as a comma-separated list`);
+  }
   if (file.includes(":")) fail(descriptor, `file "${file}" must not contain a drive or stream separator`);
   const segments = file.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
@@ -90,11 +124,14 @@ function validateFile(file, descriptor) {
   if (segments.includes("node_modules")) {
     fail(descriptor, `file "${file}" must be a runtime source, not under node_modules`);
   }
-  if (segments[0] === "tests") {
+  if (segments.some((segment) => ["tests", "test", "__tests__"].includes(segment))) {
     fail(descriptor, `file "${file}" must be a runtime source, not a test file`);
   }
   if (!/\.(?:ts|mjs)$/u.test(file)) {
     fail(descriptor, `file "${file}" must be a runtime .ts or .mjs source`);
+  }
+  if (file.endsWith(".d.ts") || /\.(?:test|spec)\.(?:ts|mjs)$/u.test(file)) {
+    fail(descriptor, `file "${file}" must be a runtime source, not a declaration or test file`);
   }
 }
 
@@ -146,11 +183,16 @@ function parseDescriptor(capability, descriptorRelative, raw) {
   if (parsed.targets.length === 0) {
     fail(descriptorRelative, "is empty; remove the descriptor instead of enrolling nothing");
   }
+  // The bytes that produced this snapshot. A later recheck compares it with the
+  // descriptor on disk, so a mid-run edit cannot stamp a report whose identity
+  // claims metadata the run never used.
+  const descriptorDigest = createHash("sha256").update(raw).digest("hex");
   return parsed.targets.map((value, index) => {
     const record = validateRecord(value, index, descriptorRelative);
     return {
       capability,
       descriptor: descriptorRelative,
+      descriptorDigest,
       file: record.file,
       target: `${MODULES}/${capability}/${record.file}`,
       mutants: record.mutants,
@@ -214,17 +256,11 @@ function discover(root) {
   records.sort((a, b) => (a.target < b.target ? -1 : a.target > b.target ? 1 : 0));
 
   const seen = new Set();
-  const stems = new Map();
   for (const record of records) {
     if (seen.has(record.target)) {
       fail(record.descriptor, `duplicate normalized target ${record.target}`);
     }
     seen.add(record.target);
-    const stem = record.target.replaceAll("/", "__");
-    if (stems.has(stem)) {
-      fail(record.descriptor, `report stem ${stem} for ${record.target} collides with ${stems.get(stem)}`);
-    }
-    stems.set(stem, record.target);
     result.names.push(record.target);
     result.records.push(record);
     result.targets[record.target] = {
@@ -238,6 +274,7 @@ function discover(root) {
     }
     result.descriptors[record.target] = record.descriptor;
   }
+  assertUniqueReportStems(result.names);
   return result;
 }
 
@@ -268,12 +305,22 @@ export function capabilityDescriptorFor(target) {
  * closed instead of trusting the cached normalized inventory. Central targets
  * return null without a filesystem walk.
  */
-export function assertEnrollmentCurrent(target, { root = ROOT } = {}) {
+export function assertEnrollmentCurrent(target, { root = ROOT, snapshot = null } = {}) {
   if (!target.startsWith(`${MODULES}/`)) return null;
   const record = discover(root).records.find((entry) => entry.target === target);
   if (!record) {
     throw new Error(
       `mutation target ${target} is no longer enrolled by an on-disk capability descriptor; rerun from the current descriptor`,
+    );
+  }
+  const enrolled =
+    snapshot ??
+    (root === ROOT
+      ? discoverCapabilityTargets().records.find((entry) => entry.target === target)
+      : null);
+  if (enrolled && enrolled.descriptorDigest !== record.descriptorDigest) {
+    throw new Error(
+      `enrollment descriptor ${record.descriptor} changed during the run; rerun from the current descriptor`,
     );
   }
   return record;

@@ -343,30 +343,78 @@ test("symlinked descriptors, capabilities, sources and intermediate components a
   }
 });
 
-test("a descriptor edited or removed mid-run is detected from disk", () => {
+test("a descriptor edited after enrollment fails the current-enrollment check", () => {
   withFixture(alpha(), (root) => {
-    assert.equal(
-      assertEnrollmentCurrent("modules/alpha/alpha.ts", { root }).secondsPerMutant,
-      0.5,
-    );
-    // Replaced: the new record is read, not the cached one.
-    writeFileSync(
-      join(root, "modules", "alpha", CAPABILITY_DESCRIPTOR),
-      JSON.stringify(descriptor([record({ secondsPerMutant: 0.75 })])),
-    );
-    assert.equal(
-      assertEnrollmentCurrent("modules/alpha/alpha.ts", { root }).secondsPerMutant,
-      0.75,
-    );
-    // Removed: a target that was measured can no longer be stamped.
-    rmSync(join(root, "modules", "alpha", CAPABILITY_DESCRIPTOR));
+    const enrolled = discoverCapabilityTargets({ root });
+    const snapshot = enrolled.records[0];
+    const target = "modules/alpha/alpha.ts";
+    const descriptorPath = join(root, "modules", "alpha", CAPABILITY_DESCRIPTOR);
+    assert.equal(assertEnrollmentCurrent(target, { root, snapshot }).secondsPerMutant, 0.5);
+
+    // A value edit changes the on-disk descriptor but not the budget the run
+    // used. Stamping that report would claim metadata it never measured against.
+    writeFileSync(descriptorPath, JSON.stringify(descriptor([record({ secondsPerMutant: 0.75 })])));
     assert.throws(
-      () => assertEnrollmentCurrent("modules/alpha/alpha.ts", { root }),
+      () => assertEnrollmentCurrent(target, { root, snapshot }),
+      /changed during the run/iu,
+    );
+  });
+});
+
+test("adding or removing a target in an enrolled descriptor fails the snapshot check", () => {
+  withFixture(alpha(), (root) => {
+    const snapshot = discoverCapabilityTargets({ root }).records[0];
+    const target = "modules/alpha/alpha.ts";
+    const descriptorPath = join(root, "modules", "alpha", CAPABILITY_DESCRIPTOR);
+    writeFileSync(
+      descriptorPath,
+      JSON.stringify(descriptor([record(), record({ file: "beta.ts" })])),
+    );
+    writeFileSync(join(root, "modules", "alpha", "beta.ts"), SOURCE);
+    assert.throws(
+      () => assertEnrollmentCurrent(target, { root, snapshot }),
+      /changed during the run/iu,
+    );
+
+    rmSync(descriptorPath);
+    assert.throws(
+      () => assertEnrollmentCurrent(target, { root, snapshot }),
       /no longer enrolled/iu,
     );
     // A central target has no descriptor and needs no walk.
     assert.equal(assertEnrollmentCurrent("cache.ts", { root }), null);
   });
+});
+
+test("a nested runtime source is enrollable but tests and declarations are not", () => {
+  withFixture(
+    {
+      capabilities: { alpha: descriptor([record({ file: "sub/helper.ts" })]) },
+      sources: { "modules/alpha/sub/helper.ts": SOURCE },
+    },
+    (root) => {
+      assert.deepEqual(discoverCapabilityTargets({ root }).names, ["modules/alpha/sub/helper.ts"]);
+    },
+  );
+  const rejected = [
+    ["declaration", "types.d.ts", /runtime|\.d\.ts/iu],
+    ["unit test name", "helper.test.ts", /runtime|test/iu],
+    ["spec name", "helper.spec.ts", /runtime|spec/iu],
+    ["nested tests dir", "sub/tests/helper.ts", /runtime|test/iu],
+    ["underscore tests dir", "__tests__/helper.ts", /runtime|test/iu],
+    ["test dir", "test/helper.ts", /runtime|test/iu],
+    ["comma in path", "a,b.ts", /comma|workflow/iu],
+    ["newline in path", "a\nb.ts", /line break|workflow/iu],
+  ];
+  for (const [name, file, expected] of rejected) {
+    withFixture(
+      {
+        capabilities: { alpha: descriptor([record({ file })]) },
+        sources: {},
+      },
+      (root) => assert.throws(() => discoverCapabilityTargets({ root }), expected, name),
+    );
+  }
 });
 
 test("a symlinked modules root is refused", () => {
