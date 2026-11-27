@@ -3361,20 +3361,84 @@ describe("preview json marker", () => {
 describe("preview source values", () => {
   const docsRoot = new URL("../", import.meta.url);
 
-  function sourceRow(): string {
+  // The `source` row is owned by one section. Scanning the whole document would
+  // let a row in another reference table satisfy the assertion while the
+  // canonical contract stayed wrong.
+  function normalPreviewSection(doc: string): string | undefined {
+    const start = doc.indexOf("### Normal preview JSON");
+    if (start === -1) return undefined;
+    // Any later heading ends the section, not only the next level-three one. A
+    // level-two heading would otherwise let an unrelated table satisfy the
+    // assertion after this section is closed.
+    const ends = ["\n# ", "\n## ", "\n### "]
+      .map((heading) => doc.indexOf(heading, start + 1))
+      .filter((index) => index !== -1);
+    return doc.slice(start, ends.length > 0 ? Math.min(...ends) : undefined);
+  }
+
+  function findSourceRow(doc: string): string | undefined {
+    return normalPreviewSection(doc)?.split("\n").find((line) => /^\|\s*`source`\s*\|/u.test(line));
+  }
+
+  function sourceRowText(): string {
     const doc = readFileSync(new URL("docs/guide/commands.md", docsRoot), "utf8");
-    const row = doc.split("\n").find((line) => line.startsWith("| `source`"));
-    assert(row, "docs/guide/commands.md must document a `source` row for the preview report");
+    const row = findSourceRow(doc);
+    assert(row, "docs/guide/commands.md must document a `source` row in its `Normal preview JSON` section");
     return row;
   }
 
-  it("documents every reachable source value", () => {
-    // The union is `ClassificationSource | "fallback"`. A consumer switching
-    // exhaustively on `source` must not hit a value the guide never names, so
-    // the guide row is pinned to the declared union rather than trusted.
+  it("documents the declared preview source union values in the source row", () => {
+    // The union is `ClassificationSource | "fallback"`. The guide row is pinned
+    // to the declared union (including `inline`, which preview does not emit)
+    // so consumers see the full contract described there; reachability is noted
+    // in the docs, not reasserted by this label.
+    const row = sourceRowText();
     for (const value of ["cache", "classifier", "regex", "inline", "fallback"]) {
-      assert.match(sourceRow(), new RegExp(`\`${value}\``), `source row must name \`${value}\``);
+      assert.match(row, new RegExp(`\`${value}\``), `preview source docs must name \`${value}\``);
     }
+  });
+
+  it("rejects a source row outside the Normal preview JSON section", () => {
+    // Fault control: identical row text in another table must not satisfy the
+    // section-scoped lookup, or the section claim above would be vacuous.
+    const doc = [
+      "# Command reference",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `source` | outside the canonical section |",
+      "",
+      "### Normal preview JSON (`--json`, no `--trace`)",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `tier` | inside the canonical section |",
+    ].join("\n");
+    assert.equal(findSourceRow(doc), undefined);
+    // Positive control on the same helper, so the check above cannot pass by
+    // never finding any row at all.
+    const inside = doc.replace("| `tier` | inside the canonical section |", "| `source` | inside the canonical section |");
+    assert.match(findSourceRow(inside) ?? "", /inside the canonical section/u);
+  });
+
+  it("rejects a source row under a level-two heading after the section", () => {
+    // The section ends at a level-one or level-two heading too. Without that
+    // boundary, a row in a later top-level table would satisfy the assertion
+    // while the canonical contract was missing.
+    const doc = [
+      "### Normal preview JSON (`--json`, no `--trace`)",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `tier` | inside the canonical section |",
+      "",
+      "## Persistence summary",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `source` | unrelated later table |",
+    ].join("\n");
+    assert.equal(findSourceRow(doc), undefined);
   });
 
   it("rejects a source outside the union at compile time", () => {

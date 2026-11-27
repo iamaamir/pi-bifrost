@@ -76,6 +76,7 @@ Do not introduce a proxy as the default design. Do not build multi-agent orchest
 - Prefer smallest product-shaped change. Ship advisory/visible behavior before automatic behavior.
 - Make behavior changes with deterministic tests. Prefer fake registry/provider tests over live-provider dependence.
 - Keep docs, schema, examples, defaults, and generated init behavior consistent when changing config semantics.
+- When creating or modifying user-facing documentation, follow the writing standard in [`docs/guide/STYLE.md`](docs/guide/STYLE.md); the standard applies to all user-facing documentation, including public SDK documentation (listed paths in STYLE.md are representative, not exhaustive). When changing public behavior or supported interfaces, identify and update affected documentation surfaces. Keep the standard's permanent scope separate from any narrower content-remediation scope in issues or pull requests. Do not duplicate the standard in this file.
 - Use accessible semantic HTML for site work. Native `<details>/<summary>` for FAQs/disclosure unless a custom interaction is necessary.
 - Treat prototypes as throwaway. Mark them clearly; do not promote prototype code directly to production.
 - Validate a specification against running code before building on it. When a decision cannot be checked yet, prototype rather than committing to prose across several revisions. Unverified specs surface their errors late, during review, when they cost most to fix.

@@ -81,7 +81,7 @@ Preview and apply are separate steps. Preview is offline by default; `--refresh`
 /bifrost config reconcile --source project --tier general --provider openai --apply --proposal <digest> --json
 ```
 
-Use `--source user` for the user config layer. Reconciliation edits one source and tier at a time, preserves higher layer overrides, and tracks only exact membership it generated. Handwritten entries stay unowned. See the [command guide](../docs/guide/commands.md#reconcile-generated-model-membership) for freshness, backup, and stale-lock recovery details.
+Use `--source user` for the user config layer. Reconciliation edits one source and tier at a time, preserves higher layer overrides, and tracks only exact membership it generated. Handwritten entries stay unowned. See the [command guide](../docs/guide/workflows.md#reconcile-generated-model-membership) for freshness, backup, and stale-lock recovery details.
 
 Preview before sending:
 
