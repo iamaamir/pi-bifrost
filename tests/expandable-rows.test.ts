@@ -42,13 +42,13 @@ describe("expandable rows", () => {
 
   it("keeps deeply nested keys and values readable at narrow widths", () => {
     let row: ExpandableRow = { id: "leaf", label: "deepKey", detail: "deepValue" };
-    for (let i = 9; i >= 0; i--) row = { id: `level${i}`, label: `level${i}`, children: [row] };
+    Array.from({ length: 10 }, (_, i) => 9 - i).forEach((i) => { row = { id: `level${i}`, label: `level${i}`, children: [row] }; });
     const h = harness([row], { columns: 16, rows: 30 });
-    for (let i = 0; i < 10; i++) {
+    Array.from({ length: 10 }).forEach(() => {
       h.viewer.render(16);
       h.viewer.handleInput("l");
       h.viewer.handleInput("j");
-    }
+    });
     const screen = h.viewer.render(16);
     assert(screen.every((line) => visibleWidth(line) <= 16));
     assert(screen.join(" ").includes("deepKey"));

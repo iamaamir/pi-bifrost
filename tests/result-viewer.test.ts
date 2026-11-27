@@ -47,7 +47,8 @@ describe("result viewer", () => {
     } } };
     await showBifrostResult(ctx as never, "Inspection", Array.from({ length: 20 }, (_, i) => `路径${i}`));
     assert(viewer);
-    for (const width of [0, 1, 2, 3, 4, 5, 6, 12, 40]) assert(viewer.render(width).every((line) => visibleWidth(line) <= width));
+    const activeViewer = viewer;
+    [0, 1, 2, 3, 4, 5, 6, 12, 40].forEach((width) => assert(activeViewer.render(width).every((line) => visibleWidth(line) <= width)));
     assert.equal(viewer.render(5)[2], "路径0");
     assert.equal(viewer.render(4)[2], "路径");
     assert.deepEqual(viewer.render(3).slice(2, 4), ["路 ", "径0"]);
@@ -71,13 +72,14 @@ describe("result viewer", () => {
     assert(viewer);
     viewer.render(20);
     terminal.rows = 10;
-    for (let i = 0; i < 30; i++) { viewer.render(20); viewer.handleInput("j"); }
+    const activeViewer = viewer;
+    Array.from({ length: 30 }).forEach(() => { activeViewer.render(20); activeViewer.handleInput("j"); });
     const output = viewer.render(20);
     assert(output.length <= 8);
     assert(output.some((line) => line.includes("fact 19")));
     terminal.rows = 6;
     viewer.render(20);
-    for (let i = 0; i < 30; i++) { viewer.handleInput("j"); viewer.render(20); }
+    Array.from({ length: 30 }).forEach(() => { activeViewer.handleInput("j"); activeViewer.render(20); });
     assert(viewer.render(20).some((line) => line.includes("fact 19")));
   });
 
