@@ -9,8 +9,9 @@ type InitTheme = ExtensionContext["ui"]["theme"];
 function stylePreviewLine(theme: InitTheme, line: string): string {
   const match = /^(\S+(?:\s+\S+)?)(\s{2,})(.*)$/.exec(line);
   if (!match) {
-    return line.replace(/^(\s+)(global|workspace)(?= \()/, (_text, space: string, layer: string) =>
-      space + theme.fg("accent", layer),
+    return line.replace(
+      /^(\s+)(global|workspace)(?= \()/,
+      (_text, space: string, layer: string) => space + theme.fg("accent", layer),
     );
   }
   const [, label, spacing, rawValue] = match;
@@ -29,7 +30,7 @@ export function initSummaryPanel(theme: InitTheme, lines: readonly string[]): Bo
   const [title = "", ...body] = lines;
   const styled = [
     theme.fg("accent", theme.bold(title)),
-    theme.fg("dim", "─────────────"),
+    theme.fg("dim", "─".repeat(title.length)),
     ...body.map((line) => stylePreviewLine(theme, line)),
   ];
   box.addChild(new Text(styled.join("\n"), 0, 0));
@@ -45,9 +46,11 @@ function poolModels(pool: unknown): string[] {
 
 function memberships(config: Config): Set<string> {
   const pools = (stripConfigMetadata(config).models ?? {}) as Config;
-  return new Set(Object.entries(pools).flatMap(([tier, pool]) =>
-    poolModels(pool).map((model) => JSON.stringify([tier, model])),
-  ));
+  return new Set(
+    Object.entries(pools).flatMap(([tier, pool]) =>
+      poolModels(pool).map((model) => JSON.stringify([tier, model])),
+    ),
+  );
 }
 
 function membershipChanges(from: Set<string>, to: Set<string>): string[] {
@@ -57,14 +60,16 @@ function membershipChanges(from: Set<string>, to: Set<string>): string[] {
 function tierSummary(pools: Config, added: string[], removed: string[]): string {
   const tiers = [...new Set([...Object.keys(pools), ...removed])];
   if (!tiers.length) return "";
-  return `Model tiers  ${tiers.map((tier) => {
-    const pool = pools[tier];
-    const count = typeof pool === "string" ? 1 : Array.isArray(pool) ? pool.length : 0;
-    const plus = added.filter((name) => name === tier).length;
-    const minus = removed.filter((name) => name === tier).length;
-    const delta = [plus ? `+${plus}` : "", minus ? `-${minus}` : ""].filter(Boolean).join(", ");
-    return `${tier} ${count}${delta ? ` (${delta})` : ""}`;
-  }).join(" · ")}`;
+  return `Model tiers  ${tiers
+    .map((tier) => {
+      const pool = pools[tier];
+      const count = typeof pool === "string" ? 1 : Array.isArray(pool) ? pool.length : 0;
+      const plus = added.filter((name) => name === tier).length;
+      const minus = removed.filter((name) => name === tier).length;
+      const delta = [plus ? `+${plus}` : "", minus ? `-${minus}` : ""].filter(Boolean).join(", ");
+      return `${tier} ${count}${delta ? ` (${delta})` : ""}`;
+    })
+    .join(" · ")}`;
 }
 
 export function initSaveSummary(
@@ -72,27 +77,53 @@ export function initSaveSummary(
   nextConfigBytes: Uint8Array,
   probeVerified: Set<string>,
 ) {
-  const before = configBytes === null ? {} : JSON.parse(Buffer.from(configBytes).toString("utf8")) as Config;
+  const before =
+    configBytes === null ? {} : (JSON.parse(Buffer.from(configBytes).toString("utf8")) as Config);
   const after = JSON.parse(Buffer.from(nextConfigBytes).toString("utf8")) as Config;
   const fieldsAdded = Object.keys(after).filter((key) => !Object.hasOwn(before, key));
-  const fieldsChanged = Object.keys(before).filter((key) => !isDeepStrictEqual(before[key], after[key]));
+  const fieldsChanged = Object.keys(before).filter(
+    (key) => !isDeepStrictEqual(before[key], after[key]),
+  );
   const previous = memberships(before);
   const next = memberships(after);
   const savedPools = (stripConfigMetadata(after).models ?? {}) as Config;
-  const unverifiedSavedCount = Object.values(savedPools).flatMap(poolModels)
+  const unverifiedSavedCount = Object.values(savedPools)
+    .flatMap(poolModels)
     .filter((key) => !probeVerified.has(key)).length;
   return {
-    modelTiers: tierSummary(savedPools, membershipChanges(previous, next), membershipChanges(next, previous)),
-    fieldsAdded, fieldsChanged, unverifiedSavedCount,
+    modelTiers: tierSummary(
+      savedPools,
+      membershipChanges(previous, next),
+      membershipChanges(next, previous),
+    ),
+    fieldsAdded,
+    fieldsChanged,
+    unverifiedSavedCount,
   };
 }
 
 export function initSavePreviewLines(input: {
-  sourceLabel: string; workingCount: number; ranProbe: boolean; probeAge: string;
-  summary: ReturnType<typeof initSaveSummary>; receiptOnly: boolean; classifier: string;
-  inheritedLines: string[]; uncategorizedCount: number;
+  sourceLabel: string;
+  workingCount: number;
+  ranProbe: boolean;
+  probeAge: string;
+  summary: ReturnType<typeof initSaveSummary>;
+  receiptOnly: boolean;
+  classifier: string;
+  inheritedLines: string[];
+  uncategorizedCount: number;
 }): string[] {
-  const { sourceLabel, workingCount, ranProbe, probeAge, summary, receiptOnly, classifier, inheritedLines, uncategorizedCount } = input;
+  const {
+    sourceLabel,
+    workingCount,
+    ranProbe,
+    probeAge,
+    summary,
+    receiptOnly,
+    classifier,
+    inheritedLines,
+    uncategorizedCount,
+  } = input;
   const { modelTiers, fieldsAdded, fieldsChanged, unverifiedSavedCount } = summary;
   return [
     "Bifrost · ready to save",
@@ -106,7 +137,9 @@ export function initSavePreviewLines(input: {
     ...inheritedLines,
     uncategorizedCount ? `Uncategorized  ${uncategorizedCount}` : "",
     uncategorizedCount ? "Uncategorized models stay out of generated pools." : "",
-    unverifiedSavedCount ? `${unverifiedSavedCount} saved model tier entries were not verified by this check; handwritten entries are preserved.` : "",
+    unverifiedSavedCount
+      ? `${unverifiedSavedCount} saved model tier entries were not verified by this check; handwritten entries are preserved.`
+      : "",
   ].filter(Boolean);
 }
 
@@ -118,7 +151,7 @@ export function initClassifierSummary(
 ): string {
   if (!enabled) return "off";
   if (detected.backend !== CLASSIFIER_BACKEND_IDS.prompt) {
-    return `${detected.backend} (${detected.auto ? "detected default" : "configured"})`;
+    return `${detected.backend} (${detected.auto ? "detected" : "configured"})`;
   }
   if (configuredModel) return `prompt (${configuredModel}, configured)`;
   if (detectedModel) return `prompt (${detectedModel}, detected default)`;
