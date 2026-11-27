@@ -136,6 +136,25 @@ export function getCircuitState(
   };
 }
 
+function boundRuntimeAllowanceObservation(
+  allowanceExhaustion: FailureObservation | undefined,
+  model: string,
+  source: string,
+  now: number,
+): FailureObservation | undefined {
+  // A diagnostic alone is never an instruction to impose an immediate cooldown.
+  const normalizedObservation = allowanceExhaustion && isNormalizedFailureObservation(allowanceExhaustion, { now })
+    ? allowanceExhaustion : undefined;
+  return normalizedObservation
+    && source === "agent_settled"
+    && (normalizedObservation.category === "allowance_exhausted" || normalizedObservation.category === "billing_denied")
+    && normalizedObservation.source === "runtime"
+    && normalizedObservation.modelKey === model
+    && normalizedObservation.scope.kind === "model"
+    && normalizedObservation.scope.modelKey === model
+    ? normalizedObservation : undefined;
+}
+
 export function recordModelFailure(
   state: ReliabilityState,
   model: string,
@@ -150,17 +169,7 @@ export function recordModelFailure(
   if (!resolved.enabled) return state;
 
   const current = state.models[model] ?? { failures: [] };
-  // A diagnostic alone is never an instruction to impose an immediate cooldown.
-  const normalizedObservation = allowanceExhaustion && isNormalizedFailureObservation(allowanceExhaustion, { now })
-    ? allowanceExhaustion : undefined;
-  const boundAllowanceObservation = normalizedObservation
-    && source === "agent_settled"
-    && (normalizedObservation.category === "allowance_exhausted" || normalizedObservation.category === "billing_denied")
-    && normalizedObservation.source === "runtime"
-    && normalizedObservation.modelKey === model
-    && normalizedObservation.scope.kind === "model"
-    && normalizedObservation.scope.modelKey === model
-    ? normalizedObservation : undefined;
+  const boundAllowanceObservation = boundRuntimeAllowanceObservation(allowanceExhaustion, model, source, now);
   const wasTrial = current.trialActive;
   const multiplier = wasTrial ? (current.cooldownMultiplier ?? 1) * 2 : (current.cooldownMultiplier ?? 1);
   const cooldownMs = resolved.cooldownMinutes * 60_000 * multiplier;

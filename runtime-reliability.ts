@@ -23,6 +23,31 @@ export interface RuntimeFailure {
   allowanceEvidence?: FailureObservation;
 }
 
+function runtimeFailureOutcome(
+  model: string,
+  last: AssistantOutcome,
+  classifyFailure?: (model: string, message: AssistantOutcome) => FailureObservation | undefined,
+): RuntimeFailure {
+  let failureObservation: FailureObservation | undefined;
+  try {
+    const candidate = classifyFailure?.(model, last);
+    if (candidate?.modelKey === model
+      && (candidate.category === "allowance_exhausted" || candidate.category === "billing_denied")
+      && candidate.source === "runtime" && candidate.scope.kind === "model"
+      && candidate.scope.modelKey === model) failureObservation = candidate;
+  } catch { /* failure classification cannot change host settlement */ }
+  const allowanceEvidence = runtimeAllowanceEvidence(failureObservation, {
+    modelKey: model, attribution: "legacy-terminal", now: Date.now(),
+  });
+  return {
+    model,
+    outcome: "failure",
+    reason: "provider request failed",
+    ...(failureObservation ? { failureObservation } : {}),
+    ...(allowanceEvidence ? { allowanceEvidence } : {}),
+  };
+}
+
 const SUCCESS_STOP_REASONS = new Set(["stop", "length", "toolUse"]);
 
 /** Result of a half-open trial claim attempt. */
@@ -109,24 +134,7 @@ export class RuntimeReliabilityTracker {
       }
       if (!last) continue;
       if (last.stopReason === "error") {
-        let failureObservation: FailureObservation | undefined;
-        try {
-          const candidate = classifyFailure?.(model, last);
-          if (candidate?.modelKey === model
-            && (candidate.category === "allowance_exhausted" || candidate.category === "billing_denied")
-            && candidate.source === "runtime" && candidate.scope.kind === "model"
-            && candidate.scope.modelKey === model) failureObservation = candidate;
-        } catch { /* failure classification cannot change host settlement */ }
-        const allowanceEvidence = runtimeAllowanceEvidence(failureObservation, {
-          modelKey: model, attribution: "legacy-terminal", now: Date.now(),
-        });
-        this.pending.set(model, {
-          model,
-          outcome: "failure",
-          reason: "provider request failed",
-          ...(failureObservation ? { failureObservation } : {}),
-          ...(allowanceEvidence ? { allowanceEvidence } : {}),
-        });
+        this.pending.set(model, runtimeFailureOutcome(model, last, classifyFailure));
       } else if (typeof last.stopReason === "string" && SUCCESS_STOP_REASONS.has(last.stopReason)) {
         this.pending.set(model, { model, outcome: "success" });
       } else {
