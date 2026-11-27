@@ -953,7 +953,7 @@ def main() -> int:
         ("validate", True, [(0.5, "/bifrost validate\r")]),
         ("inspect", True, [(0.5, "/bifrost inspect\r")]),
         ("inspect-expanded", True, [(0.5, "/bifrost inspect\r"), (0.5, "\r")]),
-        ("inspect-config", True, [(0.5, "/bifrost inspect\r"), (0.5, "j\r"), (0.5, "jjj\r")]),
+        ("inspect-config", True, [(0.5, "/bifrost inspect\r"), (0.5, "j\r"), (0.5, "jjjj\r")]),
         ("inspect-escape", True, [(0.5, "/bifrost inspect\r"), (0.5, "\x1b"), (0.5, "escape-check")]),
         ("inspect-report", True, [(0.5, "/bifrost inspect\r"), (0.5, "jj\r")]),
         ("inspect-narrow", True, [(0.5, "/bifrost inspect\r"), (0.5, "\r")], None, [], False, False, False, None, None, False, (60, 24)),
@@ -1146,7 +1146,7 @@ def main() -> int:
                         raise AssertionError(f"expanded inspect missing {required}")
             if name == "inspect-config":
                 text = (OUT / "inspect-config.txt").read_text(errors="ignore")
-                if "Full configuration" not in text or '"backend": "prompt"' not in text or '"enabled": false' not in text:
+                if "Full configuration" not in text or '"strategy": "first"' not in text or '"backend": "prompt"' not in text or '"enabled": false' not in text:
                     raise AssertionError("inspect did not expand effective configuration")
             if name == "inspect-escape":
                 text = (OUT / "inspect-escape.txt").read_text(errors="ignore")
