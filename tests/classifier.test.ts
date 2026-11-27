@@ -115,7 +115,7 @@ describe("classifier", () => {
         streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
           result: async () => {
             await options.onResponse?.({ status: 402, headers: { "retry-after": "12" } }, model);
-            return { content: [], stopReason: "error" };
+            return { content: [], stopReason: "error", errorMessage: "402 Payment Required" };
           },
         }),
       },
@@ -125,7 +125,8 @@ describe("classifier", () => {
       spawnImpl: (() => { subprocessCalls++; throw new Error("must not retry a 402 in a subprocess"); }) as unknown as typeof import("node:child_process").spawn,
     });
     assert.equal(result, undefined);
-    assert.deepEqual(observed, [{ provider: "fixture", status: 402, retryAfter: "12" }]);
+    assert.deepEqual(observed, [{ provider: "fixture", status: 402, retryAfter: undefined }],
+      "the terminal text qualifies legacy inference but does not prove the callback retry hint");
     assert.equal(subprocessCalls, 0);
   });
 
@@ -235,6 +236,34 @@ describe("classifier", () => {
     assert.deepEqual(observed, []);
     assert.equal(subprocessCalls, 0);
   });
+
+  for (const terminal of ["network", "missing", "cancel", "new-rate"] as const) {
+    it(`does not reuse an earlier 429 response as terminal authority (${terminal})`, async () => {
+      const model = makeModel("fixture", "classifier");
+      const controller = new AbortController();
+      const observed: Array<{ status: number; retryAfter?: string }> = [];
+      const result = await classifyWithLLM({
+        cwd: process.cwd(), signal: controller.signal,
+        modelRegistry: {
+          streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+            result: async () => {
+              await options.onResponse?.({ status: 429, headers: { "retry-after": "120" } }, model);
+              if (terminal === "cancel") controller.abort();
+              if (terminal === "missing") throw new Error("network error");
+              if (terminal === "new-rate") await options.onResponse?.({ status: 429, headers: { "retry-after": "2" } }, model);
+              return { content: [], stopReason: "error", errorMessage: terminal === "new-rate" ? "429 Too Many Requests" : "network error" };
+            },
+          }),
+        },
+      } as never, { kind: "registry", model }, ["frontier"], "request", {
+        method: "auto",
+        onProviderHttpResponse: (_model, status, retryAfter) => { observed.push({ status, retryAfter }); },
+        spawnImpl: (() => { throw new Error("an uncertain prior rejection must not create a subprocess retry"); }) as unknown as typeof import("node:child_process").spawn,
+      });
+      assert.equal(result, undefined);
+      assert.deepEqual(observed, terminal === "new-rate" ? [{ status: 429, retryAfter: undefined }] : []);
+    });
+  }
 
   it("uses the final HTTP response when deciding whether a terminal failure is a rate limit", async () => {
     const model = makeModel("fixture", "classifier");

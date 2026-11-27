@@ -517,6 +517,37 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
     } finally { h.cleanup(); }
   });
 
+  it("does not persist an earlier classifier 429 after an unrelated terminal network error", async () => {
+    const modelA = makeModel("provider-a", "model-a");
+    const h = fixture({
+      models: [modelA, makeModel("provider-b", "model-b")], defaultTier: "quick",
+      classifierEnabled: true, classifierModel: makeModel("provider-a", "classifier"),
+      streamSimple: (_model, _request, options) => {
+        options.onResponse({ status: 429, headers: { "retry-after": "120" } });
+        return { result: async () => ({ content: [], stopReason: "error", errorMessage: "network error" }) };
+      },
+    });
+    try {
+      await input(h, h.primary, "classifier-network-user", "summarize this code");
+      assert.equal(existsSync(providerReliabilityPath(h.cwd)), false, "uncorrelated callback must not reach the writer");
+      assert.equal(h.primary.ctx.model?.provider, "provider-a", "the healthy provider stays eligible");
+    } finally { h.cleanup(); }
+  });
+
+  it("does not write a provider pause after the runtime signal has been cancelled", async () => {
+    const modelA = makeModel("provider-a", "model-a");
+    const h = fixture({ models: [modelA], defaultTier: "quick" });
+    try {
+      await input(h, h.primary, "cancelled-user", "quick first request");
+      const cancelled = new AbortController();
+      cancelled.abort();
+      (h.primary.ctx as { signal: AbortSignal }).signal = cancelled.signal;
+      await turnEnd(h, h.primary, "cancelled-user", modelA, "error", "The usage limit has been reached.");
+      await settleFailedTurn(h, h.primary, "cancelled-user");
+      assert.equal(existsSync(providerReliabilityPath(h.cwd)), false);
+    } finally { h.cleanup(); }
+  });
+
   it("claims an expired pinned-provider pause, blocks a second session, and drains the original claim on shutdown", async () => {
     const modelA = makeModel("provider-a", "model-a");
     const h = fixture({ models: [modelA], defaultTier: "quick" });

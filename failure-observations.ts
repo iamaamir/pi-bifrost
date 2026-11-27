@@ -346,3 +346,48 @@ export function normalizeFailureObservation(
     source,
   };
 }
+
+
+/** A transient action decision, never a persisted observation or a write receipt. */
+export type ProviderPauseIntent =
+  | { kind: "usage"; observation: FailureObservation }
+  | { kind: "rate"; observation: FailureObservation };
+
+export function hasExplicit429StatusText(text: string): boolean {
+  return /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+)|(?:status\s*[:=]\s*))?429\b/i.test(text);
+}
+
+/** Call only at an owned response boundary, with the actual model and origin.
+ * An observed category is insufficient to authorize a pause by itself.
+ */
+export function providerPauseIntent(
+  observation: FailureObservation | undefined,
+  context: {
+    modelKey: string;
+    source: "runtime" | "probe";
+    attribution: "provider-response" | "legacy-terminal" | "unconfirmed";
+    inferredRate: boolean;
+    enabled: boolean;
+    allowanceEnabled: boolean;
+    allowanceScope: "model" | "provider";
+    now: number;
+  },
+): ProviderPauseIntent | undefined {
+  if (!context.enabled || context.attribution === "unconfirmed"
+    || !isNormalizedFailureObservation(observation, { now: context.now })
+    || observation.modelKey !== context.modelKey || observation.source !== context.source) return undefined;
+  if (observation.category === "allowance_exhausted" || observation.category === "billing_denied") {
+    if (!context.allowanceEnabled || context.allowanceScope !== "provider") return undefined;
+    if (context.attribution === "legacy-terminal" && observation.categoryEvidence !== "text_heuristic") return undefined;
+    return { kind: "usage", observation };
+  }
+  if (observation.category !== "rate_limit") return undefined;
+  if (context.attribution === "provider-response"
+    && (observation.categoryEvidence === "http_status" || observation.categoryEvidence === "structured")) {
+    return { kind: "rate", observation };
+  }
+  if (context.inferredRate && observation.categoryEvidence === "text_heuristic") {
+    return { kind: "rate", observation };
+  }
+  return undefined;
+}

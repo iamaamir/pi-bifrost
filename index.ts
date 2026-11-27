@@ -66,7 +66,7 @@ import { getCircuitState, hasActiveAllowanceCooldown, type ReliabilityState } fr
 import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import type { ReliabilityV2LegacyAllowanceMarker } from "./reliability-v2.ts";
 import { projectProviderCooldownsForRouting, type LegacyAllowanceMarker, type ProviderTrialClaim } from "./provider-cooldowns.ts";
-import { normalizeFailureObservation } from "./failure-observations.ts";
+import { hasExplicit429StatusText, normalizeFailureObservation, providerPauseIntent, type ProviderPauseIntent } from "./failure-observations.ts";
 import { createRuntimeAffinityStore, type RuntimeAffinitySuccessProof, type RuntimeAffinityStore } from "./runtime-affinity.ts";
 import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
@@ -492,7 +492,7 @@ function buildPipeline(
   effective: EffectiveBackend,
   isGenerationCircuitUnavailable: (model: string) => boolean,
   isProviderClassifierUnavailable: (model: Model<Api>) => boolean,
-  recordProviderClassifierFailure: (model: Model<Api>, status?: number, retryAfter?: string, errorText?: string) => Promise<void>,
+  recordProviderClassifierFailure: (model: Model<Api>, status?: number, retryAfter?: string, errorText?: string, allowTextInference?: boolean) => Promise<void>,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
@@ -620,8 +620,9 @@ function buildPipeline(
         maxTokens: config.classifier?.maxTokens,
         temperature: config.classifier?.temperature,
         method: config.classifier?.method,
-        onProviderHttpResponse: async (providerModel, status, retryAfter, errorText) => {
-          await recordProviderClassifierFailure(providerModel, status, retryAfter, errorText);
+        onProviderHttpResponse: async (providerModel, _statusHint, _retryAfter, errorText) => {
+          if (signal?.aborted || ctx.signal?.aborted) return;
+          await recordProviderClassifierFailure(providerModel, undefined, undefined, errorText, true);
         },
       }, signal);
       if (!tier) return undefined;
@@ -958,6 +959,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (!session.pipeline || session.pipelineConfigGeneration !== state.configGeneration
       || session.pipelineEnabled !== enablement.enabled || session.pipelineBackend !== effective.backend) {
       classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
+      const pipelineConfig = state.config;
+      const pipelineGeneration = state.configGeneration;
+      const pipelineSignal = session.controller.signal;
+      const pipelineSessionId = ctx.sessionManager.getHeader()?.id;
       session.pipeline = buildPipeline(
         ctx,
         state.config,
@@ -1002,8 +1007,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return view.openUntil !== undefined || view.trialActive || view.recoveryPending;
           } catch { return true; }
         },
-        async (model, status, retryAfter, errorText) => {
-          try { await recordClassifierProviderFailure(model, status, retryAfter, errorText); }
+        async (model, status, retryAfter, errorText, allowTextInference) => {
+          if (pipelineSignal.aborted || ctx.signal?.aborted || state.config !== pipelineConfig
+            || state.configGeneration !== pipelineGeneration || ctx.sessionManager.getHeader()?.id !== pipelineSessionId) return;
+          try { await recordClassifierProviderFailure(model, status, retryAfter, errorText, allowTextInference); }
           catch {
             providerCooldownWriteFailed = true;
             throw new Error("Provider cooldown could not be saved; routing is blocked.");
@@ -1567,7 +1574,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       renderAutoBootstrapProgress(ctx, record);
       const configAfterInstall = state.config;
       const generationAfterInstall = state.configGeneration ?? 0;
-      const pendingDeniedProviders = new Set<string>();
+      const pendingDeniedProviders = new Map<string, number>();
       const providerPauseWrites: Promise<void>[] = [];
       let persistenceWarningShown = false;
       let lastStatusUpdate = 0;
@@ -1662,33 +1669,31 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (result.status !== "error" || !stillOwned()) return;
           const model = catalogModels.find((candidate) => candidate.provider === result.provider && candidate.id === result.model);
           if (!model) return;
+          const observedAt = Date.now();
           const observation = normalizeFailureObservation({
             outcomeId: randomUUID(),
             modelKey: modelKey(model),
-            source: "runtime",
+            source: "probe",
             errorText: result.error,
-            observedAt: Date.now(),
-          });
-          if (!observation || (!isBudgetLimitFailure(observation) && observation.category !== "rate_limit")) return;
-          if (observation.category === "rate_limit" && observation.categoryEvidence === "text_heuristic"
-            && !hasExplicit429StatusText(result.error ?? "")) return;
-          pendingDeniedProviders.add(model.provider);
-          providerPauseWrites.push(recordClassifierProviderFailure(
-            model,
-            undefined,
-            undefined,
-            result.error,
-            true,
-          ).catch(() => {
-            providerCooldownWriteFailed = true;
-            return undefined;
-          }).then((savedObservation) => {
+            observedAt,
+          }, { now: observedAt });
+          const intent = pauseIntentFor(modelKey(model), "probe", observation, "legacy-terminal",
+            hasExplicit429StatusText(result.error ?? ""), observedAt);
+          if (!intent || !recordOwnsConfig()) return;
+          const provider = model.provider;
+          pendingDeniedProviders.set(provider, (pendingDeniedProviders.get(provider) ?? 0) + 1);
+          providerPauseWrites.push(applyProviderPause(provider, intent, observedAt).then((openUntil) => {
             try {
-              if (savedObservation?.category === "rate_limit" && savedObservation.categoryEvidence === "text_heuristic"
-                && autoBootstrapCanUpdateProgress(record)) {
-                log(ctx, `Bifrost paused provider ${model.provider} for 5 seconds: rate limit inferred from probe error text.`, "warning");
+              if (intent.kind === "rate" && autoBootstrapCanUpdateProgress(record)) {
+                log(ctx, `Bifrost paused provider ${provider} for 5 seconds: rate limit inferred from probe error text (until ${new Date(openUntil).toISOString()}).`, "warning");
               }
             } catch { /* an optional notification cannot invalidate a saved cooldown */ }
+          }).catch(() => {
+            providerCooldownWriteFailed = true;
+          }).finally(() => {
+            const remaining = (pendingDeniedProviders.get(provider) ?? 1) - 1;
+            if (remaining > 0) pendingDeniedProviders.set(provider, remaining);
+            else pendingDeniedProviders.delete(provider);
           }));
         },
       }).then(async ({ results, cancelled }) => {
@@ -2405,8 +2410,27 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return observation?.category === "allowance_exhausted" || observation?.category === "billing_denied";
   }
 
-  function hasExplicit429StatusText(text: string): boolean {
-    return /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+)|(?:status\s*[:=]\s*))?429\b/i.test(text);
+  function pauseIntentFor(
+    model: string,
+    source: "runtime" | "probe",
+    observation: ReturnType<typeof normalizeFailureObservation>,
+    attribution: "provider-response" | "legacy-terminal" | "unconfirmed",
+    inferredRate: boolean,
+    now: number,
+  ): ProviderPauseIntent | undefined {
+    return providerPauseIntent(observation, {
+      modelKey: model, source, attribution, inferredRate, now,
+      enabled: providerCooldownsEnabled(),
+      allowanceEnabled: state.config.reliability?.cooldownOnAllowanceExhausted !== false,
+      allowanceScope: state.config.reliability?.allowanceCooldownScope ?? "provider",
+    });
+  }
+
+  async function applyProviderPause(provider: string, intent: ProviderPauseIntent, now: number): Promise<number> {
+    const store = state.providerCooldownStore;
+    if (!store || !providerCooldownsEnabled()) throw new Error("Provider cooldown state is unavailable.");
+    return intent.kind === "usage" ? store.pauseUsage(provider, now)
+      : store.pauseRate(provider, intent.observation.retryAt, now);
   }
 
   async function recordClassifierProviderFailure(
@@ -2427,19 +2451,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ...(httpStatus === undefined ? {} : { structured: { httpStatus, ...(retryAt === undefined ? {} : { retryAt }) } }),
       observedAt,
     }, { now: observedAt });
-    if (!observation) return undefined;
-    const store = state.providerCooldownStore;
-    if (!store) throw new Error("Provider cooldown state is unavailable.");
-    if (isBudgetLimitFailure(observation)
-      && state.config.reliability?.cooldownOnAllowanceExhausted !== false
-      && state.config.reliability?.allowanceCooldownScope !== "model") {
-      await store.pauseUsage(model.provider, observedAt);
-    } else if (observation.category === "rate_limit"
-      && (observation.categoryEvidence === "http_status" || observation.categoryEvidence === "structured"
-        || (allowTextInference && observation.categoryEvidence === "text_heuristic"
-          && hasExplicit429StatusText(errorText ?? "")))) {
-      await store.pauseRate(model.provider, observation.retryAt, observedAt);
-    }
+    const intent = pauseIntentFor(`${model.provider}/${model.id}`, "runtime", observation,
+      httpStatus === undefined ? "legacy-terminal" : "provider-response",
+      allowTextInference && hasExplicit429StatusText(errorText ?? ""), observedAt);
+    if (!intent) return undefined;
+    await applyProviderPause(model.provider, intent, observedAt);
     return observation;
   }
 
@@ -2519,16 +2535,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const sessionReference = providerTrialSessionRefBySession.get(session);
     if (claim && pendingClaims?.get(model) === claim) stopProviderTrialHeartbeat(session, model);
     try {
-    if (observation?.source === "runtime" && providerCooldownsEnabled()) {
-      if (!store) throw new Error("Bifrost provider cooldown state is unavailable.");
-      if ((observation.category === "allowance_exhausted" || observation.category === "billing_denied")
-        && state.config.reliability?.cooldownOnAllowanceExhausted !== false) {
-        if (state.config.reliability?.allowanceCooldownScope !== "model") await store.pauseUsage(provider);
-      } else if (observation.category === "rate_limit"
-        && (observation.categoryEvidence === "http_status" || observation.categoryEvidence === "structured")) {
-        await store.pauseRate(provider, observation.retryAt);
-      }
-    }
+    const now = Date.now();
+    const attribution = ctx.signal?.aborted ? "unconfirmed"
+      : observation?.categoryEvidence === "text_heuristic" ? "legacy-terminal" : "provider-response";
+    const intent = pauseIntentFor(model, "runtime", observation, attribution, false, now);
+    if (intent) await applyProviderPause(provider, intent, now);
     if (claim) {
       if (succeeded) await claim.ownerStore.settleTrial(claim);
       else await claim.ownerStore.releaseTrial(claim);
@@ -3779,6 +3790,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", async (event, ctx) => {
+    if (ctx.signal?.aborted) return;
     trackerFor(ctx).observe(event.messages, (model, message) => {
       const observedAt = Date.now();
       return normalizeFailureObservation({
@@ -3790,6 +3802,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("turn_end", async (event, ctx) => {
     pendingInferredRateBySession.delete(ctx.sessionManager);
+    if (ctx.signal?.aborted) return;
     const allowanceRetryEnabled = state.config.reliability?.enabled !== false
       && state.config.reliability?.cooldownOnAllowanceExhausted !== false
       && state.config.reliability?.retryOnAllowanceExhausted === true;
@@ -4000,7 +4013,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const stale = receipt.sessionId !== ctx.sessionManager.getHeader()?.id
           || receipt.branchEpoch !== owner.branchEpoch
           || receipt.manualGeneration !== owner.manualGeneration;
-        await settleV2Receipt(ctx, receipt, stale ? "cancelled" : receipt.outcome ?? "cancelled");
+        await settleV2Receipt(ctx, receipt, stale || ctx.signal?.aborted ? "cancelled" : receipt.outcome ?? "cancelled");
       }
       await cleanupProviderTrials(ctx.sessionManager);
       return;
@@ -4035,7 +4048,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           scope: "model-only",
         } : {}),
       });
-      if (outcome.outcome === "abandoned") {
+      if (outcome.outcome === "abandoned" || (outcome.outcome === "failure" && ctx.signal?.aborted)) {
         state.reliabilityStore.abandonTrial(outcome.model);
         continue;
       }
