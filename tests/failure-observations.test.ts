@@ -193,20 +193,41 @@ describe("failure observation normalization", () => {
     assert.equal(structuredWins?.categoryEvidence, "http_status");
   });
 
-  it("vetoes stronger penalty categories for known and leading inferred server failures", () => {
-    for (const status of [500, 503]) {
-      const expected = status === 503 ? "overload" : "unknown";
-      for (const input of [
-        { structured: { httpStatus: status, category: "allowance_exhausted" }, errorText: "quota exhausted" },
-        { structured: { httpStatus: status }, error: { code: "rate_limit_exceeded", message: "quota exhausted" } },
-        { errorText: `${status} {"error":{"code":"rate_limit_exceeded","message":"quota exhausted"}}` },
-      ]) {
-        const observation = normalizeFailureObservation({ ...base, ...input }, { now: 1000 });
-        assert.equal(observation?.category, expected);
-        assert.equal(isNormalizedFailureObservation(observation, { now: 1000 }), true);
-        if (!("structured" in input)) assert.notEqual(observation?.categoryEvidence, "http_status");
-      }
-    }
+  const serverFailures = [
+    { status: 500, category: "unknown", evidence: "unknown" },
+    { status: 503, category: "overload", evidence: "http_status" },
+  ] as const;
+
+  for (const { status, category, evidence } of serverFailures) {
+    it(`vetoes a trusted quota category when HTTP ${status} contradicts it`, () => {
+      const observation = normalizeFailureObservation({ ...base,
+        structured: { httpStatus: status, category: "allowance_exhausted" }, errorText: "quota exhausted",
+      }, { now: 1000 });
+      assert.equal(observation?.category, category);
+      assert.equal(observation?.categoryEvidence, evidence);
+      assert.equal(isNormalizedFailureObservation(observation, { now: 1000 }), true);
+    });
+
+    it(`vetoes flattened rate and quota evidence when HTTP ${status} contradicts it`, () => {
+      const observation = normalizeFailureObservation({ ...base,
+        structured: { httpStatus: status }, error: { code: "rate_limit_exceeded", message: "quota exhausted" },
+      }, { now: 1000 });
+      assert.equal(observation?.category, category);
+      assert.equal(observation?.categoryEvidence, evidence);
+      assert.equal(isNormalizedFailureObservation(observation, { now: 1000 }), true);
+    });
+
+    it(`uses a leading ${status} hint as a veto without inventing HTTP evidence`, () => {
+      const observation = normalizeFailureObservation({ ...base,
+        errorText: `${status} {"error":{"code":"rate_limit_exceeded","message":"quota exhausted"}}`,
+      }, { now: 1000 });
+      assert.equal(observation?.category, category);
+      assert.notEqual(observation?.categoryEvidence, "http_status");
+      assert.equal(isNormalizedFailureObservation(observation, { now: 1000 }), true);
+    });
+  }
+
+  it("preserves trusted rate-only authority and compatible inferred 429 allowance evidence", () => {
     const rate = normalizeFailureObservation({ ...base,
       structured: { httpStatus: 429, category: "rate_limit" }, errorText: "quota exhausted",
     }, { now: 1000 });
