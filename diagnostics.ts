@@ -149,9 +149,14 @@ const configIssueMap: Readonly<Record<string, { code: string; repair: string }>>
   "config.routing_scope_conflict": { code: "config.routing_scope_conflict", repair: "Make the global and tier provider allowlists intersect." },
 };
 
+export function safeInteractiveDiagnosticPath(value: unknown): string | undefined {
+  return value === "schemaVersion" || value === "tierPolicies" || value === "tierPolicies.*" || value === "tierPolicies.*.fallbackTiers" ? value : undefined;
+}
+
 function safeConfigIssuePath(value: unknown): string | undefined {
-  if (value === "schemaVersion" || value === "tierPolicies" || value === "requirements") return value;
-  if (value === "tierPolicies.*" || value === "tierPolicies.*.fallbackTiers") return value;
+  const interactivePath = safeInteractiveDiagnosticPath(value);
+  if (interactivePath) return interactivePath;
+  if (value === "requirements") return value;
   if (value === "routingScope" || value === "routingScope.providers" || value === "routingScope.tiers") return value;
   if (value === "routingScope.tiers.*" || value === "routingScope.tiers.*.providers") return value;
   if (typeof value !== "string" || value.length > 280) return undefined;
@@ -430,4 +435,58 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
     },
     diagnostics: uniqueDiagnostics(diagnostics),
   };
+}
+
+export type AffinityInspectEvidence = {
+  mode: "off" | "observe" | "retain-within-tier";
+  source: "config" | "auto_default" | "physical_default";
+  status: "anchored" | "locality_unknown" | "disabled";
+  anchor?: { model: string; provider: string; lastSuccessfulAt: string; ageMs: number };
+};
+
+export interface EconomicInspectEvidence {
+  readonly mode: "off" | "observe" | "policy" | "invalid";
+  readonly sources: readonly {
+    readonly source: string;
+    readonly scope: string;
+    readonly authority: string;
+    readonly freshness: "missing" | "current" | "expired" | "future";
+    readonly observedAgeMs?: number;
+    readonly periods: readonly {
+      readonly window: string;
+      readonly period: string;
+      readonly unit: string;
+      readonly applicability: "current" | "reset" | "expired" | "future";
+    }[];
+  }[];
+  readonly diagnostics: readonly {
+    readonly code: string;
+    readonly severity: string;
+    readonly source?: string;
+    readonly scope?: string;
+  }[];
+}
+
+export interface ReliabilityV2InspectEvidence {
+  readonly version: 2;
+  readonly status: "initialized" | "unavailable";
+  readonly revision?: number;
+  readonly observationsEnabled: boolean;
+  readonly cooldownOnAllowanceExhausted: boolean;
+  readonly scopes?: readonly {
+    readonly model: string;
+    readonly generation: number;
+    readonly recentFailureCount: number;
+    readonly openUntil?: number;
+  }[];
+  readonly observations?: readonly {
+    readonly model: string;
+    readonly category: string;
+    readonly categoryEvidence: string;
+    readonly observedAt: number;
+    readonly retryAt?: number;
+    readonly source: string;
+  }[];
+  readonly observationCount?: number;
+  readonly reasonCode?: string;
 }
