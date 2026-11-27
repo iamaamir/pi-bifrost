@@ -292,7 +292,8 @@ describe("packed experimental router consumer", () => {
         import { fileURLToPath } from "node:url";
         import { createRouter } from "pi-bifrost/router";
         import { createJiti } from "jiti";
-        const jiti = createJiti(import.meta.url);
+        const jiti = createJiti(import.meta.url, { alias: {} });
+        assert.equal(jiti.esmResolve("@earendil-works/pi-ai"), import.meta.resolve("@earendil-works/pi-ai"));
         const piExtension = await jiti.import("pi-bifrost/index.ts");
         assert.equal(typeof piExtension.default, "function");
         const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
@@ -410,6 +411,8 @@ describe("packed experimental router consumer", () => {
         encoding: "utf8",
         stdio: "pipe",
         timeout: 30_000,
+        // A Pi-launched parent can export host-specific Jiti aliases.
+        env: { ...process.env, JITI_ALIAS: JSON.stringify({ "@earendil-works/pi-ai": join(temporary, "wrong-pi-ai.js") }) },
       });
     } finally {
       rmSync(temporary, { recursive: true, force: true });
