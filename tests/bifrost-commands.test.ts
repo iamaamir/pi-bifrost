@@ -3361,11 +3361,24 @@ describe("preview json marker", () => {
 describe("preview source values", () => {
   const docsRoot = new URL("../", import.meta.url);
 
+  // The `source` row is owned by one section. Scanning the whole document would
+  // let a row in another reference table satisfy the assertion while the
+  // canonical contract stayed wrong.
+  function normalPreviewSection(doc: string): string | undefined {
+    const start = doc.indexOf("### Normal preview JSON");
+    if (start === -1) return undefined;
+    const next = doc.indexOf("\n### ", start + 1);
+    return doc.slice(start, next === -1 ? undefined : next);
+  }
+
+  function findSourceRow(doc: string): string | undefined {
+    return normalPreviewSection(doc)?.split("\n").find((line) => /^\|\s*`source`\s*\|/u.test(line));
+  }
+
   function sourceRowText(): string {
     const doc = readFileSync(new URL("docs/guide/commands.md", docsRoot), "utf8");
-    assert(doc.includes("Normal preview JSON"), "docs/guide/commands.md must document normal preview JSON");
-    const row = doc.split("\n").find((line) => /^\|\s*`source`\s*\|/u.test(line));
-    assert(row, "docs/guide/commands.md must document a `source` row for the preview report under Normal preview JSON");
+    const row = findSourceRow(doc);
+    assert(row, "docs/guide/commands.md must document a `source` row in its `Normal preview JSON` section");
     return row;
   }
 
@@ -3378,6 +3391,29 @@ describe("preview source values", () => {
     for (const value of ["cache", "classifier", "regex", "inline", "fallback"]) {
       assert.match(row, new RegExp(`\`${value}\``), `preview source docs must name \`${value}\``);
     }
+  });
+
+  it("rejects a source row outside the Normal preview JSON section", () => {
+    // Fault control: identical row text in another table must not satisfy the
+    // section-scoped lookup, or the section claim above would be vacuous.
+    const doc = [
+      "# Command reference",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `source` | outside the canonical section |",
+      "",
+      "### Normal preview JSON (`--json`, no `--trace`)",
+      "",
+      "| Key | Meaning |",
+      "|-----|---------|",
+      "| `tier` | inside the canonical section |",
+    ].join("\n");
+    assert.equal(findSourceRow(doc), undefined);
+    // Positive control on the same helper, so the check above cannot pass by
+    // never finding any row at all.
+    const inside = doc.replace("| `tier` | inside the canonical section |", "| `source` | inside the canonical section |");
+    assert.match(findSourceRow(inside) ?? "", /inside the canonical section/u);
   });
 
   it("rejects a source outside the union at compile time", () => {
