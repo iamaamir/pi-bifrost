@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CAPABILITY_DESCRIPTOR, discoverCapabilityTargets } from "../mutation/enrollment.mjs";
+import { CAPABILITY_DESCRIPTOR, assertEnrollmentCurrent, discoverCapabilityTargets } from "../mutation/enrollment.mjs";
 import { assertUniqueReportStems } from "../mutation/targets.mjs";
 
 const SOURCE = "export const value = 1;\n";
@@ -341,6 +341,32 @@ test("symlinked descriptors, capabilities, sources and intermediate components a
   } finally {
     rmSync(outside, { recursive: true, force: true });
   }
+});
+
+test("a descriptor edited or removed mid-run is detected from disk", () => {
+  withFixture(alpha(), (root) => {
+    assert.equal(
+      assertEnrollmentCurrent("modules/alpha/alpha.ts", { root }).secondsPerMutant,
+      0.5,
+    );
+    // Replaced: the new record is read, not the cached one.
+    writeFileSync(
+      join(root, "modules", "alpha", CAPABILITY_DESCRIPTOR),
+      JSON.stringify(descriptor([record({ secondsPerMutant: 0.75 })])),
+    );
+    assert.equal(
+      assertEnrollmentCurrent("modules/alpha/alpha.ts", { root }).secondsPerMutant,
+      0.75,
+    );
+    // Removed: a target that was measured can no longer be stamped.
+    rmSync(join(root, "modules", "alpha", CAPABILITY_DESCRIPTOR));
+    assert.throws(
+      () => assertEnrollmentCurrent("modules/alpha/alpha.ts", { root }),
+      /no longer enrolled/iu,
+    );
+    // A central target has no descriptor and needs no walk.
+    assert.equal(assertEnrollmentCurrent("cache.ts", { root }), null);
+  });
 });
 
 test("a symlinked modules root is refused", () => {
