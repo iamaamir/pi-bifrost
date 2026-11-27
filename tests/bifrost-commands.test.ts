@@ -4766,7 +4766,7 @@ describe("diagnostics commands", () => {
     assert.match(first, /Diagnostics/);
     viewer.handleInput("j"); viewer.handleInput("\r");
     assert.match(viewer.render(100).join("\n"), /"models":/);
-    assert.doesNotMatch(viewer.render(100).join("\n"), /"strategy":/);
+    assert.match(viewer.render(100).join("\n"), /"strategy":/);
     assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
   });
 

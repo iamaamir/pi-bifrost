@@ -9,12 +9,10 @@ import { renderPanel } from "./panel.ts";
 
 type Theme = Pick<ExtensionContext["ui"]["theme"], "fg">;
 
-const EXCLUDED_CONFIG_KEYS = new Set(["$schema", "strategy"]);
-
 function configurationRow(config: unknown) {
   const visibleConfig =
     config !== null && typeof config === "object" && !Array.isArray(config)
-      ? Object.fromEntries(Object.entries(config).filter(([key]) => !EXCLUDED_CONFIG_KEYS.has(key)))
+      ? Object.fromEntries(Object.entries(config).filter(([key]) => key !== "$schema"))
       : config;
   return jsonTreeRow("Full configuration", visibleConfig, "config");
 }

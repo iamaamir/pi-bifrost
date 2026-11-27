@@ -66,6 +66,18 @@ test("inspect reports runtime state issue and actionable constraints", () => {
   assert.doesNotMatch(output, /\[object Object\]/);
 });
 
+test("inspect shows strategy and hides only top-level schema", () => {
+  const config = { $schema: "top-schema", strategy: "cheapest", nested: { $schema: "nested-schema" } };
+  const view = new InspectView(report, () => ({ columns: 120, rows: 80 }), theme, () => {}, () => {}, config);
+  for (let i = 0; i < 3; i++) view.handleInput("j");
+  view.handleInput("\r");
+  const output = view.render(120).join("\n");
+  assert.match(output, /"strategy": "cheapest"/);
+  assert.doesNotMatch(output, /top-schema|\$schema/);
+  view.handleInput("j"); view.handleInput("j"); view.handleInput("\r");
+  assert.match(view.render(120).join("\n"), /nested-schema/);
+});
+
 test("inspect renders loaded nested config safely without mutation", () => {
   const config = { $schema: "top-schema", nested: { $schema: "nested-schema", items: ["secret\x1b[31m", { value: "\u009bcontrol" }], empty: [] } };
   const before = structuredClone(config);
