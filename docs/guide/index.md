@@ -16,6 +16,24 @@ New to Bifrost? Start with [Install and initialize](getting-started.md). Init is
 8. [Use the command reference](commands.md)
 9. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
 
+## Guide map
+
+| Page | Form | Reader task |
+|------|------|-------------|
+| [Guide index](index.md) | Navigational (hybrid) | Find the right page and orient to the guide |
+| [Install and initialize](getting-started.md) | Tutorial | Install Bifrost and send a first routed prompt |
+| [Auto routing](auto-routing.md) | Explanation | Understand per-request model selection and dispatch |
+| [Routing controls](routing-controls.md) | How-to | Choose and apply a routing control |
+| [Configuration](configuration.md) | Reference | Look up tiers, pools, strategies, rules, and fields |
+| [Commands](commands.md) | Reference | Look up a command and its flags |
+| [Common workflows](workflows.md) | How-to | Perform a routing task |
+| [Classifiers](classifiers.md) | Explanation | Understand classifier backends and privacy |
+| [Prompt caching](prompt-caching.md) | Explanation | Understand provider cache behavior across model switches |
+| [Reliability and local cache](reliability-and-cache.md) | Explanation | Understand circuits, pauses, and local state |
+| [Troubleshooting](troubleshooting.md) | How-to | Diagnose and repair a problem |
+
+The guide index combines navigation with short orientation. Substantive pages keep one primary Diátaxis form. [Writing standard](STYLE.md) is a maintainer process document, not a guide page.
+
 ## Four terms first
 
 - **Tier:** named capability group such as `quick`, `general`, or `frontier`.
