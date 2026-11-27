@@ -9,7 +9,8 @@ trustworthy, or how to add a module.
 
 | File | Owns |
 |---|---|
-| `config.mjs` | Every tunable. The only file you edit for a normal change. |
+| `config.mjs` | Shared policy: runner, budgets, thresholds, sharding, report policy. Central targets stay here. |
+| `enrollment.mjs` | Discovers and validates capability descriptors, then normalizes the composed inventory. |
 | `targets.mjs` | Derives the binding from real test imports. Do not hand-list tests. |
 | `report.mjs` | Merges shard reports, computes both scores, renders the summary. |
 | `workflow.mjs` | `plan` / `plan-cli` / `summarise` / `require-usable` for CI. |
