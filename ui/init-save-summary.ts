@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
+import { stripConfigMetadata } from "../config-schema.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 
 type InitTheme = ExtensionContext["ui"]["theme"];
@@ -17,7 +18,7 @@ function stylePreviewLine(theme: InitTheme, line: string): string {
   if (label === "Models") {
     value = value.replace(/\b\d+ working models? found\b/, (count) => theme.fg("success", count));
   }
-  if (label === "Also uses") {
+  if (label === "Lower layers") {
     value = value.replace(/\b(global|workspace)\b/g, (layer) => theme.fg("accent", layer));
   }
   return theme.fg("muted", label!) + spacing + value;
@@ -43,7 +44,7 @@ function poolModels(pool: unknown): string[] {
 }
 
 function memberships(config: Config): Set<string> {
-  const pools = (config.models ?? {}) as Config;
+  const pools = (stripConfigMetadata(config).models ?? {}) as Config;
   return new Set(Object.entries(pools).flatMap(([tier, pool]) =>
     poolModels(pool).map((model) => JSON.stringify([tier, model])),
   ));
@@ -77,7 +78,7 @@ export function initSaveSummary(
   const fieldsChanged = Object.keys(before).filter((key) => !isDeepStrictEqual(before[key], after[key]));
   const previous = memberships(before);
   const next = memberships(after);
-  const savedPools = (after.models ?? {}) as Config;
+  const savedPools = (stripConfigMetadata(after).models ?? {}) as Config;
   const unverifiedSavedCount = Object.values(savedPools).flatMap(poolModels)
     .filter((key) => !probeVerified.has(key)).length;
   return {

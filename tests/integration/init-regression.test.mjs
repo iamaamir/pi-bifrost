@@ -208,7 +208,7 @@ it("escalates cleanup when a child ignores SIGTERM", async () => {
   assert.equal(child.signalCode, "SIGKILL");
 });
 
-async function runRpcInit(env, args, command = "init") {
+async function runRpcInit(env, args, command = "init", confirmed) {
   const base = Object.fromEntries(["PATH", "TMPDIR", "LANG", "TERM"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
   const child = spawn(PI, ["-e", env.extensionPath, "--approve", "--no-tools", "--no-session", "--mode", "rpc"], {
     cwd: env.work, env: { ...base, HOME: env.home, PI_CODING_AGENT_DIR: join(env.home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.address().port}`, BIFROST_TEST_NETWORK_VIOLATIONS: join(env.home, "network-violations.log") }, stdio: ["pipe", "pipe", "pipe"],
@@ -220,7 +220,7 @@ async function runRpcInit(env, args, command = "init") {
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   child.stdout.on("data", (chunk) => {
     const lines = (buffer + chunk).split("\n"); buffer = lines.pop();
-    for (const line of lines) { try { records.push(JSON.parse(line)); } catch {} }
+    for (const line of lines) { try { const record = JSON.parse(line); records.push(record); if (confirmed !== undefined && record.type === "extension_ui_request" && record.method === "confirm") child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: record.id, confirmed })}\n`); } catch {} }
   });
   try {
     child.stdin.write(`${JSON.stringify({ id: "init", type: "prompt", message: `/bifrost ${command} ${args}` })}\n`);
@@ -287,7 +287,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
       assert.equal(saved.classifier?.model, "fake/healthy");
       assert.equal(saved.cache?.enabled, true);
       assert.equal(saved.reliability?.failureThreshold, 3);
-      assert.ok(Array.isArray(saved.rules));
+      assert.equal(saved.rules, undefined);
     } else {
       for (const key of ["classifier", "cache", "reliability", "rules"]) {
         assert.equal(Object.hasOwn(saved, key), false, `${args} ${targetKind} target pinned inherited ${key}`);
@@ -332,9 +332,44 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
   }
 }
 
+function registerRpcConfirmationTests(getPort) {
+  for (const confirmed of [true, false]) it(`RPC init confirmation ${confirmed ? "accepts" : "rejects"} reviewed changes`, async () => {
+    const env = fixture(getPort(), ["healthy"]);
+    const target = join(env.work, ".pi", "bifrost.json");
+    try {
+      const records = await runRpcInit(env, "", "init", confirmed);
+      const dialogs = records.filter((r) => r.type === "extension_ui_request" && r.method === "confirm");
+      assert.equal(dialogs.length, 1, JSON.stringify(records));
+      assert.match(dialogs[0].message, /Model tiers.*quick 1 \(\+1\)/);
+      assert.match(dialogs[0].message, /Fields added/);
+      assert.match(dialogs[0].message, /Save to\s+.*\.pi\/bifrost\.json/);
+      assert.equal(existsSync(target), confirmed);
+      if (!confirmed) assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+}
+
 describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () => {
   let port;
   before(async () => { port = await startFakeProvider(); });
+  registerRpcConfirmationTests(() => port);
+
+  it("restores implicit default rules when tiers expand after init", async () => {
+    const env = fixture(port, ["healthy"]);
+    const target = join(env.work, ".pi", "bifrost.json");
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(env.home, ".pi", "agent");
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      const saved = JSON.parse(readFileSync(target, "utf8"));
+      assert.equal(saved.rules, undefined);
+      saved.models.frontier = ["fake/healthy"];
+      writeFileSync(target, JSON.stringify(saved));
+      assert.ok(loadConfigForReload(env.work, dirname(env.extensionPath)).config.rules.some((rule) => rule.model === "frontier"));
+    } finally { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
   for (const layer of ["user", "workspace"]) {

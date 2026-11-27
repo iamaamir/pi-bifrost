@@ -375,7 +375,7 @@ describe("config reconciliation command router", () => {
     }
   });
 
-  it("writes default rules only for generated tiers", async () => {
+  it("uses implicit default rules for generated tiers", async () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
@@ -389,8 +389,11 @@ describe("config reconciliation command router", () => {
         rules: Array<{ model: string }>;
       };
       assert.deepEqual(Object.keys(saved.models), ["quick"]);
-      assert(saved.rules.length > 0);
-      assert(saved.rules.every(({ model }) => model === "quick"));
+      assert.equal(saved.rules, undefined);
+      const config = loadConfigForReload(cwd, join(cwd, "extension")).config;
+      const rules = loadRules(cwd, config);
+      assert(rules.length > 0);
+      assert(rules.every(({ model }) => model === "quick"));
     });
   });
 
@@ -460,8 +463,11 @@ describe("config reconciliation command router", () => {
         rules: Array<{ model: string }>;
       };
       assert.deepEqual(Object.keys(saved.models), ["quick"]);
-      assert(saved.rules.some(({ model }) => model === "general"));
-      assert(saved.rules.some(({ model }) => model === "frontier"));
+      assert.equal(saved.rules, undefined);
+      const config = loadConfigForReload(cwd, join(cwd, "extension")).config;
+      const rules = loadRules(cwd, config);
+      assert(rules.some(({ model }) => model === "general"));
+      assert(rules.some(({ model }) => model === "frontier"));
     });
   });
 

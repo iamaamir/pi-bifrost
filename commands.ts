@@ -1,3 +1,4 @@
+import { stripConfigMetadata } from "./config-schema.ts";
 import { log as logNotice } from "./ui/notice.ts";
 import {
   clearProbeProgress,
@@ -2125,19 +2126,18 @@ async function handleInitInner(
       return;
     }
   }
+  const semanticSource = stripConfigMetadata(sourceConfig);
   const sourceModels =
-    sourceConfig.models &&
-    typeof sourceConfig.models === "object" &&
-    !Array.isArray(sourceConfig.models)
-      ? (sourceConfig.models as Record<string, unknown>)
+    semanticSource.models &&
+    typeof semanticSource.models === "object" &&
+    !Array.isArray(semanticSource.models)
+      ? (semanticSource.models as Record<string, unknown>)
       : {};
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
-  let inheritedTiers: ReadonlySet<string> = new Set<string>();
   if (selectedSource === "project") {
     try {
       const inherited = readInheritedPools(["user", "workspace"]);
       inheritedSources = inherited.snapshots;
-      inheritedTiers = inherited.tierNames;
       const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
       if (shadowedTiers.length > 0) {
         initLog(
@@ -2277,12 +2277,8 @@ async function handleInitInner(
         "first",
     ]),
   );
-  const finalTiers = new Set([
-    ...Object.keys(models),
-    ...Object.keys(sourceModels),
-    ...inheritedTiers,
-  ]);
-  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
+  if (sourceConfig.rules !== undefined) proposal.rules = sourceConfig.rules;
+  else delete proposal.rules;
   const defaultTier = sourceConfig.default ?? publicDefaults.default;
   if (typeof defaultTier === "string" && models[defaultTier]?.length)
     proposal.default = defaultTier;
@@ -2482,12 +2478,13 @@ async function handleInitInner(
   const summary = initSaveSummary(source.configBytes, transaction.nextConfigBytes, probeVerified);
   const inheritedLines = configLayerPaths(process.cwd(), state.extensionDir)
     .filter(([layer]) => inheritedSourceLayers.includes(layer))
-    .map(([layer, path], index) => `${index === 0 ? "Also uses" : "         "}    ${layer} (${displayPath(path)})`);
-  uiOutput(ctx, initSavePreviewLines({
+    .map(([layer, path], index) => `${index === 0 ? "Lower layers" : "            "}    ${layer} (${displayPath(path)})`);
+  const previewLines = initSavePreviewLines({
     sourceLabel: initSourceLabel(source), workingCount: workingModels.length, ranProbe, probeAge,
     summary, receiptOnly, classifier: effectiveClassifierSummary, inheritedLines,
     uncategorizedCount: uncategorized.length,
-  }), true);
+  });
+  uiOutput(ctx, previewLines, true);
 
   if (uncategorized.length > 0) {
     initLog(
@@ -2506,7 +2503,7 @@ async function handleInitInner(
     writeWithoutPrompt ||
     (await ctx.ui.confirm(
       "Apply this configuration?",
-      "",
+      ctx.mode === "tui" ? "" : previewLines.join("\n"),
     ));
   if (!ok) {
     initLog(ctx, "config not written");
@@ -4421,10 +4418,6 @@ function persistBootstrapConfig(
   if (stillFresh) {
     if (!Object.hasOwn(current, "$schema"))
       current.$schema = `${state.extensionDir.replace(/\/$/, "")}/schema.json`;
-    if (!Object.hasOwn(current, "rules")) {
-      const generatedTiers = new Set(Object.keys(generatedModels));
-      current.rules = DEFAULT_RULES.filter(({ model }) => generatedTiers.has(model));
-    }
   }
   const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
   const ownership = stillFresh
