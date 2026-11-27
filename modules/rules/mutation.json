@@ -1,0 +1,22 @@
+{
+  "targets": [
+    {
+      "file": "rules.ts",
+      "mutants": 29,
+      "secondsPerMutant": 0.31,
+      "timeoutFactor": 2,
+      "timeoutMS": 20000,
+      "runner": "tap",
+      "reason": "its bound tests exercise regex compilation, the structural scan and verdict decoding in the host process, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). The two potentially blocking match cases run in bounded children, but the scan and decode controls do not, so only the production Node engine gives a faithful verdict."
+    },
+    {
+      "file": "safety.ts",
+      "mutants": 399,
+      "secondsPerMutant": 0.53,
+      "timeoutFactor": 4,
+      "timeoutMS": 30000,
+      "runner": "tap",
+      "reason": "its bound tests exercise regex compilation, the structural scan and verdict decoding in the host process, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). The two potentially blocking match cases run in bounded children, but the scan and decode controls do not, so only the production Node engine gives a faithful verdict."
+    }
+  ]
+}

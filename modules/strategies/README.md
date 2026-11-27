@@ -182,8 +182,11 @@ node --test --experimental-strip-types modules/strategies/tests/selection-proper
 ```
 
 The full and quick tiers discover both files through the module test globs.
-Mutation binding is declared in `mutation/config.mjs`; the module tests bind
-directly because they import this capability.
+Mutation enrollment is declared in [`mutation.json`](mutation.json): the
+capability owns the measured facts for `selection.ts`, while shared Stryker
+policy stays in `mutation/config.mjs`. The module tests bind directly because
+they import this capability. See
+[`docs/mutation-testing.md`](../../docs/mutation-testing.md#capability-owned-enrollment).
 
 ## Extending or replacing
 
