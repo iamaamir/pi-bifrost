@@ -25,7 +25,7 @@ For scripted checks, `--offline` avoids classifier calls for that request (examp
 
 Before running scripted preview, note the same safeguards: preview does not generate or activate a model; an enabled classifier may receive the prompt and may incur classifier usage unless you use `--offline` (or turn the classifier off for the session); ordinary preview JSON contains the prompt.
 
-Use leading flags before the prompt: `--json`, `--trace`, and `--offline` in any order, each once. Any other leading token is part of the prompt.
+Use leading flags before the prompt: `--json`, `--trace`, and `--offline` in any order, each once. Flag parsing stops at the first duplicate or unrecognized token, and that token and the rest become the prompt.
 
 ```text
 /bifrost preview --offline review this authorization design
@@ -71,7 +71,7 @@ Edit the relevant `bifrost.json`, then run:
 
 ## Migrate a config schema
 
-Migration is preview-only by default. It updates only the selected file's `schemaVersion` to `2`, validates the full merged configuration, and preserves unrelated values and key order while normalizing JSON formatting. Apply requires the digest from the latest preview; stale edits are rejected. Before atomic replacement, Bifrost creates a private exact-byte backup beside the source. It does not rewrite other layers or auto-reload the active snapshot.
+Migration is preview-only by default. It updates only the selected file's `schemaVersion` to `2`, validates the full merged configuration, and preserves unrelated values and key order while normalizing JSON formatting. Apply requires the digest from the latest preview, so review the proposal before applying; stale edits are rejected. Before atomic replacement, Bifrost creates a private exact-byte backup beside the source. It does not rewrite other layers or auto-reload the active snapshot.
 
 ```text
 /bifrost config migrate --source project
@@ -105,9 +105,9 @@ On first use, Bifrost loads provisional pools from Pi's available chat-model cat
 
 ## Diagnose unavailable models
 
+Probe sends `1+1=` to every model available in Pi's registry. The primary transport requests 5 output tokens -- a requested budget, not an enforced cap, since the host may raise or omit it and native transport may send additional requests. An empty response may trigger one minimal-session fallback. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
+
 ```text
 /bifrost probe
 /bifrost debug
 ```
-
-Probe sends `1+1=` to every model available in Pi's registry. The primary transport requests 5 output tokens -- a requested budget, not an enforced cap, since the host may raise or omit it and native transport may send additional requests. An empty response may trigger one minimal-session fallback. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
