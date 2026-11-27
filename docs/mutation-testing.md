@@ -351,8 +351,11 @@ A capability that owns a measured source file declares it in
 
 - `file` is capability-relative. It must be a real `.ts` or `.mjs` runtime
   source under the capability, not a declaration, test file, glob, absolute
-  path, traversal path or symlink. It must not contain a comma or line break:
-  the workflow passes the target list through a comma-separated value.
+  path, traversal path, hidden path or symlink. It must not contain a comma or
+  line break: the workflow passes the target list through a comma-separated
+  value. The capability directory must also have a plain name without commas,
+  line breaks or path separators. Hidden capability directories are not
+  enrolled.
 - `mutants` is a positive integer, `secondsPerMutant` a finite positive number,
   `timeoutFactor` a finite positive number and `timeoutMS` a positive integer.
   Preserve the measured values.

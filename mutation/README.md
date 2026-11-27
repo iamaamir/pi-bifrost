@@ -48,9 +48,11 @@ For a non-capability target, add the same fields to `TARGETS` and the mutant
 count to `MUTANT_ESTIMATE` in `mutation/config.mjs`. Capability targets are
 composed into those same maps at load, so every consumer sees one inventory.
 
-- `file` is capability-relative and names a runtime source, not a declaration or
-  test file. It must not contain a comma or line break, which would break the
-  workflow's comma-separated target list.
+- `file` is capability-relative and names a runtime source, not a declaration,
+  test file or hidden path. Neither the file nor the capability directory may
+  contain a comma, line break or path separator: the workflow passes target
+  names through a comma-separated value. Hidden capability directories are not
+  enrolled.
 - `timeoutFactor` / `timeoutMS`: Stryker's per-mutant timeout is
   `dryRunDuration * timeoutFactor + timeoutMS`. Size it to the bound test suite
   of this module. A value that is too small reports genuine mutants as `Timeout`.

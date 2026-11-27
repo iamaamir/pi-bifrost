@@ -279,6 +279,34 @@ test("duplicate targets and flattened report-stem collisions are refused", () =>
   );
 });
 
+test("capability directory names obey the same repository-relative rules", () => {
+  // The capability name is part of the normalized target, so an unsafe name can
+  // break the workflow's comma-separated target list just as a file name can.
+  withFixture(
+    {
+      capabilities: { "a,b": descriptor([record()]) },
+      sources: { "modules/a,b/alpha.ts": SOURCE },
+    },
+    (root) => assert.throws(() => discoverCapabilityTargets({ root }), /comma|capability/iu),
+  );
+  withFixture(
+    {
+      capabilities: { "a\\b": descriptor([record()]) },
+      sources: { "modules/a\\b/alpha.ts": SOURCE },
+    },
+    (root) => assert.throws(() => discoverCapabilityTargets({ root }), /capability|noncanonical/iu),
+  );
+  // Hidden capability directories follow the module boundary convention: they
+  // are not capabilities and their descriptors are never read.
+  withFixture(
+    {
+      capabilities: { ".quiet": descriptor([record()]) },
+      sources: { "modules/.quiet/alpha.ts": SOURCE },
+    },
+    (root) => assert.deepEqual(discoverCapabilityTargets({ root }).names, []),
+  );
+});
+
 test("a missing source file is refused", () => {
   withFixture(
     {
@@ -403,6 +431,8 @@ test("a nested runtime source is enrollable but tests and declarations are not",
     ["nested tests dir", "sub/tests/helper.ts", /runtime|test/iu],
     ["underscore tests dir", "__tests__/helper.ts", /runtime|test/iu],
     ["test dir", "test/helper.ts", /runtime|test/iu],
+    ["hidden file", ".hidden.ts", /hidden|runtime/iu],
+    ["hidden directory", "sub/.hidden/helper.ts", /hidden|runtime/iu],
     ["comma in path", "a,b.ts", /comma|workflow/iu],
     ["newline in path", "a\nb.ts", /line break|workflow/iu],
   ];

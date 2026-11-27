@@ -121,6 +121,11 @@ function validateFile(file, descriptor) {
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     fail(descriptor, `file "${file}" must be a canonical capability-relative path with no empty, dot or traversal segments`);
   }
+  // Module source discovery skips dot-prefixed path segments. Enrolling one
+  // would measure a source that the repository does not treat as runtime code.
+  if (segments.some((segment) => segment.startsWith("."))) {
+    fail(descriptor, `file "${file}" must be a runtime source, not a hidden path`);
+  }
   if (segments.includes("node_modules")) {
     fail(descriptor, `file "${file}" must be a runtime source, not under node_modules`);
   }
@@ -132,6 +137,19 @@ function validateFile(file, descriptor) {
   }
   if (file.endsWith(".d.ts") || /\.(?:test|spec)\.(?:ts|mjs)$/u.test(file)) {
     fail(descriptor, `file "${file}" must be a runtime source, not a declaration or test file`);
+  }
+}
+
+/**
+ * The capability name is part of the normalized target, so it must obey the
+ * same repository-relative and workflow-serialization rules as the file.
+ */
+function validateCapability(capability, descriptor) {
+  if (capability === "" || capability !== capability.trim()) {
+    fail(descriptor, `capability name "${capability}" must be non-empty and canonical`);
+  }
+  if (/[,\r\n\\:*?[\]{}!]/u.test(capability)) {
+    fail(descriptor, `capability name "${capability}" contains a character unsafe for a target name`);
   }
 }
 
@@ -222,6 +240,7 @@ function discover(root) {
     if (!entry.isDirectory()) continue;
     const capability = entry.name;
     const descriptorRelative = `${modulesRelative}/${capability}/${CAPABILITY_DESCRIPTOR}`;
+    validateCapability(capability, descriptorRelative);
     // A capability without a descriptor is not enrolled. This is the opt-out
     // path, so it is deliberately silent; whole-descriptor deletion is reviewed
     // against the base inventory rather than guessed here.
