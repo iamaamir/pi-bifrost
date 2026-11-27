@@ -234,7 +234,10 @@ node --test --experimental-strip-types modules/rules/tests/safety.test.ts
 
 Module tests bind the mutation targets directly; the isolation cases run compile-and-match in a
 bounded child that imports the module under test by URL, so a mutant executes the real code and
-cannot hang the runner.
+cannot hang the runner. [`mutation.json`](mutation.json) enrolls `rules.ts` and `safety.ts` and
+records why both need the production Node engine; shared Stryker policy stays in
+`mutation/config.mjs`. See
+[`docs/mutation-testing.md`](../../docs/mutation-testing.md#capability-owned-enrollment).
 
 ## Extending or replacing
 

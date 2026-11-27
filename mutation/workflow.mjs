@@ -14,7 +14,7 @@ import {
   timeoutTolerance,
   unusableReasons,
 } from "./config.mjs";
-import { exceedsBudget, measurementIdentity, reportNameFor, reportStem, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { exceedsBudget, measurementIdentity, reportNameFor, reportStem, shardsFor, suggestedShards, targetNames, validateTargetSet } from "./targets.mjs";
 
 /** Resolve the dispatched target selection into a matrix list. */
 export function resolveTargets(requested, known = targetNames()) {
@@ -100,6 +100,7 @@ export function projectWallClock(legCosts, slots = MATRIX.maxParallel) {
  * meet the cap by measuring fewer mutants.
  */
 export function planMatrix({ requested, shards, concurrency } = {}) {
+  validateTargetSet();
   const targets = resolveTargets(requested);
   const workers = resolveConcurrency(concurrency);
 

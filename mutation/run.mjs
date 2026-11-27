@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
-import { ROOT, bindingFor, measurementIdentity, reportNameFor, reportStem, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { ROOT, bindingFor, measurementIdentity, reportNameFor, reportStem, shardsFor, suggestedShards, targetNames, validateTargetSet } from "./targets.mjs";
 
 export function parseArgs(argv) {
   const options = {
@@ -74,6 +74,7 @@ export function parseArgs(argv) {
 }
 
 function inventory() {
+  validateTargetSet({ binding: false });
   for (const target of targetNames()) {
     const budget = TARGETS[target];
     const local = estimatedMinutes(target, { planned: false });
@@ -400,6 +401,7 @@ function main() {
     inventory();
     return;
   }
+  validateTargetSet();
   const targets = options.targets.length > 0 ? options.targets : targetNames();
   const unknown = targets.filter((target) => !(target in TARGETS));
   if (unknown.length > 0) {

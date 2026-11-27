@@ -1,0 +1,11 @@
+{
+  "targets": [
+    {
+      "file": "selection.ts",
+      "mutants": 52,
+      "secondsPerMutant": 0.034,
+      "timeoutFactor": 2,
+      "timeoutMS": 20000
+    }
+  ]
+}
