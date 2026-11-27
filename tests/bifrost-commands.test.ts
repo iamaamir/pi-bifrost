@@ -3361,19 +3361,22 @@ describe("preview json marker", () => {
 describe("preview source values", () => {
   const docsRoot = new URL("../", import.meta.url);
 
-  function sourceRow(): string {
+  function sourceRowText(): string {
     const doc = readFileSync(new URL("docs/guide/commands.md", docsRoot), "utf8");
-    const row = doc.split("\n").find((line) => line.startsWith("| `source`"));
-    assert(row, "docs/guide/commands.md must document a `source` row for the preview report");
+    assert(doc.includes("Normal preview JSON"), "docs/guide/commands.md must document normal preview JSON");
+    const row = doc.split("\n").find((line) => /^\|\s*`source`\s*\|/u.test(line));
+    assert(row, "docs/guide/commands.md must document a `source` row for the preview report under Normal preview JSON");
     return row;
   }
 
-  it("documents every reachable source value", () => {
-    // The union is `ClassificationSource | "fallback"`. A consumer switching
-    // exhaustively on `source` must not hit a value the guide never names, so
-    // the guide row is pinned to the declared union rather than trusted.
+  it("documents the declared preview source union values in the source row", () => {
+    // The union is `ClassificationSource | "fallback"`. The guide row is pinned
+    // to the declared union (including `inline`, which preview does not emit)
+    // so consumers see the full contract described there; reachability is noted
+    // in the docs, not reasserted by this label.
+    const row = sourceRowText();
     for (const value of ["cache", "classifier", "regex", "inline", "fallback"]) {
-      assert.match(sourceRow(), new RegExp(`\`${value}\``), `source row must name \`${value}\``);
+      assert.match(row, new RegExp(`\`${value}\``), `preview source docs must name \`${value}\``);
     }
   });
 
