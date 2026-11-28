@@ -1,17 +1,13 @@
 import type { ClassifierBackend } from "../classifier-backends.ts";
-import type {
-  ClassifierEnablement,
-  ClassifierEnablementSource,
-  ClassifierReadiness,
-  RuntimeStateIssue,
-} from "../runtime-state.ts";
+import type { ClassifierEnablement, ClassifierReadiness } from "../runtime-state.ts";
 import type { SummaryBlock, SummaryPanelContent } from "./summary-panel.ts";
 
 /** Effective direct-classifier transport, already resolved by the handler. */
 export interface ClassifierBackendFacts {
   readonly name: ClassifierBackend;
   readonly auto: boolean;
-  readonly reason?: string;
+  /** Detection reason, or "explicit config"; only shown when `auto`. */
+  readonly reason: string;
   readonly model?: string;
   readonly endpoint?: string;
   readonly method?: string;
@@ -30,25 +26,32 @@ export interface ClassifierActivityFacts {
 
 /** Everything the status command knows before presentation decides layout. */
 export interface ClassifierStatusFacts {
-  readonly enabled: boolean;
-  readonly source: ClassifierEnablementSource;
+  /** Passed through from the runtime rather than copied field by field. */
+  readonly enablement: ClassifierEnablement;
+  /** Why configured state takes precedence; present with a legacy conflict. */
+  readonly conflictNote?: string;
   readonly configured: boolean;
   readonly readiness: ClassifierReadiness;
   readonly backend: ClassifierBackendFacts;
-  /** The runtime's conflict report plus the note that explains precedence. */
-  readonly legacyConflict?: NonNullable<ClassifierEnablement["legacyConflict"]> & { readonly note: string };
-  readonly runtimeStateIssue?: RuntimeStateIssue;
   readonly errors?: readonly string[];
   readonly activity?: ClassifierActivityFacts;
 }
 
+function onOff(value: boolean): string {
+  return value ? "On" : "Off";
+}
+
+/** A row appears only when its value exists, so callers list settings declaratively. */
+function row(label: string, value: string | undefined): SummaryBlock[] {
+  return value ? [{ kind: "row", label, value }] : [];
+}
+
 function statusValue(facts: ClassifierStatusFacts): string {
-  return `${facts.enabled ? "On" : "Off"} · ${facts.readiness} (${facts.source})`;
+  return `${onOff(facts.enablement.enabled)} · ${facts.readiness} (${facts.enablement.source})`;
 }
 
 function backendLabel(backend: ClassifierBackendFacts): string {
-  if (!backend.auto) return backend.name;
-  return backend.reason ? `auto: ${backend.name} (${backend.reason})` : `auto: ${backend.name}`;
+  return backend.auto ? `auto: ${backend.name} (${backend.reason})` : backend.name;
 }
 
 function outcomeSummary(outcomes: Readonly<Record<string, number>>): string {
@@ -59,32 +62,30 @@ function outcomeSummary(outcomes: Readonly<Record<string, number>>): string {
 function activityBlocks(activity: ClassifierActivityFacts | undefined): SummaryBlock[] {
   if (!activity) return [];
   return [
-    {
-      kind: "row",
-      label: "Activity",
-      value: `${activity.observations} observations (persisted aggregate)`,
-    },
-    { kind: "row", label: "Outcomes", value: outcomeSummary(activity.outcomes) },
-    ...(activity.averageLatencyMs === undefined
-      ? []
-      : [{ kind: "row", label: "Average latency", value: `${activity.averageLatencyMs} ms` } as const]),
+    ...row("Activity", `${activity.observations} observations (persisted aggregate)`),
+    ...row("Outcomes", outcomeSummary(activity.outcomes)),
+    ...row(
+      "Average latency",
+      activity.averageLatencyMs === undefined ? undefined : `${activity.averageLatencyMs} ms`,
+    ),
   ];
 }
 
 function diagnosticBlocks(facts: ClassifierStatusFacts): SummaryBlock[] {
   const blocks: SummaryBlock[] = [];
-  if (facts.legacyConflict) {
+  const conflict = facts.enablement.legacyConflict;
+  if (conflict) {
     blocks.push({
       kind: "message",
       tone: "warning",
-      text: `Legacy saved classifierEnabled=${facts.legacyConflict.saved} conflicts with configured=${facts.legacyConflict.configured}; ${facts.legacyConflict.note}`,
+      text: `Legacy saved classifierEnabled=${conflict.saved} conflicts with configured=${conflict.configured}${facts.conflictNote ? `; ${facts.conflictNote}` : ""}`,
     });
   }
-  if (facts.runtimeStateIssue) {
+  if (facts.enablement.runtimeStateIssue) {
     blocks.push({
       kind: "message",
       tone: "error",
-      text: `Classification is paused because .pi/bifrost-state.json is unreadable or invalid (${facts.runtimeStateIssue}). Repair it as a JSON object with boolean enabled and classifierEnabled fields if present, then run /bifrost reload.`,
+      text: `Classification is paused because .pi/bifrost-state.json is unreadable or invalid (${facts.enablement.runtimeStateIssue}). Repair it as a JSON object with boolean enabled and classifierEnabled fields if present, then run /bifrost reload.`,
     });
   }
   for (const error of facts.errors ?? []) blocks.push({ kind: "message", tone: "error", text: error });
@@ -99,19 +100,15 @@ function diagnosticBlocks(facts: ClassifierStatusFacts): SummaryBlock[] {
 export function classifierStatusPanel(facts: ClassifierStatusFacts): SummaryPanelContent {
   const { backend } = facts;
   const settings: SummaryBlock[] = [
-    { kind: "row", label: "Configured", value: facts.configured ? "On" : "Off" },
+    { kind: "row", label: "Configured", value: onOff(facts.configured) },
     { kind: "row", label: "Backend", value: backendLabel(backend) },
-    ...(backend.model ? [{ kind: "row", label: "Model", value: backend.model } as const] : []),
-    ...(backend.endpoint ? [{ kind: "row", label: "Endpoint", value: backend.endpoint } as const] : []),
-    ...(backend.method ? [{ kind: "row", label: "Method", value: backend.method } as const] : []),
-    ...(backend.minConfidence === undefined
-      ? []
-      : [{ kind: "row", label: "Minimum confidence", value: String(backend.minConfidence) } as const]),
-    ...(backend.credential ? [{ kind: "row", label: "Credential", value: backend.credential } as const] : []),
-    ...(backend.fallback ? [{ kind: "row", label: "Fallback", value: backend.fallback } as const] : []),
-    ...(backend.fallbackModel
-      ? [{ kind: "row", label: "Fallback model", value: backend.fallbackModel } as const]
-      : []),
+    ...row("Model", backend.model),
+    ...row("Endpoint", backend.endpoint),
+    ...row("Method", backend.method),
+    ...row("Minimum confidence", backend.minConfidence === undefined ? undefined : String(backend.minConfidence)),
+    ...row("Credential", backend.credential),
+    ...row("Fallback", backend.fallback),
+    ...row("Fallback model", backend.fallbackModel),
   ];
   const activity = activityBlocks(facts.activity);
   return {

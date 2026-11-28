@@ -7,7 +7,7 @@ import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "./registry-refresh.ts";
 import { isVirtualModel } from "./virtual-model.ts";
-import type { ClassifierReadiness, RuntimeStateIssue } from "./runtime-state.ts";
+import { classifierReadiness, type ClassifierReadiness, type RuntimeStateIssue } from "./runtime-state.ts";
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
@@ -312,7 +312,10 @@ export function validateDiagnostics(input: ValidateDiagnosticsInput): ValidateDi
       configuredEnabled: input.config.classifier?.enabled !== false,
       source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
       ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
-      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
+      readiness: classifierReadiness(
+        { enabled: classifierEnabled, runtimeStateIssue: input.classifierRuntimeStateIssue },
+        classifierErrors,
+      ),
       errors: classifierErrors,
       ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
       ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
@@ -428,7 +431,10 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
       configuredEnabled: input.config.classifier?.enabled !== false,
       source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
       ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
-      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
+      readiness: classifierReadiness(
+        { enabled: classifierEnabled, runtimeStateIssue: input.classifierRuntimeStateIssue },
+        classifierErrors,
+      ),
       errors: classifierErrors,
       ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
       ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),

@@ -15,8 +15,7 @@ const theme = {
 
 function facts(overrides: Partial<ClassifierStatusFacts> = {}): ClassifierStatusFacts {
   return {
-    enabled: true,
-    source: "configuration",
+    enablement: { enabled: true, source: "configuration" },
     configured: true,
     readiness: "ready",
     backend: {
@@ -63,7 +62,14 @@ describe("classifier status panel", () => {
     const lines = summaryText(
       classifierStatusPanel(
         facts({
-          backend: { name: "prompt", auto: false, model: "fixture/classifier", endpoint: "registry", method: "auto" },
+          backend: {
+            name: "prompt",
+            auto: false,
+            reason: "explicit config",
+            model: "fixture/classifier",
+            endpoint: "registry",
+            method: "auto",
+          },
           activity: undefined,
         }),
       ),
@@ -80,15 +86,14 @@ describe("classifier status panel", () => {
     const conflict = summaryText(
       classifierStatusPanel(
         facts({
-          enabled: false,
-          source: "legacy-conflict",
+          enablement: {
+            enabled: false,
+            source: "legacy-conflict",
+            legacyConflict: { saved: true, configured: false },
+          },
+          conflictNote: "configured off takes precedence; /bifrost classifier on overrides only this session",
           configured: false,
           readiness: "inactive",
-          legacyConflict: {
-            saved: true,
-            configured: false,
-            note: "configured off takes precedence; /bifrost classifier on overrides only this session",
-          },
         }),
       ),
     );
@@ -101,10 +106,8 @@ describe("classifier status panel", () => {
     const invalid = summaryText(
       classifierStatusPanel(
         facts({
-          enabled: false,
-          source: "runtime-state-invalid",
+          enablement: { enabled: false, source: "runtime-state-invalid", runtimeStateIssue: "invalid-json" },
           readiness: "blocked",
-          runtimeStateIssue: "invalid-json",
         }),
       ),
     );
@@ -131,7 +134,12 @@ describe("classifier status panel", () => {
     } as never;
     summaryPanel(
       recording,
-      classifierStatusPanel(facts({ enabled: false, source: "runtime-state-invalid", readiness: "blocked", runtimeStateIssue: "invalid-json" })),
+      classifierStatusPanel(
+        facts({
+          enablement: { enabled: false, source: "runtime-state-invalid", runtimeStateIssue: "invalid-json" },
+          readiness: "blocked",
+        }),
+      ),
     ).render(120);
 
     assert(roles.some(([role, text]) => role === "accent" && text.includes("classifier status")));
@@ -173,7 +181,9 @@ describe("classifier status panel", () => {
   it("keeps the narrow render readable after wrapping", () => {
     const lines = summaryPanel(
       theme,
-      classifierStatusPanel(facts({ enabled: false, readiness: "blocked", runtimeStateIssue: "invalid-shape" })),
+      classifierStatusPanel(
+        facts({ enablement: { enabled: false, source: "configuration", runtimeStateIssue: "invalid-shape" }, readiness: "blocked" }),
+      ),
     ).render(40);
     const text = lines.join("\n");
     assert.match(text, /Status/);
