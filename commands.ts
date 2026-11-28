@@ -3846,7 +3846,10 @@ function classifierStatusFacts(state: BifrostState, ctx: ExtensionContext): Clas
             observations: metrics.total,
             outcomes: metrics.outcomes,
             ...(metrics.totalAttempts > 0
-              ? { averageLatencyMs: Math.round(metrics.totalLatencyMs / metrics.totalAttempts) }
+              ? {
+                  averageLatencyMs: Math.round(metrics.totalLatencyMs / metrics.totalAttempts),
+                  attempts: metrics.totalAttempts,
+                }
               : {}),
           },
         }

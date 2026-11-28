@@ -22,6 +22,8 @@ export interface ClassifierActivityFacts {
   readonly observations: number;
   readonly outcomes: Readonly<Record<string, number>>;
   readonly averageLatencyMs?: number;
+  /** Transport attempts behind the average; a fallback can make it exceed observations. */
+  readonly attempts?: number;
 }
 
 /** Everything the status command knows before presentation decides layout. */
@@ -59,15 +61,19 @@ function outcomeSummary(outcomes: Readonly<Record<string, number>>): string {
   return entries.length ? entries.map(([outcome, count]) => `${outcome} ${count}`).join(" · ") : "none recorded";
 }
 
+/** Label the sample size, so the average cannot read as one observation. */
+function averageLatency(activity: ClassifierActivityFacts): string | undefined {
+  if (activity.averageLatencyMs === undefined) return undefined;
+  const { attempts } = activity;
+  return attempts ? `${activity.averageLatencyMs} ms (${attempts} ${attempts === 1 ? "attempt" : "attempts"})` : `${activity.averageLatencyMs} ms`;
+}
+
 function activityBlocks(activity: ClassifierActivityFacts | undefined): SummaryBlock[] {
   if (!activity) return [];
   return [
     ...row("Activity", `${activity.observations} observations (persisted aggregate)`),
     ...row("Outcomes", outcomeSummary(activity.outcomes)),
-    ...row(
-      "Average latency",
-      activity.averageLatencyMs === undefined ? undefined : `${activity.averageLatencyMs} ms`,
-    ),
+    ...row("Average latency", averageLatency(activity)),
   ];
 }
 
