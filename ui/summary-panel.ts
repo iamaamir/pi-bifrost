@@ -104,10 +104,13 @@ class SummaryBody {
   invalidate(): void {}
   render(width: number): string[] {
     const labelColumn = labelWidth(this.content.blocks);
-    const title = this.theme.fg("accent", this.theme.bold(this.content.title));
+    // The box pads the body and does not truncate, so an unwrapped title is the
+    // one line that could still exceed the width it was given.
+    const title = wrapTextWithAnsi(this.theme.fg("accent", this.theme.bold(this.content.title)), width);
+    const rule = Math.min(width, Math.max(0, ...title.map(visibleWidth)));
     return [
-      title,
-      this.theme.fg("dim", "─".repeat(Math.min(visibleWidth(title), width))),
+      ...title,
+      this.theme.fg("dim", "─".repeat(rule)),
       ...this.content.blocks.flatMap((block) => renderBlock(this.theme, block, labelColumn, width)),
     ];
   }
