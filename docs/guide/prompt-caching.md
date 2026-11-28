@@ -6,7 +6,7 @@
 
 Pi-Bifrost is **prompt-cache mindful, not prompt-cache managing**.
 
-Bifrost chooses and activates Pi's model before generation. It does not create, merge, clear, price, inspect, or guarantee provider prompt-cache entries. Each provider decides whether an input prefix qualifies, how long it remains reusable, and how usage is billed.
+Bifrost chooses and activates Pi's model before generation. Provider prompt-cache entries belong to Pi's provider integration: each provider decides whether an input prefix qualifies, how long it remains reusable, and how usage is billed.
 
 If Bifrost switches models during one long session, treat every provider/model pair as having an independent cache history. Returning to an earlier model may reuse that model's longest still-valid matching prefix. Conversation content added since that model last handled the session is an uncached tail.
 
@@ -19,7 +19,7 @@ Bifrost and model providers cache different things:
 | Bifrost classification cache | Pi-Bifrost | Normalized prompt terms and selected tier | Avoid repeating tier classification |
 | Provider prompt or prefix cache | Provider through Pi's integration | Provider-defined reusable prefix the provider accepts for a model | Avoid recomputing the same input |
 
-`/bifrost cache stats` reports only Bifrost's local classification cache. It does not show provider prompt-cache hits, lifetime, savings, or billing.
+`/bifrost cache stats` reports Bifrost's local classification cache. Provider prompt-cache hits, lifetime, savings, and billing stay in provider records.
 
 Normalized classification-cache text can still contain sensitive terms. See [Reliability and local cache](reliability-and-cache.md#local-classification-cache) to inspect, clear, move, or disable it.
 
@@ -39,11 +39,11 @@ provider/model B: history from requests handled by B
 provider/model C: history from requests handled by C
 ```
 
-Switching away from A does not mean Bifrost deleted A's provider cache. Bifrost has no API for doing that. When the session returns to A, the provider may reuse A's longest still-valid prefix if the serialized request still begins with that exact reusable prefix.
+Switching away from A leaves A's provider cache under the provider's control. When the session returns to A, the provider may reuse A's longest still-valid prefix if the serialized request still begins with that exact reusable prefix.
 
 Everything added to the conversation after A's previous request is new input from A's perspective. That content forms an uncached tail. More switching usually means longer uncached tails and less predictable cache locality.
 
-Reuse can also fail because of provider-specific expiry, minimum-length rules, request serialization, system-prompt changes, tool definitions, account boundaries, or other provider policy. Bifrost cannot promise a hit simply because the same model is selected again.
+Reuse can also fail because of provider-specific expiry, minimum-length rules, request serialization, system-prompt changes, tool definitions, account boundaries, or other provider policy. A hit remains provider-controlled, even when the same model is selected again.
 
 ## A → B → A example
 
@@ -66,7 +66,7 @@ Yes, because the tradeoff is explicit and controllable. No mode can guarantee pr
 | Pinned | Keeps one exact model for the whole session | Best chance of one continuous model history | Long context, iterative work, cache locality |
 | Model chosen manually in Pi | Locks that model, exactly like pin | Same continuity benefit as pin | You know the exact model you want |
 
-`/bifrost pin` is a hard lock. While pinned, Bifrost does not route automatically and ignores tier names in messages. `/bifrost unpin` restores per-message routing.
+`/bifrost pin` is a hard lock. While pinned, Bifrost keeps the model fixed and treats tier names in messages as ordinary text. `/bifrost unpin` restores per-message routing.
 
 ## Practical workflows
 
@@ -124,7 +124,7 @@ Use a **tier name at the start of a message** when:
 
 ### Does switching models clear the previous model's cache?
 
-Not necessarily. Bifrost does not clear provider caches. The previous entry may remain reusable until provider expiry or invalidation.
+The previous entry may remain reusable until provider expiry or invalidation; Bifrost leaves provider caches in place.
 
 ### Does switching back guarantee reuse?
 
@@ -132,11 +132,11 @@ No. The provider may reuse the longest still-valid matching prefix, but eligibil
 
 ### Does Bifrost merge cache histories across models?
 
-No. Treat every provider/model pair as independent.
+Treat every provider/model pair as independent; Bifrost merges no cache histories.
 
 ### Does `/bifrost cache stats` show provider cache savings?
 
-No. It reports Bifrost's local tier-classification cache only.
+It reports Bifrost's local tier-classification cache only; provider savings stay in provider records.
 
 ### Does pinning guarantee lower cost?
 

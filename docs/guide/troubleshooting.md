@@ -22,7 +22,7 @@ It shows effective routing and reliability state after configuration layers merg
 | Wrong exact model is selected | `/bifrost preview <prompt>`; `/bifrost debug` | Broad substring pattern, tier strategy, candidate order, or health exclusion | Use exact `provider/id`; inspect strategy and candidate list; probe unhealthy model |
 | A configured model is skipped | `/bifrost debug`; `/bifrost probe` | Reliability circuit is open after repeated failures | Fix provider/model health and run a successful probe; otherwise wait for controlled recovery |
 | Pi reports a usage or billing rejection | `/bifrost reliability`; `/bifrost debug` | By default, the configured Pi provider is paused in Auto and physical routing | Wait for the pause or use `/bifrost reliability reset --provider <exact-id>`. A reset stops during an active recovery trial. Auto can make one alternate attempt only when `reliability.retryOnAllowanceExhausted: true` and Pi proves the turn was empty and safe. The retry defaults to off. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) |
-| A provider returns HTTP 429 | `/bifrost reliability`; `/bifrost debug` | Bifrost applies a short provider pause. A clear quota response uses the usage-pause policy instead. | Wait for the pause. The rate-limit pause does not retry the current prompt. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) |
+| A provider returns HTTP 429 | `/bifrost reliability`; `/bifrost debug` | Bifrost applies a short provider pause. A clear quota response uses the usage-pause policy instead. | Wait for the pause. The current prompt ends at the rate-limit error; later turns use the pause. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) |
 | Config edit has no effect | `/bifrost debug` | Higher-precedence config overrides it or config was not reloaded | Check all config locations; edit winning layer; run `/bifrost reload` |
 | Init reuses saved probe results | `/bifrost init` | A recent complete saved probe report for the current catalog was reused | Pass `-f` to `/bifrost init` to force a fresh check. Init shows the approximate age of reused saved results. |
 | First-use setup cannot save verified pools | `/bifrost debug`; inspect provider access | No model passed its background probe, or a configuration changed before the safe save | Fix provider access and run `/bifrost init -f`; review the save target before confirming |
@@ -43,7 +43,7 @@ It shows effective routing and reliability state after configuration layers merg
 }
 ```
 
-The primary probe transport uses `1+1=` and requests 5 output tokens; that is a requested budget, not an enforced cap, because the host may raise or omit it and native transport may send additional requests. An empty response may trigger one minimal-session fallback request. Probes can use provider credits or reach rate limits. First-use routes can use provisional catalog pools while those checks run. If all checks fail, Bifrost does not save a configuration.
+The primary probe transport uses `1+1=` and requests 5 output tokens; that is a requested budget, not an enforced cap, because the host may raise or omit it and native transport may send additional requests. An empty response may trigger one minimal-session fallback request. Probes can use provider credits or reach rate limits. First-use routes can use provisional catalog pools while those checks run. If all checks fail, Bifrost leaves configuration unchanged.
 
 ## Understand preview output
 
@@ -57,7 +57,7 @@ Preview reports:
 - selected model;
 - reliability fallback reason when applicable.
 
-Preview does not start the generation turn or activate the selected model. It does run the normal tier pipeline. An enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Preview does not read a tier name from the prompt, so a forced tier cannot be previewed.
+Preview reports the route without starting the generation turn or activating the selected model. It runs the normal tier pipeline. An enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. A tier name in the preview prompt stays literal; preview does not accept a tier override, so inspect a tier's candidates in configuration instead.
 
 For local-only preview, disable the classifier first. This change lasts for the current Pi session only:
 
@@ -79,7 +79,7 @@ Include content-free evidence where possible:
 1. Pi and Pi-Bifrost versions;
 2. `/bifrost debug` output with secrets removed;
 3. `/bifrost classifier status` when relevant;
-4. probe status counts, not credentials or raw private prompts;
+4. probe status counts; omit credentials and raw private prompts;
 5. minimal redacted configuration that reproduces the problem.
 
 [Open a GitHub issue](https://github.com/iamaamir/pi-bifrost/issues).

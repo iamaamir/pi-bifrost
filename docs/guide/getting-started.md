@@ -6,7 +6,7 @@
 
 Pi-Bifrost chooses from models already available in [Pi](https://pi.dev). For each routed message it resolves a configured capability tier, filters unhealthy candidates, and applies your tier strategy. It activates Pi's actual provider/model before generation by default. Select `bifrost/auto` for opt-in per-request dispatch through Pi's virtual model API.
 
-Bifrost does not provide model credentials or a model proxy.
+Bifrost routes through Pi's provider/model and your existing Pi credentials.
 
 ## Before installing
 
@@ -35,14 +35,14 @@ pi install npm:pi-bifrost
 
 Restart Pi if the extension is not loaded in the current session.
 
-To inspect usage Pi recorded for the current session, run `/bifrost cost`. In the interactive view, **Tab** switches between Requests and Models for the current branch; **Up/Down** moves through groups, **Enter** expands or collapses them, and **Esc** closes the view. The current-branch request groups are derived from session entries, while all-retained totals are shown separately and can include copied fork history or alternate branches. Assistant responses are grouped by reported model; auxiliary usage, such as compaction, is shown when Pi records it. Unknown costs stay unknown and are not included in any known-cost subtotal. The report cannot show historical routing reasons. It does not display prompt or tool content. Costs are Pi-reported estimates, not billing records; zero reported cost does not confirm free usage. Classifier or probe overhead may be outside the session or unknown, so the report makes no savings claim. When an interactive TUI is unavailable, it prints a plain-text report.
+To inspect usage Pi recorded for the current session, run `/bifrost cost`. The interactive view groups requests and models for the current branch, while all-retained totals can include copied fork history or alternate branches. Unknown costs stay unknown. See [the cost report](commands.md#cost-reporting) for the estimate boundary.
 
 ## Understand four terms
 
 - **Tier:** named capability group such as `quick`, `general`, or `frontier`.
 - **Model pool:** provider/model IDs allowed in one tier.
 - **Strategy:** rule that chooses one healthy model from a tier pool.
-- **Classifier:** optional backend that judges the tier. It never chooses the exact provider model.
+- **Classifier:** optional backend that judges the tier. The tier strategy chooses the exact provider model.
 
 For a tier-based route, Bifrost follows these steps:
 
@@ -57,13 +57,13 @@ flowchart TD
 
 ## Initialize
 
-On a fresh install, routing is on and physical model selection is the default. If no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools to `.pi/bifrost.json`. An empty `{}` file does not block setup. Probe requests can use credits or reach rate limits. Bifrost does not save prompts or secrets. If every probe fails, it leaves configuration unchanged and warns you.
+On a fresh install, routing is on and physical model selection is the default. If no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools to `.pi/bifrost.json`. An empty `{}` file does not block setup. Probe requests can use credits or reach rate limits. Bifrost saves generated pools and routing settings; prompt text and credentials stay out of the saved configuration. If every probe fails, it leaves configuration unchanged and warns you.
 
 The first route can use a provisional model before its probe finishes. Bifrost applies verified results at a safe input boundary, so a probe does not stop active generation.
 
 You can send a first prompt without running init. A saved configuration or runtime preference can change routing; use `/bifrost debug` to inspect it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. Any setting in a meaningful configuration blocks automatic pool setup. A project route file or explicit routing override also blocks setup.
 
-To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. These commands do not classify or probe. Catalog availability does not confirm that a model is healthy.
+To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. Both read local state without classifying or probing. A catalog entry shows availability, not proof that a model is healthy.
 
 Run this command when you want to refresh the model list or save it to a configuration file:
 
@@ -94,7 +94,7 @@ If a proposed project pool would replace a handwritten pool in your global or wo
 
 Probe requests can use provider credits or reach rate limits. If no model passes, init leaves configuration unchanged.
 
-Bifrost does not ship maintainer-specific provider/model IDs as routing defaults.
+Routing defaults are model-agnostic; add your own provider/model IDs.
 
 ### Probe usage warning
 
@@ -127,7 +127,7 @@ Before confirming, check:
 
 The confirmation summary does not show every model ID, strategy, or default tier. After saving, run `/bifrost inspect` to review pools and status. Edit the saved configuration before your first generation if needed.
 
-Classification is enabled by default. Init detects a classifier backend. When the prompt backend needs a model, Bifrost selects an available chat model as its default. On a local-cache miss, an enabled classifier can receive the current prompt. Run `/bifrost classifier off` to disable that extra call for this Pi session. The command does not edit config, so restart restores the configured default. Run `/bifrost classifier` to choose another backend or model. See [Classifier backends](classifiers.md).
+Classification is enabled by default. Init detects a classifier backend. When the prompt backend needs a model, Bifrost selects an available chat model as its default. On a local-cache miss, an enabled classifier can receive the current prompt. Run `/bifrost classifier off` to disable that extra call for this Pi session. The command changes this session only; restart restores the configured default. Run `/bifrost classifier` to choose another backend or model. See [Classifier backends](classifiers.md).
 
 For rules/default-only routing in the current Pi session, disable the classifier. This command works without a Bifrost JSON config file. Set `classifier.enabled` to `false` in your existing file when you need that policy after restart:
 
@@ -145,23 +145,16 @@ Or set this in your existing `.pi/bifrost.json`:
 }
 ```
 
-Setting `cache.enabled` to `false` disables classification-cache use, but does not remove saved entries. Run `/bifrost cache clear` to empty them. The selected generation provider still receives the prompt.
+Setting `cache.enabled` to `false` stops classification-cache use. Saved entries remain until `/bifrost cache clear`; see [the local cache](reliability-and-cache.md#local-classification-cache). The selected generation provider receives the prompt.
 
 ## Preview before generation
 
-```text
-/bifrost preview debug this race condition
-```
+Preview resolves and displays the source, tier, candidates, strategy, and selected model without starting a generation turn or activating the selected model. It runs the normal tier pipeline. A tier name in the preview prompt stays literal; preview does not accept a tier override, so inspect a tier's candidates in configuration instead. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage. Ordinary `--json` preview JSON contains the prompt; structured trace JSON is a separate output form. See [Preview output](commands.md#preview-output) and [Preview before generation](workflows.md#preview-before-generation).
 
-Preview resolves and displays the source, tier, candidates, strategy, and selected model. It does **not** start a generation turn or activate the selected model.
-
-Preview does run the normal tier pipeline. It does not read a tier name from the prompt, so a forced tier cannot be previewed. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage.
-
-For local-only preview:
+For local-only route selection, put `--offline` before the prompt. It uses only local cache, rules, and the default tier for that request, without sending the prompt to a configured classifier. It does not change the session classifier preference; `/bifrost classifier off` changes that preference for the current Pi session.
 
 ```text
-/bifrost classifier off
-/bifrost preview debug this race condition
+/bifrost preview --offline debug this race condition
 ```
 
 Regex rules, configured default, and local classification cache still apply. Use `/bifrost cache clear` when testing rules/default without a prior cached tier.
