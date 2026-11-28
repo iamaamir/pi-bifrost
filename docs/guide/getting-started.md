@@ -149,19 +149,12 @@ Setting `cache.enabled` to `false` stops classification-cache use. Saved entries
 
 ## Preview before generation
 
-```text
-/bifrost preview debug this race condition
-```
+Preview resolves and displays the source, tier, candidates, strategy, and selected model without starting a generation turn or activating the selected model. It runs the normal tier pipeline. A tier name in the preview prompt stays literal; preview does not accept a tier override, so inspect a tier's candidates in configuration instead. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage. Ordinary `--json` preview JSON contains the prompt; structured trace JSON is a separate output form. See [Preview output](commands.md#preview-output) and [Preview before generation](workflows.md#preview-before-generation).
 
-Preview resolves and displays the source, tier, candidates, strategy, and selected model without starting a generation turn or activating the selected model.
-
-Preview runs the normal tier pipeline. A tier name in the preview prompt stays literal; preview does not accept a tier override, so inspect a tier's candidates in configuration instead. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage.
-
-For local-only preview:
+For local-only route selection, put `--offline` before the prompt. It uses only local cache, rules, and the default tier for that request, without sending the prompt to a configured classifier. It does not change the session classifier preference; `/bifrost classifier off` changes that preference for the current Pi session.
 
 ```text
-/bifrost classifier off
-/bifrost preview debug this race condition
+/bifrost preview --offline debug this race condition
 ```
 
 Regex rules, configured default, and local classification cache still apply. Use `/bifrost cache clear` when testing rules/default without a prior cached tier.
