@@ -7,7 +7,7 @@ import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "./registry-refresh.ts";
 import { isVirtualModel } from "./virtual-model.ts";
-import type { RuntimeStateIssue } from "./runtime-state.ts";
+import type { ClassifierReadiness, RuntimeStateIssue } from "./runtime-state.ts";
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
@@ -47,9 +47,6 @@ export interface ValidateDiagnosticsReport {
   readonly diagnostics: readonly BifrostDiagnostic[];
   readonly classifier: ClassifierDiagnosticStatus;
 }
-
-/** Readiness shown by `/bifrost inspect` and `/bifrost classifier status`. */
-export type ClassifierReadiness = "inactive" | "ready" | "blocked";
 
 export interface ClassifierDiagnosticStatus {
   readonly enabled: boolean;
