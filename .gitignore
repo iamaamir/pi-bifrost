@@ -21,3 +21,6 @@ evidence/
 *.cpuprofile
 *.heapprofile
 docs/research/*
+
+# Style packages downloaded by `vale sync`.
+.vale/styles/

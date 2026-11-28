@@ -28,17 +28,17 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 
 Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
 
-An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. Text that clearly says a subscription is required or expired also means billing was denied, including a matching HTTP 403 response. A generic HTTP 403 does not prove a billing denial. These results do not prove that the provider account has no credits. By default, they pause every model with the same configured Pi provider ID. This rule applies to Auto and physical routing.
+An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. Text that clearly says a subscription is required or expired also means billing was denied, including a matching HTTP 403 response. A generic HTTP 403 does not prove a billing denial. These results describe the failed request; the account balance stays with the provider. By default, they pause every model with the same configured Pi provider ID. Bifrost groups by that ID; billing-account identity stays outside Bifrost. This rule applies to Auto and physical routing.
 
-This rule does not identify shared billing accounts. Set `reliability.allowanceCooldownScope` to `model` to limit usage and billing pauses to the reported model.
+Set `reliability.allowanceCooldownScope` to `model` to limit usage and billing pauses to the reported model.
 
-Generic HTTP 429 rate limits remain provider-scoped. A validated retry time can pause that provider for up to five minutes. Without one, the pause is five seconds. These rate-limit pauses do not retry the current prompt. HTTP 5xx responses follow normal model failure handling.
+Generic HTTP 429 rate limits remain provider-scoped. A validated retry time can pause that provider for up to five minutes. Without one, the pause is five seconds. A rate-limit pause applies to later turns; the current prompt ends at the provider error. HTTP 5xx responses follow normal model failure handling.
 
-Usage and billing pauses last for `cooldownMinutes`, which defaults to 60. Set `cooldownOnAllowanceExhausted: false` to disable these pauses. Set `retryOnAllowanceExhausted: true` to opt in to the one Auto retry while keeping the pause. `/bifrost reliability` shows active provider pauses and recovery trials. Use `/bifrost reliability reset --provider <id>` to clear one provider pause. The command does not clear model reliability records.
+Usage and billing pauses last for `cooldownMinutes`, which defaults to 60. Set `cooldownOnAllowanceExhausted: false` to disable these pauses. Set `retryOnAllowanceExhausted: true` to opt in to the one Auto retry while keeping the pause. `/bifrost reliability` shows active provider pauses and recovery trials. Use `/bifrost reliability reset --provider <id>` to clear one provider pause. Model reliability records stay unchanged.
 
 In Pi Auto, an explicit usage or billing rejection can trigger one attempt on another configured model only when `retryOnAllowanceExhausted` is `true`. The pause applies first. Pi must prove that every failed response was empty and came from the same model. Pi must also omit its earlier failed responses from the next request. The turn must have no tool calls, tool results, queued work, or other activity.
 
-Physical routing, direct model bindings, exhausted fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate do not retry. An explicit tier prefix can recover only when the initial selection stayed in that tier, and its alternate must also come from that tier. If the initial selection fell back to another tier or the requested tier has no eligible alternate, recovery stops even when a general fallback is configured. Unprefixed Auto keeps its existing fallback behavior. Pi can make its own bounded retry first. Bifrost does not send an extra classifier or probe request for recovery. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) and [provider pauses](../adr/0024-provider-usage-and-rate-pauses.md).
+Retries apply only to Auto turns with an explicit usage or billing rejection and no output or activity. Physical routing, direct model bindings, exhausted fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate end at the rejection. An explicit tier prefix can recover only when the initial selection stayed in that tier, and its alternate must also come from that tier. If the initial selection fell back to another tier or the requested tier has no eligible alternate, recovery stops even when a general fallback is configured. Unprefixed Auto keeps its existing fallback behavior. Pi can make its own bounded retry first. Recovery reuses the original turn and sends no extra classifier or probe request. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) and [provider pauses](../adr/0024-provider-usage-and-rate-pauses.md).
 
 ## Existing users: migrate reliability state
 
@@ -46,7 +46,7 @@ An existing project can migrate saved reliability records to a format that track
 
 The existing format is deprecated but remains supported for this release. Any future removal will be announced at least one published release ahead and will wait until the intended workflows are supported. There is no removal date.
 
-The migration has two parts. You update the project configuration, then you prepare the state file. The command does not change the configuration or selected model.
+The migration has two parts. You update the project configuration, then you prepare the state file. The command changes state files only; configuration and the selected model stay.
 
 1. Stop every other Pi session that can write this project's reliability file. Finish or cancel active and queued generations in the current session.
 2. Edit `.pi/bifrost.json`. Set `schemaVersion` to `2` and `reliability.stateVersion` to `2`. Keep the other reliability values that you use.
@@ -58,13 +58,13 @@ If no reliability state file exists, run `/bifrost reliability migrate --fresh` 
 
 Current Bifrost saves and migration share a source lock. The command holds that lock while it reads and backs up the source. Older Bifrost versions and other writers do not use this lock. They can still change the source after migration, so keep every other session stopped until migration completes.
 
-If migration stops because a lock is busy, do not remove the lock based only on its age or process ID. The default lock path is `.pi/bifrost-reliability.json.migration.lock`. With a custom `reliability.path`, the lock path is that exact path plus `.migration.lock`. Stop every process that can write the source, then inspect the exact lock file and its owner metadata. A process ID can be reused. Bifrost never removes a lock automatically. Remove only a lock that you have proved is stale. If ownership is uncertain, leave it in place. After you remove a verified stale lock, leave the source and backup unchanged. Restart or reload the old Pi session before using it, so its in-memory reliability state cannot write after migration.
+If migration stops because a lock is busy, do not remove the lock based only on its age or process ID. The default lock path is `.pi/bifrost-reliability.json.migration.lock`. With a custom `reliability.path`, the lock path is that exact path plus `.migration.lock`. Stop every process that can write the source, then inspect the exact lock file and its owner metadata. A process ID can be reused. Remove only a lock that you have proved is stale. If ownership is uncertain, leave it in place. After you remove a verified stale lock, leave the source and backup unchanged. Restart or reload the old Pi session before using it, so its in-memory reliability state cannot write after migration.
 
-Set `reliability.enabled: false` to stop reliability checks and provider pause enforcement. This does not erase saved reliability state. With it off, Bifrost does not read the migrated state file for routing. Optional `reliability.observations.enabled: true` stores bounded model-level failure categories and times. Raw provider error text is never persisted.
+Set `reliability.enabled: false` to stop reliability checks and provider pause enforcement. Saved reliability state remains. With reliability off, Bifrost skips the migrated state file for routing. Optional `reliability.observations.enabled: true` stores bounded model-level failure categories and times. Raw provider error text is never persisted.
 
 ## Provider pauses are not account checks
 
-A provider pause groups models by the provider ID in Pi configuration. Bifrost does not identify provider accounts or fetch live usage limits.
+A provider pause groups models by the provider ID in Pi configuration and uses request errors Pi already recorded. Bifrost does not fetch live usage limits. Treat the pause as a routing signal, not authoritative quota data.
 
 Current safeguards for quota-sensitive models:
 
@@ -74,7 +74,7 @@ Current safeguards for quota-sensitive models:
 - use deterministic strategies instead of `random` where needed;
 - preview routes before sending consequential work.
 
-These pauses use errors from requests that Pi already sent. They do not provide authoritative quota data or prevent every provider charge.
+These pauses use errors from requests that Pi already sent. They describe routing health, while account quota and charges remain with the provider.
 
 ## Local classification cache
 
@@ -104,7 +104,7 @@ Normalized prompt text can still contain sensitive terms. Add this setting to yo
 }
 ```
 
-Keep the model pools and other settings in that file. Disabling cache use does not remove saved entries. Run `/bifrost cache clear` to empty them. If you have no config, save starter pools with `/bifrost init` before you add this setting.
+Keep the model pools and other settings in that file. Disabling cache use stops new cache reads and writes; saved entries remain until `/bifrost cache clear`. If you have no config, save starter pools with `/bifrost init` before you add this setting.
 
 Inspect or clear it:
 
@@ -113,13 +113,13 @@ Inspect or clear it:
 /bifrost cache clear
 ```
 
-`cache clear` empties the stored entries. It does not delete the cache file.
+`cache clear` empties the stored entries and keeps the cache file.
 
-Bifrost does not cache assistant responses, tool output, source files, or failed prompts for replay.
+Bifrost caches classification terms only; assistant responses, tool output, source files, and failed prompts stay out of the cache.
 
 ## Provider prompt caches
 
-Provider prompt or prefix caches are separate from Bifrost's local classification cache. Bifrost does not create, merge, clear, price, inspect, or guarantee them.
+Provider prompt or prefix caches are separate from Bifrost's local classification cache. Providers create and manage them through Pi's integration; Bifrost changes selection only.
 
 Treat every provider/model pair as an independent cache history. Repeated switching may fragment cache locality without necessarily deleting earlier provider entries. Returning to a model may reuse its longest still-valid matching prefix; later conversation content remains an uncached tail.
 
@@ -149,11 +149,7 @@ The event stream can show request reason, selection or no-route, reliability adm
 
 The default file is `.pi/bifrost-debug.jsonl` under the current working directory. A configured relative path is resolved from that directory, and an absolute path is used as given. For a leading `~`, Bifrost substitutes the value of `HOME` (or `/tmp` when `HOME` is unset) and appends the rest of the path as written; it does not perform shell-style `~user` expansion. `/bifrost debug` prints the resolved `debugLog` path and its rotation target, rendering control characters in a configured path as escapes instead of writing them to the terminal. Debug logging is off by default.
 
-At startup Bifrost resolves the path and creates the containing directory; if that fails, debug logging stays off for the session while routing continues. Bifrost appends through a buffered async queue and creates a new log file with mode `0600`; an existing file keeps its current permissions. Every async flush checks the file size, and rotation happens only when the file is already larger than 10 MiB (10,485,760 bytes). The file is renamed to the same path with `.old.jsonl` (or `.old` when the log path does not end in `.jsonl`), and a new file is started. Exactly one rotated file is kept: the next rotation replaces it, so events from before the previous rotation are gone. The two-file policy keeps the default footprint at roughly 20 MiB plus the pending write batch, so the log is best-effort diagnostic evidence rather than a lossless retention record. Bifrost does not coordinate rotation across processes that share one log path; a rotation from either process replaces the single rotated file.
-
-The fixed bound is not a configuration setting. A user-controlled size would add a larger disk-growth surface without demonstrated need at this log volume; change `debug.path` when a different location is needed, and copy the current and rotated files before the next rotation if a longer capture is required.
-
-On session shutdown Bifrost requests a bounded flush, and a process-exit hook makes one final synchronous write of any remaining buffered events. Rotation is evaluated on async flushes, so that last batch can briefly push the file past 10 MiB, and an abrupt termination can still lose buffered events. Lifecycle fields added for this trace contain only static categories, routing reason, model/tier, and random correlation IDs. Review the full file before sharing it, since other enabled diagnostics may have different detail.
+At startup, Bifrost resolves the path and creates the containing directory. If that fails, debug logging stays off for the session while routing continues. It creates a new log file with mode `0600`; an existing file keeps its permissions. It rotates when the file is already larger than 10 MiB, renames it to `.old.jsonl` (or `.old` when the path does not end in `.jsonl`), and starts a new file. Exactly one rotated file is kept; the next rotation replaces it. The bound is fixed, not a setting. Close the session normally to flush buffered events; an abrupt termination can lose them. Bifrost does not coordinate rotation across processes that share one path. Review the file before sharing it, because other enabled diagnostics may add detail.
 
 For a useful capture, enable debug before starting a fresh Pi process, note the Pi version and start time, reproduce one issue, then close the session normally so the bounded flush runs. Keep the matching Pi transcript and relevant provider/tool outcome separately; do not include prompts, responses, credentials, or raw provider errors when sharing logs.
 
