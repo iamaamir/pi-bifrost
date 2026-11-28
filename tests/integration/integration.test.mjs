@@ -111,9 +111,9 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
 
   it("reports classifier status", async () => {
     const out = combined(await runPi("/bifrost classifier status", integrationDir));
-    assert.ok(out.includes("enabled=true"));
-    assert.ok(out.includes("model=integration/test-classifier"));
-    assert.ok(out.includes("endpoint=registry"));
+    assert.match(out, /Status\s+On · ready \(configuration\)/);
+    assert.match(out, /Model\s+integration\/test-classifier/);
+    assert.match(out, /Endpoint\s+registry/);
   });
 
   it("detects env TypeSafe backend in status and a network-free preview trace", async () => {
@@ -127,7 +127,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     const env = { HOME: tempDir, TYPESAFE_API_KEY: "fixture-only" };
     try {
       const status = combined(await runPi("/bifrost classifier status", tempDir, env));
-      assert.match(status, /backend=auto: typesafe \(env key detected\)/);
+      assert.match(status, /Backend\s+auto: typesafe \(env key detected\)/);
       // Direct-model regex runs before the classifier transport; no external API call.
       const preview = readJsonReport(await runPi("/bifrost preview --json direct hit", tempDir, env), "preview");
       assert.equal(preview.ok, true);

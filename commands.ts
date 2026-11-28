@@ -25,6 +25,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { initClassifierSummary, initSavePreviewLines, initSaveSummary, initSummaryPanel } from "./ui/init-save-summary.ts";
+import { classifierStatusPanel, type ClassifierStatusFacts } from "./ui/classifier-status.ts";
+import { summaryPanel, summaryText, type SummaryPanelContent } from "./ui/summary-panel.ts";
 import {
   constants,
   closeSync,
@@ -421,6 +423,16 @@ function uiOutput(ctx: ExtensionContext, lines: string[], summary = false) {
     else ctx.ui.setWidget("bifrost-output", lines);
   } else {
     for (const line of lines) console.error(`[bifrost] ${line}`);
+  }
+}
+
+/** Render structured panel content; headless output keeps the same facts as plain text. */
+function uiSummary(ctx: ExtensionContext, content: SummaryPanelContent) {
+  if (ctx.mode === "tui" && ctx.hasUI) {
+    ctx.ui.setWidget("bifrost-output", (_tui, theme) => summaryPanel(theme, content));
+  } else {
+    // Group spacing stays an empty line; only fact lines carry the marker.
+    for (const line of summaryText(content)) console.error(line ? `[bifrost] ${line}` : "");
   }
 }
 
@@ -3774,6 +3786,86 @@ function classifierConflictNote(
   return "classification paused. /bifrost classifier on or off affects only this session. To resume configured behavior after restart, back up .pi/bifrost-state.json, remove only classifierEnabled, then run /bifrost reload";
 }
 
+function classifierStatusFacts(state: BifrostState, ctx: ExtensionContext): ClassifierStatusFacts {
+  const classifier = state.config.classifier;
+  const effective = state.effectiveClassifierBackend(state.config, ctx);
+  const backend = effective.backend;
+  const rawModel = classifier?.model;
+  const modelId = Array.isArray(rawModel) ? rawModel.join(", ") : (rawModel ?? "none");
+  const runtime = classifierEnablementFor(state, ctx);
+  const errors = classifierConfigErrors(state.config, backend, runtime.enabled);
+  const fallback =
+    classifier?.fallback ??
+    (backend === CLASSIFIER_BACKEND_IDS.typesafe
+      ? "prompt"
+      : modelId === "none"
+        ? "regex"
+        : "prompt");
+  const fallbackModel = fallback === "regex" ? undefined : modelId;
+  const minConfidence = classifier?.minConfidence ?? 0.8;
+  const detail =
+    backend === CLASSIFIER_BACKEND_IDS.typesafe
+      ? {
+          name: backend,
+          auto: effective.auto,
+          reason: effective.reason,
+          model: classifier?.typesafe?.model ?? TYPE_SAFE_MODEL,
+          endpoint: TYPE_SAFE_ENDPOINT,
+          minConfidence,
+          credential: resolveTypeSafeApiKey().source,
+          fallback,
+          fallbackModel,
+        }
+      : backend === CLASSIFIER_BACKEND_IDS.piNative
+        ? {
+            name: backend,
+            auto: effective.auto,
+            reason: effective.reason,
+            model: classifier?.piNative?.model ?? "catalog default",
+            minConfidence,
+            fallback,
+            fallbackModel,
+          }
+        : {
+            name: backend,
+            auto: effective.auto,
+            reason: effective.reason,
+            model: modelId,
+            endpoint: classifier?.endpoint ?? "registry",
+            method: classifier?.method ?? "auto",
+          };
+  const metrics = state.classifierMetricsStore.snapshot();
+  return {
+    enabled: runtime.enabled,
+    source: runtime.source,
+    configured: classifier?.enabled !== false,
+    readiness: runtime.runtimeStateIssue
+      ? "blocked"
+      : !runtime.enabled
+        ? "inactive"
+        : errors.length > 0
+          ? "blocked"
+          : "ready",
+    backend: detail,
+    ...(runtime.legacyConflict
+      ? { legacyConflict: { ...runtime.legacyConflict, note: classifierConflictNote(runtime.legacyConflict, runtime.source) } }
+      : {}),
+    ...(runtime.runtimeStateIssue ? { runtimeStateIssue: runtime.runtimeStateIssue } : {}),
+    ...(errors.length ? { errors } : {}),
+    ...(backend !== CLASSIFIER_BACKEND_IDS.prompt
+      ? {
+          activity: {
+            observations: metrics.total,
+            outcomes: metrics.outcomes,
+            ...(metrics.totalAttempts > 0
+              ? { averageLatencyMs: Math.round(metrics.totalLatencyMs / metrics.totalAttempts) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function renderDiagnosticLines(
   report:
     | ValidateDiagnosticsReport
@@ -4666,55 +4758,7 @@ export function createCommandRouter(
       }
     }),
     exact("classifier status", (_, ctx) => {
-      const rawModel = state.config.classifier?.model;
-      const modelId = Array.isArray(rawModel) ? rawModel.join(", ") : (rawModel ?? "none");
-      const classifier = state.config.classifier;
-      const effective = state.effectiveClassifierBackend(state.config, ctx);
-      const backend = effective.backend;
-      const label = effective.auto ? `auto: ${backend} (${effective.reason})` : backend;
-      const credential =
-        backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
-      const fallback =
-        classifier?.fallback ??
-        (backend === CLASSIFIER_BACKEND_IDS.typesafe
-          ? "prompt"
-          : modelId === "none"
-            ? "regex"
-            : "prompt");
-      const detail =
-        backend === CLASSIFIER_BACKEND_IDS.typesafe
-          ? `backend=${label} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
-          : backend === CLASSIFIER_BACKEND_IDS.piNative
-            ? `backend=${label} model=${classifier?.piNative?.model ?? "catalog default"} minConfidence=${classifier?.minConfidence ?? 0.8} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
-            : `backend=${label} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
-      const metrics = state.classifierMetricsStore.snapshot();
-      const runtime = classifierEnablementFor(state, ctx);
-      const errors = classifierConfigErrors(state.config, backend, runtime.enabled);
-      const conflict = runtime.legacyConflict;
-      const lines = [
-        `classifier: enabled=${runtime.enabled} (${runtime.source})`,
-        `configured=${classifier?.enabled === false ? "off" : "on"}`,
-        ...(conflict
-          ? [
-              `legacy saved classifierEnabled=${conflict.saved} conflicts with configured=${conflict.configured}; ${classifierConflictNote(conflict, runtime.source)}`,
-            ]
-          : []),
-        ...(runtime.runtimeStateIssue
-          ? [
-              `runtime-state=invalid (${runtime.runtimeStateIssue}); classification is paused. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`,
-            ]
-          : []),
-        `readiness=${runtime.runtimeStateIssue ? "blocked" : !runtime.enabled ? "inactive" : errors.length > 0 ? "blocked" : "ready"}`,
-        ...errors.map((message) => `error=${message}`),
-        detail,
-        ...(backend !== CLASSIFIER_BACKEND_IDS.prompt
-          ? [
-              `observations=${metrics.total} (persisted aggregate)`,
-              `outcomes=${JSON.stringify(metrics.outcomes)}`,
-            ]
-          : []),
-      ];
-      uiOutput(ctx, lines);
+      uiSummary(ctx, classifierStatusPanel(classifierStatusFacts(state, ctx)));
     }),
 
     // Debug — show loaded config state

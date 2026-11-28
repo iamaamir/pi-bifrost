@@ -944,6 +944,26 @@ def main() -> int:
         ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("classifier-picker", True, [(0.5, "/bifrost classifier\r")], {"classifier": {"enabled": False, "backend": "prompt"}}),
         (
+            "classifier-status",
+            True,
+            [(0.5, "/bifrost classifier status\r")],
+            {"classifier": {"enabled": True, "backend": "typesafe", "fallback": "prompt", "model": "fake/classifier", "criteria": {"general": "Ordinary implementation work."}}},
+        ),
+        (
+            "classifier-status-narrow",
+            True,
+            [(0.5, "/bifrost classifier status\r")],
+            {"classifier": {"enabled": True, "backend": "typesafe", "fallback": "prompt", "model": "fake/classifier", "criteria": {"general": "Ordinary implementation work."}}},
+            [],
+            False,
+            False,
+            False,
+            None,
+            None,
+            False,
+            (60, 36),
+        ),
+        (
             "classifier-runtime-invalid",
             True,
             [(0.5, "/bifrost classifier on\r"), (0.5, "/bifrost classifier status\r"), (0.5, "hello\r")],
@@ -1117,10 +1137,31 @@ def main() -> int:
             if name == "classifier-runtime-invalid":
                 runtime_log = (OUT / "classifier-runtime-invalid.ansi.log").read_text(errors="ignore")
                 runtime_text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\\\)", "", runtime_log).lower()
-                if "enabled=false (runtime-state-invalid)" not in runtime_text or "readiness=blocked" not in runtime_text or "classification is paused" not in runtime_text:
+                if "off · blocked (runtime-state-invalid)" not in runtime_text or "classification is paused" not in runtime_text:
                     raise AssertionError("classifier status did not consistently report the fail-closed runtime state")
                 if "runtime state is invalid" not in runtime_text:
                     raise AssertionError("classifier on did not refuse while runtime state was invalid")
+            if name.startswith("classifier-status"):
+                status_text = (OUT / f"{name}.txt").read_text(errors="ignore")
+                for required in (
+                    "Bifrost · classifier status",
+                    "Status",
+                    "Configured",
+                    "Backend",
+                    "typesafe",
+                    "Endpoint",
+                    "https://api.typesafe.ai/v1/systemone",
+                    "Credential",
+                    "missing",
+                    "Fallback",
+                    "fake/classifier",
+                ):
+                    if required not in status_text:
+                        raise AssertionError(f"classifier status lost {required!r}; captured screen:\n{status_text}")
+                if "On · ready (configuration)" not in status_text:
+                    raise AssertionError(f"classifier status did not lead with the effective state; captured screen:\n{status_text}")
+                if any(len(line.rstrip()) > size[0] for line in status_text.splitlines()):
+                    raise AssertionError(f"classifier status rendered past {size[0]} columns")
             if name == "classifier-picker":
                 picker_text = (OUT / "classifier-picker.txt").read_text(errors="ignore")
                 if "Classifier backend" not in picker_text or "prompt — choose a Pi model" not in picker_text:
