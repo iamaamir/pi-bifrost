@@ -403,6 +403,94 @@ test("compare accepts unchanged files, flags increased and new-file outliers, an
   }
 });
 
+// Flat branches add one to both metrics; nested branches also add cognitive
+// nesting cost. Use actual parsed source rather than invented report numbers.
+function budgetFixture(flat, depth = 0) {
+  return "export function check(flag: boolean) {\n"
+    + "if (flag) { return 1; }\n".repeat(flat)
+    + "if (flag) {\n".repeat(depth)
+    + "return 2;\n" + "}\n".repeat(depth) + "}\n";
+}
+
+const newFileBudgetCases = [
+  { path: "new.ts", flat: 8, depth: 0, cyc: 9, cog: 8, findings: [] },
+  { path: "new.ts", flat: 9, depth: 0, cyc: 10, cog: 9, findings: [] },
+  { path: "new.ts", flat: 10, depth: 0, cyc: 11, cog: 10, findings: ["maxCyc"] },
+  { path: "new.ts", flat: 0, depth: 5, cyc: 6, cog: 15, findings: [] },
+  { path: "new.ts", flat: 1, depth: 5, cyc: 7, cog: 16, findings: ["maxCog"] },
+  { path: "tests/new.test.ts", flat: 14, depth: 0, cyc: 15, cog: 14, findings: [] },
+  { path: "tests/new.test.ts", flat: 15, depth: 0, cyc: 16, cog: 15, findings: ["maxCyc"] },
+  { path: "tests/new.test.ts", flat: 5, depth: 5, cyc: 11, cog: 20, findings: [] },
+  { path: "tests/new.test.ts", flat: 6, depth: 5, cyc: 12, cog: 21, findings: ["maxCog"] },
+];
+
+for (const scenario of newFileBudgetCases) {
+  test(`new-file budget: ${scenario.path} cyc=${scenario.cyc} cog=${scenario.cog}`, () => {
+    const root = fixtureRoot();
+    try {
+      writeFileSync(join(root, "legacy.ts"), budgetFixture(25));
+      writeFileSync(join(root, "tests", "legacy.test.ts"), budgetFixture(25));
+      const target = analyze({ root });
+      writeFileSync(join(root, scenario.path), budgetFixture(scenario.flat, scenario.depth));
+      const candidate = analyze({ root });
+      assert.equal(candidate.files[scenario.path].maxCyc, scenario.cyc);
+      assert.equal(candidate.files[scenario.path].maxCog, scenario.cog);
+      assert.deepEqual(compare(target, candidate).map(({ rule, file }) => ({ rule, file })),
+        scenario.findings.map((key) => ({
+          rule: `new-file-${key}-exceeds-absolute-budget`,
+          file: scenario.path,
+        })));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("legacy paths retain their ratchet; a moved legacy hotspot must meet the new-file budget", () => {
+  const root = fixtureRoot();
+  try {
+    const legacy = budgetFixture(25);
+    writeFileSync(join(root, "legacy.ts"), legacy);
+    const target = analyze({ root });
+    assert.deepEqual(compare(target, analyze({ root })), []);
+    // A newly added function inside an existing path is deliberately governed
+    // by the existing per-file and scope ratchets in this delivery.
+    writeFileSync(join(root, "legacy.ts"), legacy + budgetFixture(11).replace("check(", "another("));
+    assert.deepEqual(compare(target, analyze({ root })), []);
+    rmSync(join(root, "legacy.ts"));
+    writeFileSync(join(root, "moved.ts"), legacy);
+    assert.deepEqual(compare(target, analyze({ root })).map(({ rule, file }) => ({ rule, file })), [
+      { rule: "new-file-maxCyc-exceeds-absolute-budget", file: "moved.ts" },
+      { rule: "new-file-maxCog-exceeds-absolute-budget", file: "moved.ts" },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the CLI rejects a new absolute-budget violation even with unchanged scope hotspot counts", () => {
+  const { dir, base, baseBranch } = gitFixture({
+    "legacy.ts": budgetFixture(35),
+    "anchor.ts": budgetFixture(40),
+  });
+  try {
+    const head = branchFrom(dir, baseBranch, "absolute-budget", "replace legacy hotspot", () => {
+      writeFileSync(join(dir, "legacy.ts"), budgetFixture(1));
+      writeFileSync(join(dir, "new.ts"), budgetFixture(31));
+    });
+    const result = runGate(dir, ["--target", base, "--candidate", head]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(result.report.findings.map(({ rule, file }) => ({ rule, file })), [
+      { rule: "new-file-maxCyc-exceeds-absolute-budget", file: "new.ts" },
+      { rule: "new-file-maxCog-exceeds-absolute-budget", file: "new.ts" },
+    ]);
+    assert.equal(result.report.target.scopes.source.maxCyc, result.report.candidate.scopes.source.maxCyc);
+    assert.equal(result.report.target.scopes.source.cycGt30, result.report.candidate.scopes.source.cycGt30);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("measured symlinks are skipped instead of followed outside the tree", () => {
   const root = fixtureRoot();
   try {
