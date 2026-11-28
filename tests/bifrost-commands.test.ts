@@ -917,8 +917,9 @@ describe("bifrost command ui", () => {
     await dispatch("classifier status", ctx as never);
 
     const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
-    assert.match(output, /backend=typesafe model=jev-1\.13\.0/);
-    assert.match(output, /fallback=prompt fallbackModel=fixture\/classifier/);
+    assert.match(output, /Model\s+jev-1\.13\.0/);
+    assert.match(output, /Fallback\s+prompt/);
+    assert.match(output, /Fallback model\s+fixture\/classifier/);
   });
 
   it("reports legacy classifier conflict without disabled-backend criteria errors", async () => {
@@ -930,19 +931,20 @@ describe("bifrost command ui", () => {
 
     await dispatch("classifier status", ctx as never);
     let output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
-    assert.match(output, /classifier: enabled=false \(legacy-conflict\)/);
-    assert.match(output, /configured=off/);
-    assert.match(output, /legacy saved classifierEnabled=true conflicts with configured=false/);
+    assert.match(output, /Status\s+Off · inactive \(legacy-conflict\)/);
+    assert.match(output, /Configured\s+Off/);
+    assert.match(output, /Legacy saved classifierEnabled=true conflicts with configured=false/);
     assert.match(output, /configured off takes precedence/);
     assert.doesNotMatch(output, /classification paused/u);
-    assert.match(output, /readiness=inactive/);
-    assert.doesNotMatch(output, /criteria missing/);
+    // A disabled backend must not also report the criteria of the backend it
+    // never resolves to.
+    assert.doesNotMatch(output, /criteria missing/u);
 
     await dispatch("classifier on", ctx as never);
     await dispatch("classifier status", ctx as never);
     output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
-    assert.match(output, /classifier: enabled=true \(session\)/);
-    assert.match(output, /configured=off/);
+    assert.match(output, /Status\s+On · ready \(session\)/);
+    assert.match(output, /Configured\s+Off/);
     assert.match(output, /explicit session-only override is active/);
   });
 
@@ -952,8 +954,9 @@ describe("bifrost command ui", () => {
     state.effectiveClassifierBackend = () => ({ backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true });
     await createCommandRouter(state)("classifier status", ctx as never);
     const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
-    assert.match(output, /backend=auto: pi-native \(Pi-managed TypeSafe credential\) model=catalog default/);
-    assert.match(output, /observations=0/);
+    assert.match(output, /Backend\s+auto: pi-native \(Pi-managed TypeSafe credential\)/);
+    assert.match(output, /Model\s+catalog default/);
+    assert.match(output, /Activity\s+0 observations/);
   });
 
   it("names pi-native and its resolved model in classifier test report", () => {
@@ -4082,9 +4085,8 @@ describe("route dispatch", () => {
     });
     await dispatch("classifier status", ctx as never);
     const output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
-    assert.match(output, /enabled=false \(runtime-state-invalid\)/);
-    assert.match(output, /readiness=blocked/);
-    assert.match(output, /classification is paused/);
+    assert.match(output, /Status\s+Off · blocked \(runtime-state-invalid\)/);
+    assert.match(output, /classification is paused/i);
     assert.ok(calls.some((call) => String(call.value).includes("runtime state is invalid")));
   });
 
