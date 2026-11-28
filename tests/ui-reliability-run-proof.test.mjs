@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { assertSingleRun, assertControl, assertPending, MODELS, PROMPTS } from "./fixtures/ui-reliability-run-proof.mjs";
+import { assertSingleRun, assertControl, assertPending, assertSettledState, MODELS, PROMPTS } from "./fixtures/ui-reliability-run-proof.mjs";
 
 function evidence(runs = [3]) {
   const events = [], debug = [], messages = [{ role: "system", id: "system" }], requests = [];
@@ -35,6 +35,15 @@ function evidence(runs = [3]) {
 }
 
 test("accepts the complete ordered single run", () => assertSingleRun(evidence()));
+test("persisted-state poll rejects observed but unwritten settlement until recovery", () => {
+  const value = evidence();
+  value.state.models["fake/fast"].trialActive = true;
+  assert.throws(() => assertSettledState(value), /persist successful settlement/);
+  value.state.models["fake/fast"].trialActive = false;
+  assertSettledState(value);
+  value.state.models["fake/fast"].openUntil = 1;
+  assert.throws(() => assertSettledState(value), /persist successful settlement/);
+});
 test("rejects real-control trace shapes while accepting their witness contracts", () => {
   assertControl(evidence([2]), "missing");
   assertControl(evidence([1, 1, 1]), "separate");

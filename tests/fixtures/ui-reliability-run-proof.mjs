@@ -84,7 +84,7 @@ function assertDebug(debug, models, runs) {
   }
 }
 
-function assertState(state, events) {
+export function assertSettledState({ state, events }) {
   const record = state.models?.["fake/fast"];
   assert.ok(record && record.trialActive === false && record.openUntil === undefined
     && Array.isArray(record.failures) && record.failures.length === 0
@@ -100,7 +100,7 @@ function assertObserved({ events, requests, debug, state }, prompts, models, run
   assertTurns(events, prompts, models);
   assertRequests(requests, prompts, models);
   assertDebug(debug, models, runs);
-  if (expectTrial) assertState(state, events);
+  if (expectTrial) assertSettledState({ state, events });
 }
 
 export function assertSingleRun(evidence) {
@@ -155,8 +155,9 @@ function loadEvidence(work, beforePath, afterPath) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [mode, work, before, after] = process.argv.slice(2);
   const evidence = loadEvidence(work, before, after);
-  if (mode === "positive") assertSingleRun(evidence);
+  if (mode === "settled-state") assertSettledState(evidence);
+  else if (mode === "positive") assertSingleRun(evidence);
   else if (mode === "pending") assertPending(evidence);
   else assertControl(evidence, mode);
-  console.log("scenario 6 " + mode + " lifecycle proof passed");
+  if (mode !== "settled-state") console.log("scenario 6 " + mode + " lifecycle proof passed");
 }

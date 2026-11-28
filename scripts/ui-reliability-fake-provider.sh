@@ -242,18 +242,21 @@ EOF
     fi
     wait_settled_count 1
   fi
-  # The observer runs after the Bifrost extension. Wait for its buffered debug
-  # events to become visible; do not treat dispatch or an early state as success.
+  # The outcome event precedes the persisted write; require both within the
+  # existing bound before accepting the settled trial.
   local expected=3
   [[ "$mode" != missing ]] || expected=2
   for _ in $(seq 1 60); do
     if [[ -f "$work/.pi/bifrost-debug.jsonl" ]] &&
        [[ $(grep -c '"event":"legacy_outcome_observed"' "$work/.pi/bifrost-debug.jsonl" || true) -ge "$expected" ]]; then
-      break
+      curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/after.json"
+      if [[ "$mode" == missing ]] || node "$proof" settled-state "$work" "$work/before.json" "$work/after.json" >/dev/null 2>&1; then
+        break
+      fi
     fi
     sleep 1
   done
-  curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/after.json"
+  [[ -f "$work/after.json" ]] || curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/after.json"
   check_multi_dispatch_proof "$mode" "$work/after.json"
   "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true
   "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
