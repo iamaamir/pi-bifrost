@@ -1,7 +1,7 @@
 // docs/llms.txt is a second index of the guide for LLM readers. It has no
 // build step, so a new guide page can be absent from it and a removed page can
-// leave a stale link. This test keeps its Links section aligned with
-// docs/guide/*.md.
+// leave a stale link. This test checks canonical page-link coverage in the
+// Links section; it does not claim semantic agreement between the two files.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -34,7 +34,7 @@ function linkedPages(markdown) {
   const pages = [];
   const problems = [];
   for (const line of lines.slice(start + 1)) {
-    if (/^##\s/u.test(line)) break;
+    if (/^#{1,2}\s/u.test(line)) break;
     const entry = /^\s*-\s+[^:]+:\s+(\S+)\s*$/u.exec(line);
     if (!entry) continue;
     const target = entry[1];
@@ -45,7 +45,7 @@ function linkedPages(markdown) {
       problems.push(`${LLMS}: ${target} is not a canonical guide URL`);
       continue;
     }
-    const page = /^([^/?#\s]+\.md)(?:[?#]\S*)?$/u.exec(target.slice(GUIDE_URL_PREFIX.length));
+    const page = /^([^/?#\s]+\.md)$/u.exec(target.slice(GUIDE_URL_PREFIX.length));
     if (page) pages.push(`${GUIDE}/${page[1]}`);
     else problems.push(`${LLMS}: ${target} is not a canonical guide URL`);
   }
@@ -138,5 +138,29 @@ test("fault control: a missing page, a duplicate, an unknown page, and a missing
       "a filename match must not accept another host, repository, or branch",
     );
   }
+  for (const suffix of ["?raw=1", "#usage"]) {
+    const hostile = `https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md${suffix}`;
+    const problems = parityProblems({
+      pages,
+      markdown: markdown.replace("https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md", hostile),
+    });
+    assert.equal(
+      problems.includes(`${LLMS}: ${hostile} is not a canonical guide URL`),
+      true,
+      "a query string or fragment is not a canonical page link",
+    );
+  }
+  const missingTask = markdown.replace("- Task: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md\n", "");
+  assert.deepEqual(
+    parityProblems({
+      pages,
+      markdown: missingTask.replace(
+        "\n## Other",
+        "\n# Later section\n\n- Task: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/task.md\n\n## Other",
+      ),
+    }),
+    [`${LLMS}: task.md is missing from Links`],
+    "a canonical link under a level-one heading cannot close the Links section",
+  );
   assert.deepEqual(parityProblems({ pages, markdown: "# Docs\n" }), [`${LLMS}: missing "## Links"`]);
 });
