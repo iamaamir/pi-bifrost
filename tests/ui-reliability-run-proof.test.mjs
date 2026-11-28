@@ -56,7 +56,10 @@ test("rejects a held trial until it actually settles", () => {
   value.events.splice(3);
   value.requests[2].completed = false;
   value.state.models["fake/fast"] = { trialActive: true, failures: [1], openUntil: 1 };
+  const fastOutcome = value.debug.pop();
   assertPending(value);
+  value.debug.push(fastOutcome);
+  assert.throws(() => assertPending(value), /held trial already settled successfully/);
   assert.throws(() => assertSingleRun(value), /run boundaries/);
 });
 
