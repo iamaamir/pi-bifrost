@@ -29,9 +29,10 @@ const TABLE_SEPARATOR = /^\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|\
 
 /**
  * The map table rows and malformed table rows, or null when the section is
- * absent. A row-shaped line that does not parse is a finding, not a line to
- * skip: otherwise a valid row followed by a malformed duplicate can hide the
- * duplicate and pass.
+ * absent. A row-shaped line inside the table that does not parse is a finding,
+ * not a line to skip: otherwise a valid row followed by a malformed duplicate
+ * can hide the duplicate and pass. Rows after the table closes belong to
+ * another table and must not satisfy this one's coverage.
  */
 function mapRows(markdown) {
   const lines = markdown.split(/\r?\n/u);
@@ -40,15 +41,26 @@ function mapRows(markdown) {
   const rows = [];
   const malformed = [];
   let headerSeen = false;
+  let separatorSeen = false;
+  let tableClosed = false;
   for (const line of lines.slice(start + 1)) {
-    if (/^##\s/u.test(line)) break;
+    if (/^#{1,2}\s/u.test(line)) break;
     const row = line.trim();
-    if (!row.startsWith("|")) continue;
-    if (!headerSeen && TABLE_HEADER.test(row)) {
-      headerSeen = true;
+    if (!row.startsWith("|")) {
+      if (separatorSeen && row !== "") tableClosed = true;
       continue;
     }
-    if (headerSeen && TABLE_SEPARATOR.test(row)) continue;
+    if (tableClosed) continue;
+    if (!headerSeen) {
+      if (TABLE_HEADER.test(row)) headerSeen = true;
+      else malformed.push(row);
+      continue;
+    }
+    if (!separatorSeen) {
+      if (TABLE_SEPARATOR.test(row)) separatorSeen = true;
+      else malformed.push(row);
+      continue;
+    }
     const match = /^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$/u.exec(row);
     if (match) {
       rows.push({ target: match[1].trim(), form: match[2].trim(), task: match[3].trim() });
@@ -161,5 +173,24 @@ test("fault control: a missing page, a duplicate, a bad form, and a missing map 
     mapProblems({ pages, markdown: `${markdown}| [Gone](gone.md) | Reference | Look it up |\n` }),
     [`${GUIDE}/index.md: gone.md is not a guide page`],
   );
+  const withoutHeader = markdown.replace("| Page | Form | Reader task |\n| --- | --- | --- |\n", "");
+  const headerProblems = mapProblems({ pages, markdown: withoutHeader });
+  assert.equal(headerProblems.some((problem) => problem.includes("malformed guide map row")), true,
+    "a table without the declared header cannot supply the map");
+  const badSeparator = markdown.replace("| --- | --- | --- |", "| --- | --- |");
+  const separatorProblems = mapProblems({ pages, markdown: badSeparator });
+  assert.equal(separatorProblems.some((problem) => problem.includes('malformed guide map row "| --- | --- |"')), true,
+    "a header without a valid adjacent separator cannot supply the map");
+  const missingTask = markdown.replace("| [Task](task.md) | How-to | Do the task |\n", "");
+  for (const [suffix, control] of [
+    ["\nSome later prose\n\n| [Task](task.md) | How-to | Do the task |\n", "a row outside the table"],
+    ["# Later section\n\n| [Task](task.md) | How-to | Do the task |\n", "a row under a level-one heading"],
+  ]) {
+    assert.deepEqual(
+      mapProblems({ pages, markdown: missingTask.concat(suffix) }),
+      [`${GUIDE}/index.md: task.md is missing from the guide map`],
+      `${control} must not satisfy map coverage`,
+    );
+  }
   assert.deepEqual(mapProblems({ pages, markdown: "# Guide\n" }), [`${GUIDE}/index.md: missing "## Guide map"`]);
 });
