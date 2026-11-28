@@ -144,7 +144,7 @@ describe("offline diagnostics", () => {
     }, { now })!;
     const reliabilityState = recordModelFailure(emptyReliabilityState(), "fixture/allowed", {
       failureThreshold: 3, cooldownMinutes: 60,
-    }, now, "agent_settled", "PRIVATE_PROVIDER_ERROR", observation);
+    }, now, "agent_settled", "PRIVATE_PROVIDER_ERROR", observation, observation);
     const report = inspectDiagnostics({
       config: config({ reliability: { cooldownOnAllowanceExhausted: true } }),
       registry: registry({ all: [candidate] }),

@@ -1144,6 +1144,9 @@ export function settleReliabilityV2Dispatch(
     || settlement.kind !== "failure")) {
     return noChange("invalid", "invalid_allowance_exhaustion_binding", checked.state);
   }
+  if (allowanceEvidence && observation && !sameObservationSummary(allowanceEvidence, observation)) {
+    return noChange("invalid", "allowance_observation_mismatch", checked.state);
+  }
   const priorOutcome = mapValue(checked.state.settledOutcomes, outcomeId);
   if (priorOutcome && priorOutcome.expiresAt >= checked.now) {
     if (!sameObservationSummary(priorOutcome.observation, observation)) {
@@ -1200,9 +1203,8 @@ export function settleReliabilityV2Dispatch(
         && previous.lease.expiresAt > checked.now;
       let openUntil = previous.openUntil;
       let cooldownMultiplier = previous.cooldownMultiplier;
-      const allowanceTrigger = allowanceEvidence
-        && (allowanceEvidence.category === "allowance_exhausted" || allowanceEvidence.category === "billing_denied")
-        ? allowanceEvidence : observation;
+      // Observation persistence is independent of explicit action intent.
+      const allowanceTrigger = allowanceEvidence;
       const allowanceExhausted = checked.config.cooldownOnAllowanceExhausted !== false
         && (allowanceTrigger?.category === "allowance_exhausted" || allowanceTrigger?.category === "billing_denied")
         && allowanceTrigger.source === "runtime"

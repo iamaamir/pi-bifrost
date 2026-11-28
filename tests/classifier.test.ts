@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   categoryLabel,
   classificationPrompt,
@@ -115,7 +116,7 @@ describe("classifier", () => {
         streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
           result: async () => {
             await options.onResponse?.({ status: 402, headers: { "retry-after": "12" } }, model);
-            return { content: [], stopReason: "error" };
+            return { content: [], stopReason: "error", errorMessage: "402 Payment Required" };
           },
         }),
       },
@@ -125,7 +126,8 @@ describe("classifier", () => {
       spawnImpl: (() => { subprocessCalls++; throw new Error("must not retry a 402 in a subprocess"); }) as unknown as typeof import("node:child_process").spawn,
     });
     assert.equal(result, undefined);
-    assert.deepEqual(observed, [{ provider: "fixture", status: 402, retryAfter: "12" }]);
+    assert.deepEqual(observed, [{ provider: "fixture", status: 402, retryAfter: undefined }],
+      "the terminal text qualifies legacy inference but does not prove the callback retry hint");
     assert.equal(subprocessCalls, 0);
   });
 
@@ -234,6 +236,84 @@ describe("classifier", () => {
     assert.equal(result, "frontier");
     assert.deepEqual(observed, []);
     assert.equal(subprocessCalls, 0);
+  });
+
+  type TerminalResponse = { content: never[]; stopReason: "error"; errorMessage: string };
+  type ReportRate = (retryAfter: string) => Promise<void>;
+  const networkFailure: TerminalResponse = { content: [], stopReason: "error", errorMessage: "network error" };
+  const terminalCases: {
+    name: string;
+    finish: (controller: AbortController, reportRate: ReportRate) => Promise<TerminalResponse>;
+    expected: Array<{ status: number; retryAfter?: string }>;
+  }[] = [
+    { name: "network", finish: async () => networkFailure, expected: [] },
+    { name: "missing", finish: async () => { throw new Error("network error"); }, expected: [] },
+    { name: "cancel", finish: async (controller) => { controller.abort(); return networkFailure; }, expected: [] },
+    {
+      name: "new-rate",
+      finish: async (_controller, reportRate) => {
+        await reportRate("2");
+        return { content: [], stopReason: "error", errorMessage: "429 Too Many Requests" };
+      },
+      expected: [{ status: 429, retryAfter: undefined }],
+    },
+  ];
+  for (const terminal of terminalCases) {
+    it(`does not reuse an earlier 429 response as terminal authority (${terminal.name})`, async () => {
+      const model = makeModel("fixture", "classifier");
+      const controller = new AbortController();
+      const observed: Array<{ status: number; retryAfter?: string }> = [];
+      const result = await classifyWithLLM({
+        cwd: process.cwd(), signal: controller.signal,
+        modelRegistry: {
+          streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+            result: async () => {
+              await options.onResponse?.({ status: 429, headers: { "retry-after": "120" } }, model);
+              return terminal.finish(controller, async (retryAfter) => {
+                await options.onResponse?.({ status: 429, headers: { "retry-after": retryAfter } }, model);
+              });
+            },
+          }),
+        },
+      } as never, { kind: "registry", model }, ["frontier"], "request", {
+        method: "auto",
+        onProviderHttpResponse: (_model, status, retryAfter) => { observed.push({ status, retryAfter }); },
+        spawnImpl: (() => { throw new Error("an uncertain prior rejection must not create a subprocess retry"); }) as unknown as typeof import("node:child_process").spawn,
+      });
+      assert.equal(result, undefined);
+      assert.deepEqual(observed, terminal.expected);
+    });
+  }
+
+  it("isolates parallel Codex classifier identities and their response hints", async () => {
+    const first: Model<Api> = { ...makeModel("provider-a", "codex-first"), api: "openai-codex-responses" };
+    const second: Model<Api> = { ...makeModel("provider-b", "codex-second"), api: "openai-codex-responses" };
+    const observed: Array<{ id: string; status: number | undefined; retryAfter: string | undefined }> = [];
+    const run = (model: Model<Api>, status: number, text: string) => classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_m: unknown, _c: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status, headers: { "retry-after": "120" } }, model);
+            return { content: [], stopReason: "error", errorMessage: text };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["frontier"], "request", {
+      method: "auto",
+      onProviderHttpResponse: (providerModel, s, retryAfter) => {
+        observed.push({ id: providerModel.id, status: s, retryAfter });
+      },
+      spawnImpl: (() => { throw new Error("a qualified terminal limit must not spawn"); }) as unknown as typeof import("node:child_process").spawn,
+    });
+    await Promise.all([
+      run(first, 429, "HTTP 429 Too Many Requests"),
+      run(second, 402, "payment required"),
+    ]);
+    assert.deepEqual(observed.sort((a, b) => a.id.localeCompare(b.id)), [
+      { id: "codex-first", status: 429, retryAfter: undefined },
+      { id: "codex-second", status: 402, retryAfter: undefined },
+    ]);
   });
 
   it("uses the final HTTP response when deciding whether a terminal failure is a rate limit", async () => {

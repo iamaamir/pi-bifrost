@@ -53,7 +53,7 @@ describe("reliability", () => {
       errorText: "private provider details",
     }, { now })!;
     const config = { failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 };
-    const opened = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "private raw error", observation);
+    const opened = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "private raw error", observation, observation);
     assert.equal(getCircuitState(opened, key, now, config).open, true);
     assert.equal(opened.models[key]?.openUntil, now + 60 * 60_000,
       "a short retry hint cannot shorten the configured cooldown");
@@ -67,7 +67,7 @@ describe("reliability", () => {
       ...emptyReliabilityState(),
       models: { [key]: { failures: [], openUntil: longerOpenUntil } },
     };
-    const extended = recordModelFailure(alreadyBackedOff, key, config, now, "agent_settled", "provider request failed", observation);
+    const extended = recordModelFailure(alreadyBackedOff, key, config, now, "agent_settled", "provider request failed", observation, observation);
     assert.equal(extended.models[key]?.openUntil, longerOpenUntil,
       "an allowance observation never shortens an existing longer circuit backoff");
     const laterGenericFailure = recordModelFailure(opened, key, config, now + 1, "agent_settled", "generic retry failure");
@@ -79,7 +79,7 @@ describe("reliability", () => {
     }, { now: now + 1 })!;
     const disabledDuringCooldown = recordModelFailure(opened, key, {
       ...config, cooldownOnAllowanceExhausted: false,
-    }, now + 1, "agent_settled", "new allowance failure", disabledDuringCooldownObservation);
+    }, now + 1, "agent_settled", "new allowance failure", disabledDuringCooldownObservation, disabledDuringCooldownObservation);
     assert.equal(hasActiveAllowanceCooldown(disabledDuringCooldown, key, now + 1), true,
       "turning the policy off does not erase an already active allowance cooldown marker");
 
@@ -87,7 +87,7 @@ describe("reliability", () => {
       outcomeId: "allowance-long-hint", modelKey: key, source: "runtime", observedAt: now,
       structured: { category: "allowance_exhausted", retryAt: now + 6 * 60 * 60_000 },
     }, { now })!;
-    let longCooldown = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "provider request failed", longHint);
+    let longCooldown = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "provider request failed", longHint, longHint);
     const hintedUntil = longCooldown.models[key]?.openUntil;
     for (let failure = 1; failure <= config.failureThreshold; failure += 1) {
       longCooldown = recordModelFailure(longCooldown, key, config, now + failure, "agent_settled", "generic retry failure");
@@ -98,7 +98,7 @@ describe("reliability", () => {
 
     const optedOut = recordModelFailure(emptyReliabilityState(), key, {
       ...config, cooldownOnAllowanceExhausted: false,
-    }, now, "agent_settled", "provider request failed", observation);
+    }, now, "agent_settled", "provider request failed", observation, observation);
     assert.equal(optedOut.models[key]?.openUntil, undefined);
     assert.equal(optedOut.models[key]?.lastFailureReason, "provider request failed");
 
@@ -108,7 +108,7 @@ describe("reliability", () => {
     };
     const allowanceWhileOptedOut = recordModelFailure(ordinaryCircuit, key, {
       ...config, cooldownOnAllowanceExhausted: false,
-    }, now, "agent_settled", "allowance failure", observation);
+    }, now, "agent_settled", "allowance failure", observation, observation);
     assert.equal(allowanceWhileOptedOut.models[key]?.openUntil, now + 30_000,
       "the existing ordinary circuit remains active");
     assert.equal(allowanceWhileOptedOut.models[key]?.lastFailureReason, "allowance failure",
@@ -133,7 +133,7 @@ describe("reliability", () => {
       outcomeId: "billing-denied", modelKey: key, source: "runtime", observedAt: now,
       structured: { httpStatus: 402 },
     }, { now })!;
-    const opened = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "payment required", billing);
+    const opened = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "payment required", billing, billing);
     assert.equal(opened.models[key]?.openUntil, now + 60 * 60_000);
     assert.equal(opened.models[key]?.lastFailureReason, "billing_denied:http_status:model-only");
     assert.equal(hasActiveAllowanceCooldown(opened, key, now), true);
@@ -153,7 +153,7 @@ describe("reliability", () => {
       { ...normalizeFailureObservation({ outcomeId: "other-model", modelKey: "openai/other", source: "runtime", observedAt: now, structured: { category: "allowance_exhausted" } }, { now })!, modelKey: key, scope: { kind: "model" as const, modelKey: "openai/other" } },
       normalizeFailureObservation({ outcomeId: "probe-outcome", modelKey: key, source: "probe", observedAt: now, structured: { category: "allowance_exhausted" } }, { now })!,
     ]) {
-      const state = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "provider request failed", observation);
+      const state = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "provider request failed", observation, observation);
       assert.equal(state.models[key]?.openUntil, undefined);
     }
 

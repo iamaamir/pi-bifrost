@@ -517,6 +517,58 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
     } finally { h.cleanup(); }
   });
 
+  it("does not persist an earlier classifier 429 after an unrelated terminal network error", async () => {
+    const modelA = makeModel("provider-a", "model-a");
+    const h = fixture({
+      models: [modelA, makeModel("provider-b", "model-b")], defaultTier: "quick",
+      classifierEnabled: true, classifierModel: makeModel("provider-a", "classifier"),
+      streamSimple: (_model, _request, options) => {
+        options.onResponse({ status: 429, headers: { "retry-after": "120" } });
+        return { result: async () => ({ content: [], stopReason: "error", errorMessage: "network error" }) };
+      },
+    });
+    try {
+      await input(h, h.primary, "classifier-network-user", "summarize this code");
+      assert.equal(existsSync(providerReliabilityPath(h.cwd)), false, "uncorrelated callback must not reach the writer");
+      assert.equal(h.primary.ctx.model?.provider, "provider-a", "the healthy provider stays eligible");
+    } finally { h.cleanup(); }
+  });
+
+  it("keeps a Codex classifier 429 short and drops its retry hint at the registered writer", async () => {
+    const classifierModel = { ...makeModel("provider-a", "codex-classifier"), api: "openai-codex-responses" } as Model<Api>;
+    const h = fixture({
+      models: [makeModel("provider-a", "model-a"), makeModel("provider-b", "model-b")], defaultTier: "quick",
+      classifierEnabled: true, classifierModel,
+      streamSimple: (_model, _request, options) => {
+        options.onResponse({ status: 429, headers: { "retry-after": "120" } });
+        return { result: async () => ({ content: [], stopReason: "error", errorMessage: "HTTP 429 Too Many Requests" }) };
+      },
+    });
+    try {
+      const before = Date.now();
+      await input(h, h.primary, "codex-rate-user", "summarize this code");
+      const after = Date.now();
+      const rate = scopeFromSidecar(h.cwd, "rate", "provider-a");
+      assert.ok(rate?.openUntil > before, "qualified terminal 429 text must persist the existing short rate pause");
+      assert.ok(rate.openUntil <= after + 6_000, "a callback retry hint must not become terminal transport authority");
+      assert.equal(scopeFromSidecar(h.cwd, "usage", "provider-a"), undefined);
+    } finally { h.cleanup(); }
+  });
+
+  it("does not write a provider pause after the runtime signal has been cancelled", async () => {
+    const modelA = makeModel("provider-a", "model-a");
+    const h = fixture({ models: [modelA], defaultTier: "quick" });
+    try {
+      await input(h, h.primary, "cancelled-user", "quick first request");
+      const cancelled = new AbortController();
+      cancelled.abort();
+      (h.primary.ctx as { signal: AbortSignal }).signal = cancelled.signal;
+      await turnEnd(h, h.primary, "cancelled-user", modelA, "error", "The usage limit has been reached.");
+      await settleFailedTurn(h, h.primary, "cancelled-user");
+      assert.equal(existsSync(providerReliabilityPath(h.cwd)), false);
+    } finally { h.cleanup(); }
+  });
+
   it("claims an expired pinned-provider pause, blocks a second session, and drains the original claim on shutdown", async () => {
     const modelA = makeModel("provider-a", "model-a");
     const h = fixture({ models: [modelA], defaultTier: "quick" });

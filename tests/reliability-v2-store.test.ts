@@ -407,7 +407,7 @@ describe("experimental reliability v2 file transactions", () => {
     }, { now: now + 1 })!;
     const opened = settleReliabilityV2Dispatch(initial.state, {
       ownerToken: "owner-legacy", dispatchId: "dispatch-legacy", outcomeId: "outcome-legacy",
-      settlement: { kind: "failure", observation }, now: now + 2,
+      settlement: { kind: "failure", observation: observation, allowanceExhaustion: observation }, now: now + 2,
     }, markerConfig);
     assert.equal(opened.status, "settled");
     const scope = opened.state.scopes[modelScopeKey("provider/model")]!;

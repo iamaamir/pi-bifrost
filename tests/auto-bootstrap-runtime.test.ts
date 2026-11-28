@@ -192,6 +192,36 @@ describe("automatic setup through registered Pi hooks", () => {
     });
   }
 
+  it("does not suppress a queued sibling probe for a server error containing quota prose", async () => {
+    const harness = freshHarness(false, undefined, true);
+    try {
+      harness.setAvailable([harness.model, ...["two", "three", "four"].map(id => makeModel("fixture", id, 0.2, 0.2))]);
+      await harness.handlers.get("session_start")!({}, harness.ctx);
+      await harness.probeStarted;
+      harness.completeProbeError("500 The usage limit has been reached.");
+      for (let i = 0; i < 100 && harness.probeRequests() < 4; i++) await flushImmediate();
+      assert.equal(harness.probeRequests(), 4, "a server failure does not authorize provider-wide sibling suppression");
+      assert.equal(existsSync(join(process.cwd(), ".pi", "bifrost-provider-reliability.json")), false);
+    } finally { harness.cleanup(); }
+  });
+
+  it("suppresses queued sibling probes after an authorized provider rate pause", async () => {
+    const harness = freshHarness(false, undefined, true);
+    try {
+      harness.setAvailable([harness.model, ...["two", "three", "four"].map(id => makeModel("fixture", id, 0.2, 0.2))]);
+      await harness.handlers.get("session_start")!({}, harness.ctx);
+      await harness.probeStarted;
+      harness.completeProbeError("429 Too many requests");
+      for (let i = 0; i < 100; i++) await flushImmediate();
+      // Three probes start under the default concurrency before the denial is
+      // known; the queued fourth is the sibling the pending pause must suppress.
+      assert.equal(harness.probeRequests(), 3, "an authorized provider pause must suppress the queued same-provider sibling");
+      const sidecar = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost-provider-reliability.json"), "utf8")) as { scopes: Record<string, { openUntil?: number }> };
+      assert.ok(Object.values(sidecar.scopes).some(entry => (entry.openUntil ?? 0) > Date.now()),
+        "the pending denial must be confirmed by a persisted provider pause");
+    } finally { harness.cleanup(); }
+  });
+
   it("keeps a healthy provider routable when an inferred cooldown warning cannot be shown", async () => {
     const harness = freshHarness(false, undefined, true);
     try {

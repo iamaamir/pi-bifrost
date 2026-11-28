@@ -66,7 +66,7 @@ import { getCircuitState, hasActiveAllowanceCooldown, type ReliabilityState } fr
 import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import type { ReliabilityV2LegacyAllowanceMarker } from "./reliability-v2.ts";
 import { projectProviderCooldownsForRouting, type LegacyAllowanceMarker, type ProviderTrialClaim } from "./provider-cooldowns.ts";
-import { normalizeFailureObservation } from "./failure-observations.ts";
+import { hasExplicit429StatusText, normalizeFailureObservation, providerPauseIntent, runtimeAllowanceEvidence, type ProviderPauseIntent } from "./failure-observations.ts";
 import { createRuntimeAffinityStore, type RuntimeAffinitySuccessProof, type RuntimeAffinityStore } from "./runtime-affinity.ts";
 import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
@@ -492,7 +492,7 @@ function buildPipeline(
   effective: EffectiveBackend,
   isGenerationCircuitUnavailable: (model: string) => boolean,
   isProviderClassifierUnavailable: (model: Model<Api>) => boolean,
-  recordProviderClassifierFailure: (model: Model<Api>, status?: number, retryAfter?: string, errorText?: string) => Promise<void>,
+  recordProviderClassifierFailure: (model: Model<Api>, status?: number, retryAfter?: string, errorText?: string, allowTextInference?: boolean) => Promise<void>,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
@@ -620,8 +620,9 @@ function buildPipeline(
         maxTokens: config.classifier?.maxTokens,
         temperature: config.classifier?.temperature,
         method: config.classifier?.method,
-        onProviderHttpResponse: async (providerModel, status, retryAfter, errorText) => {
-          await recordProviderClassifierFailure(providerModel, status, retryAfter, errorText);
+        onProviderHttpResponse: async (providerModel, _statusHint, _retryAfter, errorText) => {
+          if (signal?.aborted || ctx.signal?.aborted) return;
+          await recordProviderClassifierFailure(providerModel, undefined, undefined, errorText, true);
         },
       }, signal);
       if (!tier) return undefined;
@@ -958,6 +959,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (!session.pipeline || session.pipelineConfigGeneration !== state.configGeneration
       || session.pipelineEnabled !== enablement.enabled || session.pipelineBackend !== effective.backend) {
       classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
+      const pipelineConfig = state.config;
+      const pipelineGeneration = state.configGeneration;
+      const pipelineSignal = session.controller.signal;
+      const pipelineSessionId = ctx.sessionManager.getHeader?.()?.id;
       session.pipeline = buildPipeline(
         ctx,
         state.config,
@@ -1002,8 +1007,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return view.openUntil !== undefined || view.trialActive || view.recoveryPending;
           } catch { return true; }
         },
-        async (model, status, retryAfter, errorText) => {
-          try { await recordClassifierProviderFailure(model, status, retryAfter, errorText); }
+        async (model, status, retryAfter, errorText, allowTextInference) => {
+          if (pipelineSignal.aborted || ctx.signal?.aborted || state.config !== pipelineConfig
+            || state.configGeneration !== pipelineGeneration || pipelineSessionId === undefined
+            || ctx.sessionManager.getHeader?.()?.id !== pipelineSessionId) return;
+          try { await recordClassifierProviderFailure(model, status, retryAfter, errorText, allowTextInference); }
           catch {
             providerCooldownWriteFailed = true;
             throw new Error("Provider cooldown could not be saved; routing is blocked.");
@@ -1567,7 +1575,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       renderAutoBootstrapProgress(ctx, record);
       const configAfterInstall = state.config;
       const generationAfterInstall = state.configGeneration ?? 0;
-      const pendingDeniedProviders = new Set<string>();
+      const pendingDeniedProviders = new Map<string, number>();
       const providerPauseWrites: Promise<void>[] = [];
       let persistenceWarningShown = false;
       let lastStatusUpdate = 0;
@@ -1662,33 +1670,31 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (result.status !== "error" || !stillOwned()) return;
           const model = catalogModels.find((candidate) => candidate.provider === result.provider && candidate.id === result.model);
           if (!model) return;
+          const observedAt = Date.now();
           const observation = normalizeFailureObservation({
             outcomeId: randomUUID(),
             modelKey: modelKey(model),
-            source: "runtime",
+            source: "probe",
             errorText: result.error,
-            observedAt: Date.now(),
-          });
-          if (!observation || (!isBudgetLimitFailure(observation) && observation.category !== "rate_limit")) return;
-          if (observation.category === "rate_limit" && observation.categoryEvidence === "text_heuristic"
-            && !hasExplicit429StatusText(result.error ?? "")) return;
-          pendingDeniedProviders.add(model.provider);
-          providerPauseWrites.push(recordClassifierProviderFailure(
-            model,
-            undefined,
-            undefined,
-            result.error,
-            true,
-          ).catch(() => {
-            providerCooldownWriteFailed = true;
-            return undefined;
-          }).then((savedObservation) => {
+            observedAt,
+          }, { now: observedAt });
+          const intent = pauseIntentFor(modelKey(model), "probe", observation, "legacy-terminal",
+            hasExplicit429StatusText(result.error ?? ""), observedAt);
+          if (!intent || !recordOwnsConfig()) return;
+          const provider = model.provider;
+          pendingDeniedProviders.set(provider, (pendingDeniedProviders.get(provider) ?? 0) + 1);
+          providerPauseWrites.push(applyProviderPause(provider, intent, observedAt).then((openUntil) => {
             try {
-              if (savedObservation?.category === "rate_limit" && savedObservation.categoryEvidence === "text_heuristic"
-                && autoBootstrapCanUpdateProgress(record)) {
-                log(ctx, `Bifrost paused provider ${model.provider} for 5 seconds: rate limit inferred from probe error text.`, "warning");
+              if (intent.kind === "rate" && autoBootstrapCanUpdateProgress(record)) {
+                log(ctx, `Bifrost paused provider ${provider} for 5 seconds: rate limit inferred from probe error text (until ${new Date(openUntil).toISOString()}).`, "warning");
               }
             } catch { /* an optional notification cannot invalidate a saved cooldown */ }
+          }).catch(() => {
+            providerCooldownWriteFailed = true;
+          }).finally(() => {
+            const remaining = (pendingDeniedProviders.get(provider) ?? 1) - 1;
+            if (remaining > 0) pendingDeniedProviders.set(provider, remaining);
+            else pendingDeniedProviders.delete(provider);
           }));
         },
       }).then(async ({ results, cancelled }) => {
@@ -1995,7 +2001,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const boundary = { entryId: pending.entryId, message: boundaryMessage };
     const { failedModelKey, requestedTier, observation, receipt } = pending;
     const reliability = state.config.reliability;
-    if (!isBudgetLimitFailure(observation) || observation?.source !== "runtime") return undefined;
+    if (!runtimeAllowanceEvidence(observation, {
+      modelKey: failedModelKey, outcomeId: receipt?.outcomeId,
+      attribution: ctx.signal?.aborted ? "unconfirmed" : "legacy-terminal", now: Date.now(),
+    })) return undefined;
     if (observation.category !== "allowance_exhausted" && observation.category !== "billing_denied") return undefined;
     const failureCategory = observation.category;
     const approvedAssistantEntryIds = isSideEffectFreeAllowanceFailure(ctx, assistantMessage, pending.assistantEntryId, boundary, failedModelKey);
@@ -2081,6 +2090,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         "agent_settled",
         observation.category === "billing_denied" ? "billing_denied" : "allowance_exhausted",
         undefined,
+        observation,
         state.config.reliability?.allowanceCooldownScope === "model" ? observation : undefined,
       );
       if (!saved) {
@@ -2162,7 +2172,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   ): Promise<boolean> {
     receipt.finalizing = true;
     const failureObservation = receipt.failureObservation;
-    const budgetLimitFailure = isBudgetLimitFailure(failureObservation) ? failureObservation : undefined;
+    const budgetLimitFailure = currentReceiptAllowance(ctx, receipt);
     let settlementConfirmed = false;
     try {
       await serializeReceiptOperation(receipt, async () => {
@@ -2172,7 +2182,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             await finishProviderDispatch(
               ctx,
               receipt.modelKey,
-              kind === "failure" ? receipt.failureObservation : undefined,
+              kind === "failure" ? budgetLimitFailure : undefined,
               kind === "success",
               receipt.providerTrialClaim,
             );
@@ -2196,8 +2206,6 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
         const policyAllowanceEvidence = state.config.reliability?.cooldownOnAllowanceExhausted !== false
           && state.config.reliability?.allowanceCooldownScope === "model"
-          && budgetLimitFailure
-          && budgetLimitFailure.source === "runtime"
           ? budgetLimitFailure : undefined;
         const recordedObservation = receipt.observationsEnabled ? failureObservation : undefined;
         const result = await receipt.store.settle({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId,
@@ -2400,12 +2408,39 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore !== undefined;
   }
 
-  function isBudgetLimitFailure(observation: ReturnType<typeof normalizeFailureObservation> | undefined): boolean {
-    return observation?.category === "allowance_exhausted" || observation?.category === "billing_denied";
+  function currentReceiptAllowance(ctx: ExtensionContext, receipt: AutoDispatchReceipt): ReturnType<typeof runtimeAllowanceEvidence> {
+    const owner = v2Receipts.forSession(ctx.sessionManager);
+    const current = !ctx.signal?.aborted && state.enabled && state.config.reliability?.enabled !== false
+      && receipt.sessionId === ctx.sessionManager.getHeader()?.id
+      && receipt.branchEpoch === owner.branchEpoch && receipt.manualGeneration === owner.manualGeneration
+      && receipt.configGeneration === (state.configGeneration ?? 0) && receipt.store === state.reliabilityV2Store;
+    return runtimeAllowanceEvidence(receipt.allowanceEvidence, {
+      modelKey: receipt.modelKey, outcomeId: receipt.outcomeId,
+      attribution: current ? "legacy-terminal" : "unconfirmed", now: Date.now(),
+    });
   }
 
-  function hasExplicit429StatusText(text: string): boolean {
-    return /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+)|(?:status\s*[:=]\s*))?429\b/i.test(text);
+  function pauseIntentFor(
+    model: string,
+    source: "runtime" | "probe",
+    observation: ReturnType<typeof normalizeFailureObservation>,
+    attribution: "provider-response" | "legacy-terminal" | "unconfirmed",
+    inferredRate: boolean,
+    now: number,
+  ): ProviderPauseIntent | undefined {
+    return providerPauseIntent(observation, {
+      modelKey: model, source, attribution, inferredRate, now,
+      enabled: providerCooldownsEnabled(),
+      allowanceEnabled: state.config.reliability?.cooldownOnAllowanceExhausted !== false,
+      allowanceScope: state.config.reliability?.allowanceCooldownScope ?? "provider",
+    });
+  }
+
+  async function applyProviderPause(provider: string, intent: ProviderPauseIntent, now: number): Promise<number> {
+    const store = state.providerCooldownStore;
+    if (!store || !providerCooldownsEnabled()) throw new Error("Provider cooldown state is unavailable.");
+    return intent.kind === "usage" ? store.pauseUsage(provider, now)
+      : store.pauseRate(provider, intent.observation.retryAt, now);
   }
 
   async function recordClassifierProviderFailure(
@@ -2426,19 +2461,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ...(httpStatus === undefined ? {} : { structured: { httpStatus, ...(retryAt === undefined ? {} : { retryAt }) } }),
       observedAt,
     }, { now: observedAt });
-    if (!observation) return undefined;
-    const store = state.providerCooldownStore;
-    if (!store) throw new Error("Provider cooldown state is unavailable.");
-    if (isBudgetLimitFailure(observation)
-      && state.config.reliability?.cooldownOnAllowanceExhausted !== false
-      && state.config.reliability?.allowanceCooldownScope !== "model") {
-      await store.pauseUsage(model.provider, observedAt);
-    } else if (observation.category === "rate_limit"
-      && (observation.categoryEvidence === "http_status" || observation.categoryEvidence === "structured"
-        || (allowTextInference && observation.categoryEvidence === "text_heuristic"
-          && hasExplicit429StatusText(errorText ?? "")))) {
-      await store.pauseRate(model.provider, observation.retryAt, observedAt);
-    }
+    const intent = pauseIntentFor(`${model.provider}/${model.id}`, "runtime", observation,
+      httpStatus === undefined ? "legacy-terminal" : "provider-response",
+      allowTextInference && hasExplicit429StatusText(errorText ?? ""), observedAt);
+    if (!intent) return undefined;
+    await applyProviderPause(model.provider, intent, observedAt);
     return observation;
   }
 
@@ -2518,16 +2545,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const sessionReference = providerTrialSessionRefBySession.get(session);
     if (claim && pendingClaims?.get(model) === claim) stopProviderTrialHeartbeat(session, model);
     try {
-    if (observation?.source === "runtime" && providerCooldownsEnabled()) {
-      if (!store) throw new Error("Bifrost provider cooldown state is unavailable.");
-      if ((observation.category === "allowance_exhausted" || observation.category === "billing_denied")
-        && state.config.reliability?.cooldownOnAllowanceExhausted !== false) {
-        if (state.config.reliability?.allowanceCooldownScope !== "model") await store.pauseUsage(provider);
-      } else if (observation.category === "rate_limit"
-        && (observation.categoryEvidence === "http_status" || observation.categoryEvidence === "structured")) {
-        await store.pauseRate(provider, observation.retryAt);
-      }
-    }
+    const now = Date.now();
+    const attribution = ctx.signal?.aborted ? "unconfirmed" : "legacy-terminal";
+    const intent = pauseIntentFor(model, "runtime", observation, attribution, false, now);
+    if (intent) await applyProviderPause(provider, intent, now);
     if (claim) {
       if (succeeded) await claim.ownerStore.settleTrial(claim);
       else await claim.ownerStore.releaseTrial(claim);
@@ -2843,6 +2864,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const reason = allowanceRetryStopReasonBySession.get(ctx.sessionManager);
     allowanceRetryStopReasonBySession.delete(ctx.sessionManager);
     return reason;
+  }
+
+  function logUnconfirmedRuntimeFailure(ctx: ExtensionContext, model: string, allowanceObservation: ReturnType<typeof runtimeAllowanceEvidence>): void {
+    const reason = allowanceObservation ? takeAllowanceRetryStopReason(ctx) : undefined;
+    const notice = `Bifrost could not confirm failure state for ${model}; inspect local reliability state.`;
+    log(ctx, reason ? `${notice} ${reason}` : notice, "warning");
   }
 
   function currentAllowanceRetry(ctx: ExtensionContext, boundary: AutoUserBoundary, now = Date.now()): AllowanceRetryToken | undefined {
@@ -3778,6 +3805,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", async (event, ctx) => {
+    if (ctx.signal?.aborted) return;
     trackerFor(ctx).observe(event.messages, (model, message) => {
       const observedAt = Date.now();
       return normalizeFailureObservation({
@@ -3789,6 +3817,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("turn_end", async (event, ctx) => {
     pendingInferredRateBySession.delete(ctx.sessionManager);
+    if (ctx.signal?.aborted) return;
     const allowanceRetryEnabled = state.config.reliability?.enabled !== false
       && state.config.reliability?.cooldownOnAllowanceExhausted !== false
       && state.config.reliability?.retryOnAllowanceExhausted === true;
@@ -3829,13 +3858,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           ...(typeof (event.message as typeof event.message & { errorMessage?: unknown }).errorMessage === "string"
             ? { errorText: (event.message as typeof event.message & { errorMessage: string }).errorMessage } : {}),
         });
-        try { await finishProviderDispatch(ctx, failedModelKey, observation, false); }
+        const allowanceEvidence = runtimeAllowanceEvidence(observation, {
+          modelKey: failedModelKey, attribution: "legacy-terminal", now: Date.now(),
+        });
+        try { await finishProviderDispatch(ctx, failedModelKey, allowanceEvidence, false); }
         catch {
           setAllowanceRetryStopReason(ctx, "Provider cooldown could not be saved; no automatic retry was sent.");
-          if (allowanceRetryEnabled && isBudgetLimitFailure(observation)) return;
+          if (allowanceRetryEnabled && allowanceEvidence) return;
         }
         const routeProof = uniqueV1RouteProof(ctx, boundary, failedModelKey);
-        if (routeProof && observation && isBudgetLimitFailure(observation)) {
+        if (routeProof && allowanceEvidence) {
           const safeFailure = isSideEffectFreeAllowanceFailure(ctx, event.message, event.messageEntryId, boundary,
             failedModelKey, event.toolResults, event.toolResultEntryIds);
           if (safeFailure) pendingAllowanceFailureBySession.set(ctx.sessionManager, {
@@ -3851,10 +3883,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             requestedTier: routeProof.requestedTier,
             selectedTier: routeProof.selectedTier,
             explicitTier: routeProof.explicitTier,
-            observation,
+            observation: allowanceEvidence,
           });
           else {
-            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey, observation.category));
+            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey, allowanceEvidence.category));
           }
         }
       }
@@ -3886,10 +3918,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           source: "runtime",
           ...(typeof errorText === "string" ? { errorText } : {}),
         });
-        providerObservation = observation;
-        receipt.failureObservation = receipt.observationsEnabled
-          ? observation
-          : isBudgetLimitFailure(observation) ? observation : undefined;
+        receipt.failureObservation = receipt.observationsEnabled ? observation : undefined;
+        receipt.allowanceEvidence = runtimeAllowanceEvidence(observation, {
+          modelKey: receipt.modelKey, outcomeId: receipt.outcomeId,
+          attribution: "legacy-terminal", now: Date.now(),
+        });
+        providerObservation = currentReceiptAllowance(ctx, receipt);
       }
       try { await finishProviderDispatch(ctx, receipt.modelKey, providerObservation, false, receipt.providerTrialClaim); }
       catch {
@@ -3902,15 +3936,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         model: receipt.modelKey,
         outcome: "failure",
         source: "turn_end",
-        ...(receipt.failureObservation?.category === "allowance_exhausted" ? {
+        ...(receipt.allowanceEvidence?.category === "allowance_exhausted" ? {
           category: "allowance_exhausted",
-          evidence: receipt.failureObservation.categoryEvidence,
+          evidence: receipt.allowanceEvidence.categoryEvidence,
           scope: "model-only",
         } : {}),
       });
     }
     else if (event.message.stopReason === "stop" || event.message.stopReason === "length") {
       receipt.outcome = "success";
+      receipt.failureObservation = undefined;
+      receipt.allowanceEvidence = undefined;
       receipt.assistantEntryId = event.messageEntryId;
       receipt.successObservedAt = Date.now();
       debugLifecycle("reliability", "outcome_observed", ctx.sessionManager, boundary.message, {
@@ -3927,6 +3963,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       receipt.assistantEntryId = undefined;
       receipt.successObservedAt = undefined;
       receipt.failureObservation = undefined;
+      receipt.allowanceEvidence = undefined;
       debugLifecycle("reliability", "outcome_observed", ctx.sessionManager, boundary.message, {
         model: receipt.modelKey,
         outcome: "provisional",
@@ -3934,7 +3971,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       await renewV2Receipt(ctx, receipt);
     }
-    if (allowanceRetryEnabled && event.message.stopReason === "error" && receipt.failureObservation && isBudgetLimitFailure(receipt.failureObservation)
+    const allowanceEvidence = currentReceiptAllowance(ctx, receipt);
+    if (allowanceRetryEnabled && event.message.stopReason === "error" && allowanceEvidence
       && (receipt.retryEligible || hasActiveAllowanceRetryAttempt(ctx, boundary, receipt.modelKey))) {
       const safeFailure = receipt.retryEligible && isSideEffectFreeAllowanceFailure(ctx, event.message, event.messageEntryId, boundary,
         receipt.modelKey, event.toolResults, event.toolResultEntryIds);
@@ -3951,11 +3989,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         requestedTier: receipt.requestedTier,
         selectedTier: receipt.tier,
         explicitTier: receipt.explicitTier,
-        observation: receipt.failureObservation,
+        observation: allowanceEvidence,
         receipt,
       });
       else {
-        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey, receipt.failureObservation.category));
+        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey, allowanceEvidence.category));
       }
     }
   });
@@ -3999,7 +4037,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const stale = receipt.sessionId !== ctx.sessionManager.getHeader()?.id
           || receipt.branchEpoch !== owner.branchEpoch
           || receipt.manualGeneration !== owner.manualGeneration;
-        await settleV2Receipt(ctx, receipt, stale ? "cancelled" : receipt.outcome ?? "cancelled");
+        await settleV2Receipt(ctx, receipt, stale || ctx.signal?.aborted ? "cancelled" : receipt.outcome ?? "cancelled");
       }
       await cleanupProviderTrials(ctx.sessionManager);
       return;
@@ -4034,21 +4072,27 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           scope: "model-only",
         } : {}),
       });
-      if (outcome.outcome === "abandoned") {
+      if (outcome.outcome === "abandoned" || (outcome.outcome === "failure" && ctx.signal?.aborted)) {
         state.reliabilityStore.abandonTrial(outcome.model);
         continue;
       }
       if (outcome.outcome === "failure") {
-        const allowanceObservation = isBudgetLimitFailure(outcome.failureObservation)
-          ? outcome.failureObservation : undefined;
-        state.reliabilityStore.recordFailure(
+        const allowanceObservation = runtimeAllowanceEvidence(outcome.allowanceEvidence, {
+          modelKey: outcome.model, attribution: "legacy-terminal", now: Date.now(),
+        });
+        const saved = state.reliabilityStore.recordFailure(
           outcome.model,
           "agent_settled",
           allowanceObservation ? "allowance_exhausted" : outcome.reason ?? "provider request failed",
           undefined,
+          outcome.failureObservation,
           allowanceObservation && state.config.reliability?.allowanceCooldownScope === "model"
             ? allowanceObservation : undefined,
         );
+        if (!saved) {
+          logUnconfirmedRuntimeFailure(ctx, outcome.model, allowanceObservation);
+          continue;
+        }
         if (allowanceObservation && state.config.reliability?.cooldownOnAllowanceExhausted !== false) {
           const providerScoped = state.config.reliability?.allowanceCooldownScope !== "model";
           let openUntil: number | undefined;
@@ -4057,8 +4101,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               ? state.providerCooldownStore?.read(outcome.model.slice(0, outcome.model.indexOf("/")), true).openUntil
               : state.reliabilityStore.getCircuitState(outcome.model).openUntil;
           } catch { /* best-effort message, routing remains fail-closed */ }
-          const until = openUntil !== undefined && Number.isSafeInteger(openUntil) && openUntil <= 8.64e15
-            ? new Date(openUntil).toISOString() : "the configured cooldown";
+          if (openUntil === undefined || openUntil <= Date.now() || !Number.isSafeInteger(openUntil) || openUntil > 8.64e15) {
+            log(ctx, `Bifrost: ${outcome.model} returned a billing or usage limit; no active cooldown was confirmed.`, "warning");
+            continue;
+          }
+          const until = new Date(openUntil).toISOString();
           const retryEnabled = state.config.reliability?.retryOnAllowanceExhausted === true;
           const action = takeAllowanceRetryStopReason(ctx)
             ?? (retryEnabled ? "No eligible retry was available. Review the turn, select another model, or resubmit." : "Automatic retry is off.");

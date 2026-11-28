@@ -3,7 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { debug } from "./debug.ts";
 import { promptWithMinimalSession } from "./session-fallback.ts";
-import { normalizeFailureObservation } from "./failure-observations.ts";
+import { hasExplicit429StatusText, normalizeFailureObservation } from "./failure-observations.ts";
 
 // ── Classifier model — union type, no type-cast lies ─────────
 
@@ -71,8 +71,9 @@ export interface ClassifierOptions {
   spawnImpl?: typeof spawn;
   /** Test seam for deterministic prompt HTTP cancellation coverage. */
   fetchImpl?: typeof fetch;
-  /** Observe only the status and bounded Retry-After metadata from registry-model responses. */
-  onProviderHttpResponse?: (model: Model<Api>, status: number, retryAfter?: string, errorMessage?: string) => void | Promise<void>;
+  /** The status is a response hint, not terminal transport proof. Only
+   * qualified terminal text is forwarded; uncorrelated retry hints are omitted. */
+  onProviderHttpResponse?: (model: Model<Api>, statusHint: number, retryAfter?: string, errorMessage?: string) => void | Promise<void>;
 }
 
 export function categoryLabel(category: string): string {
@@ -105,6 +106,24 @@ function piCommand(): { command: string; args: string[] } {
   return { command: "pi", args: [] };
 }
 
+/** Pi response callbacks are not tied to the final transport attempt. A
+ * subsequent network error can leave the previous HTTP response as the last
+ * callback. Only the terminal error's independently qualified legacy text
+ * can authorize the existing inference path; never forward its old headers.
+ */
+function compatibleTerminalLimit(model: Model<Api>, statusHint: number, text: string): boolean {
+  const observation = normalizeFailureObservation({
+    outcomeId: "classifier-terminal-response",
+    modelKey: `${model.provider}/${model.id}`,
+    source: "runtime",
+    errorText: text,
+  });
+  if (statusHint === 403) return observation?.category === "billing_denied";
+  if (statusHint === 402) return observation?.category === "billing_denied" || observation?.category === "allowance_exhausted";
+  return statusHint === 429 && (observation?.category === "allowance_exhausted"
+    || (observation?.category === "rate_limit" && hasExplicit429StatusText(text)));
+}
+
 async function classifyWithDirectHttp(
   ctx: ExtensionContext,
   classifierModel: ClassifierModel,
@@ -118,7 +137,7 @@ async function classifyWithDirectHttp(
   const maxTokens = options.maxTokens ?? 20;
   const temperature = options.temperature ?? 0;
   const userPrompt = classificationPrompt(categories, prompt);
-  let providerLimitResponse: { status: number; retryAfter?: string; errorMessage?: string } | undefined;
+  let providerLimitStatus: number | undefined;
 
   if (classifierModel.kind === "registry") {
     const stream = ctx.modelRegistry.streamSimple(
@@ -134,9 +153,9 @@ async function classifyWithDirectHttp(
         cacheRetention: "none",
         onResponse: async (response) => {
           if (response.status === 402 || response.status === 403 || response.status === 429) {
-            providerLimitResponse = { status: response.status, retryAfter: response.headers["retry-after"]?.slice(0, 128) };
+            providerLimitStatus = response.status;
           } else {
-            providerLimitResponse = undefined;
+            providerLimitStatus = undefined;
           }
         },
       },
@@ -145,34 +164,23 @@ async function classifyWithDirectHttp(
     try {
       response = await stream.result();
     } catch (error) {
-      if (!providerLimitResponse) throw error;
+      if (providerLimitStatus === undefined) throw error;
     }
-    if (providerLimitResponse && (!response || response.stopReason === "error")) {
-      if (response?.errorMessage) providerLimitResponse.errorMessage = response.errorMessage.slice(0, 1_024);
-      if (providerLimitResponse.status === 403
-        && normalizeFailureObservation({
-          outcomeId: "classifier-terminal-response",
-          modelKey: `${classifierModel.model.provider}/${classifierModel.model.id}`,
-          source: "runtime",
-          ...(providerLimitResponse.errorMessage ? { errorText: providerLimitResponse.errorMessage } : {}),
-          structured: { httpStatus: 403 },
-        })?.category !== "billing_denied") {
-        providerLimitResponse = undefined;
+    if (signal?.aborted || ctx.signal?.aborted) return undefined;
+    if (providerLimitStatus !== undefined && (!response || response.stopReason === "error")) {
+      const errorText = response?.errorMessage?.slice(0, 1_024);
+      const qualified = errorText !== undefined && compatibleTerminalLimit(classifierModel.model, providerLimitStatus, errorText);
+      if (qualified) {
+        try {
+          await options.onProviderHttpResponse?.(classifierModel.model, providerLimitStatus, undefined, errorText);
+        } catch { /* Provider observation cannot change classification behavior. */ }
       }
-    }
-    if (providerLimitResponse && (!response || response.stopReason === "error")) {
-      onProviderLimitResponse?.();
-      try {
-        await options.onProviderHttpResponse?.(
-          classifierModel.model,
-          providerLimitResponse.status,
-          providerLimitResponse.retryAfter,
-          providerLimitResponse.errorMessage,
-        );
-      } catch {
-        // Provider observations cannot change classification behavior.
+      // Preserve existing fallback suppression on 402/429; uncertainty about
+      // a pause is not authorization to create another provider request.
+      if (qualified || providerLimitStatus !== 403) {
+        onProviderLimitResponse?.();
+        return undefined;
       }
-      return undefined;
     }
     if (!response) return undefined;
     const content = response.content
