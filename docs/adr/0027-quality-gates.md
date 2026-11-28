@@ -77,8 +77,12 @@ make "the gate measured nothing" a failure.
   `2`.
 - The gate is a **ratchet**: per-file maxima and scope counts must not increase
   against the target measurement. New files must not exceed the target scope
-  maxima. Removed files are improvements. A rename is a removal plus a new file,
-  so the new path is judged by the scope ceiling.
+  maxima and the absolute new-file budgets: source cyclomatic 10 / cognitive 15,
+  tests cyclomatic 15 / cognitive 20. These limits apply to the maximum of all
+  functions in the new path; equality passes if the existing ratchets also pass.
+  Removed files are improvements. A rename is a removal plus a new file, so the
+  destination must meet both ceilings. Existing paths retain the relative ratchet;
+  matching new functions within existing paths is deferred (#380).
 - Nested functions are scored separately; a parent does not absorb a child's
   branches. Expression-bodied arrow bodies are visited.
 - Paths are normalized to forward slashes before scoping or file lookup so

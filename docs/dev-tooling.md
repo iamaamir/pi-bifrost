@@ -177,6 +177,17 @@ outside the repository.
 An incomplete measurement is a failure, not a warning: if a file disappears
 while the analyzer reads a tree, the gate exits `2` and reports no verdict.
 
+### New-file complexity budgets
+
+New source files have absolute maxima of 10 cyclomatic and 15 cognitive.
+New test files have maxima of 15 cyclomatic and 20 cognitive. Each applies to
+all measured functions in that file, including nested functions. The existing
+scope maxima and hotspot-count ratchets also apply; the lower applicable
+ceiling wins. Paths under `modules/<module>/tests/` are test scope.
+Existing paths retain their per-file relative ratchet, including new functions
+added to them. A rename is a new path and must satisfy the new-file budgets.
+These budgets do not require retroactive refactoring of unchanged files.
+
 ### Policy changes are not silent
 
 The analyzer, its scope and threshold policy, the TypeScript version, and the
@@ -297,7 +308,7 @@ you edited. For the changes below a targeted test cannot see the coupling, so ru
 | If the change… | Check this before trusting a targeted run |
 | --- | --- |
 | touches `.jscpd.json`, a baseline, or any threshold or default in config | Every test that **derives** from the value, not only the ones that spell it out. Search the accessor (`duplicationThreshold`, `analyze`, `parseJscpd`) and confirm each caller passes the value explicitly. A test that inherits the committed value breaks as a side effect of a legal config change. |
-| adds or edits a file under a measured path (root `*.ts`, `*.mjs`, `*.cjs`, `ui/`, `scripts/`, `tests/`) | `npm run check:complexity`: a new file must stay within the target scope maxima. No baseline is regenerated or committed. |
+| adds or edits a file under a measured path (root `*.ts`, `*.mjs`, `*.cjs`, `ui/`, `scripts/`, `tests/`) | `npm run check:complexity`: a new file must stay within the absolute new-file budgets and target scope maxima. No baseline is regenerated or committed. |
 | changes a number the docs state | Every place that quotes it — the ADR, this guide, a committed audit — in the same commit. A stale quote is a defect, not a lag. |
 | adds a gate command | The gate inventory test, and a command-table row. A prose mention does not make a gate "documented". |
 | runs `npm test` with uncommitted work | Commit or stash first: the acceptance contract fails a dirty candidate by design (`candidate-stable`), which looks like a regression and is not one. |
