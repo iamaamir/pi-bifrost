@@ -25,7 +25,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { initClassifierSummary, initSavePreviewLines, initSaveSummary, initSummaryPanel } from "./ui/init-save-summary.ts";
-import { classifierStatusPanel, type ClassifierStatusFacts } from "./ui/classifier-status.ts";
+import { classifierStatusPanel, type ClassifierBackendFacts, type ClassifierStatusFacts } from "./ui/classifier-status.ts";
 import { summaryPanel, summaryText, type SummaryPanelContent } from "./ui/summary-panel.ts";
 import {
   constants,
@@ -41,6 +41,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  classifierReadiness,
   loadRuntimeState,
   runtimeStatePath,
   type ClassifierEnablement,
@@ -3803,12 +3804,12 @@ function classifierStatusFacts(state: BifrostState, ctx: ExtensionContext): Clas
         : "prompt");
   const fallbackModel = fallback === "regex" ? undefined : modelId;
   const minConfidence = classifier?.minConfidence ?? 0.8;
-  const detail =
-    backend === CLASSIFIER_BACKEND_IDS.typesafe
+  const detail: ClassifierBackendFacts = {
+    name: backend,
+    auto: effective.auto,
+    reason: effective.reason,
+    ...(backend === CLASSIFIER_BACKEND_IDS.typesafe
       ? {
-          name: backend,
-          auto: effective.auto,
-          reason: effective.reason,
           model: classifier?.typesafe?.model ?? TYPE_SAFE_MODEL,
           endpoint: TYPE_SAFE_ENDPOINT,
           minConfidence,
@@ -3818,39 +3819,26 @@ function classifierStatusFacts(state: BifrostState, ctx: ExtensionContext): Clas
         }
       : backend === CLASSIFIER_BACKEND_IDS.piNative
         ? {
-            name: backend,
-            auto: effective.auto,
-            reason: effective.reason,
             model: classifier?.piNative?.model ?? "catalog default",
             minConfidence,
             fallback,
             fallbackModel,
           }
         : {
-            name: backend,
-            auto: effective.auto,
-            reason: effective.reason,
             model: modelId,
             endpoint: classifier?.endpoint ?? "registry",
             method: classifier?.method ?? "auto",
-          };
+          }),
+  };
   const metrics = state.classifierMetricsStore.snapshot();
   return {
-    enabled: runtime.enabled,
-    source: runtime.source,
-    configured: classifier?.enabled !== false,
-    readiness: runtime.runtimeStateIssue
-      ? "blocked"
-      : !runtime.enabled
-        ? "inactive"
-        : errors.length > 0
-          ? "blocked"
-          : "ready",
-    backend: detail,
+    enablement: runtime,
     ...(runtime.legacyConflict
-      ? { legacyConflict: { ...runtime.legacyConflict, note: classifierConflictNote(runtime.legacyConflict, runtime.source) } }
+      ? { conflictNote: classifierConflictNote(runtime.legacyConflict, runtime.source) }
       : {}),
-    ...(runtime.runtimeStateIssue ? { runtimeStateIssue: runtime.runtimeStateIssue } : {}),
+    configured: classifier?.enabled !== false,
+    readiness: classifierReadiness(runtime, errors),
+    backend: detail,
     ...(errors.length ? { errors } : {}),
     ...(backend !== CLASSIFIER_BACKEND_IDS.prompt
       ? {

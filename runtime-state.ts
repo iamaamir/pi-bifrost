@@ -23,6 +23,19 @@ export interface ClassifierEnablement {
  */
 export type ClassifierReadiness = "inactive" | "ready" | "blocked";
 
+/**
+ * The one readiness rule. A runtime-state issue always resolves enablement to
+ * `enabled: false`, so it is checked first to keep the reason specific.
+ */
+export function classifierReadiness(
+  enablement: Pick<ClassifierEnablement, "enabled" | "runtimeStateIssue">,
+  errors: readonly string[],
+): ClassifierReadiness {
+  if (enablement.runtimeStateIssue) return "blocked";
+  if (!enablement.enabled) return "inactive";
+  return errors.length > 0 ? "blocked" : "ready";
+}
+
 export interface RuntimeModeState {
   enabled: boolean;
   pinned: boolean;

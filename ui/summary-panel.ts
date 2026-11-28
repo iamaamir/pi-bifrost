@@ -33,6 +33,11 @@ function labelWidth(blocks: readonly SummaryBlock[]): number {
   return Math.max(0, ...blocks.flatMap((block) => (block.kind === "row" ? [visibleWidth(block.label)] : [])));
 }
 
+/** Two columns of separation from docs/ui-design-system.md, aligned to the longest label. */
+function labelGap(label: string, labelColumn: number): string {
+  return " ".repeat(2 + labelColumn - visibleWidth(label));
+}
+
 /**
  * Plain-text projection used for headless output and deterministic tests.
  * Carries the same facts as the rendered panel without terminal styling.
@@ -42,8 +47,7 @@ export function summaryText(content: SummaryPanelContent): string[] {
   return content.blocks.map((block) => {
     if (block.kind === "spacing") return "";
     if (block.kind === "message") return `${marker(block.tone)}${block.text}`;
-    const gap = " ".repeat(2 + width - visibleWidth(block.label));
-    return `${block.label}${gap}${marker(block.tone)}${block.value}`;
+    return `${block.label}${labelGap(block.label, width)}${marker(block.tone)}${block.value}`;
   });
 }
 
@@ -74,9 +78,8 @@ function messageLine(theme: SummaryTheme, block: SummaryBlock, width: number): s
 
 function rowLine(theme: SummaryTheme, block: SummaryBlock, labelColumn: number, width: number): string[] {
   if (block.kind !== "row") return [];
-  const gap = " ".repeat(2 + labelColumn - visibleWidth(block.label));
   const value = theme.fg(block.tone ?? "text", `${marker(block.tone)}${block.value}`);
-  const line = theme.fg("muted", block.label) + gap + value;
+  const line = theme.fg("muted", block.label) + labelGap(block.label, labelColumn) + value;
   if (visibleWidth(line) <= width) return [line];
   // The design system puts the value on the next line when the row no longer
   // fits. Indent it under the value column only when that leaves room for the
