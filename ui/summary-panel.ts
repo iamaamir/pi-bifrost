@@ -66,14 +66,13 @@ function wrapIndented(line: string, width: number, indent: number): string[] {
 function messageLine(theme: SummaryTheme, block: SummaryBlock, width: number): string[] {
   if (block.kind !== "message") return [];
   const prefix = marker(block.tone);
+  const indent = " ".repeat(prefix.length);
   // Severity rides on the marker and the sentence keeps the body color, so a
-  // long repair instruction reads as text rather than as decoration.
-  const [first = "", ...rest] = wrapTextWithAnsi(`${prefix}${block.text}`, width);
+  // long repair instruction reads as text rather than as decoration. The marker
+  // also spends width, so continuations must wrap inside the space it leaves.
+  const [first = "", ...rest] = wrapTextWithAnsi(block.text, Math.max(1, width - prefix.length));
   const body = (part: string) => theme.fg("text", part);
-  return [
-    theme.fg(block.tone ?? "text", first.slice(0, prefix.length)) + body(first.slice(prefix.length)),
-    ...rest.map((part) => " ".repeat(prefix.length) + body(part)),
-  ];
+  return [theme.fg(block.tone ?? "text", prefix) + body(first), ...rest.map((part) => indent + body(part))];
 }
 
 function rowLine(theme: SummaryTheme, block: SummaryBlock, labelColumn: number, width: number): string[] {
@@ -87,7 +86,10 @@ function rowLine(theme: SummaryTheme, block: SummaryBlock, labelColumn: number, 
   // split mid-token by the indent.
   const hanging = labelColumn + 2;
   const indent = hanging <= width - 12 && visibleWidth(value) <= width - hanging ? hanging : 0;
-  return [theme.fg("muted", block.label), ...wrapIndented(value, width, indent)];
+  // A label can be wider than the body on its own; the box does not truncate,
+  // so it wraps like every other line.
+  const label = wrapTextWithAnsi(theme.fg("muted", block.label), width);
+  return [...label, ...wrapIndented(value, width, indent)];
 }
 
 function renderBlock(theme: SummaryTheme, block: SummaryBlock, labelColumn: number, width: number): string[] {
