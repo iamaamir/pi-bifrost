@@ -147,6 +147,8 @@ General-purpose setup for using cheap models by default and stronger models for 
 - Classification cache reduces repeated classifier calls.
 - Regex remains the fallback path.
 
+These `--offline` previews show only local cache, rules, and default-tier selection for that request. They skip this recipe's optional classifier, so they do not show classifier-driven routing. Remove `--offline` to exercise the classifier, which can receive the prompt and incur provider usage. See [preview before generation](../docs/guide/workflows.md#preview-before-generation) for the pipeline.
+
 Try:
 
 ```text
@@ -202,13 +204,15 @@ Use when you want fine-grained routing across many task types from one shared po
 - Task-tuned classifier system prompt and regex fallback rules.
 - Model lists use placeholder `provider/...` patterns — replace them with models from your Pi registry.
 
+This recipe routes by task intent through its tuned classifier, so use a normal preview to exercise that path. An enabled classifier can receive the prompt and incur provider usage. `--offline` skips that call and shows only rules and defaults. See [preview before generation](../docs/guide/workflows.md#preview-before-generation) for the pipeline.
+
 Try:
 
 ```text
-/bifrost preview --offline review this pull request
-/bifrost preview --offline debug this memory leak
-/bifrost preview --offline summarize these logs
-/bifrost preview --offline use a free model only
+/bifrost preview review this pull request
+/bifrost preview debug this memory leak
+/bifrost preview summarize these logs
+/bifrost preview use a free model only
 ```
 
 Tradeoff: more categories to maintain, but routing matches task shape closely.
@@ -227,12 +231,14 @@ Use when the built-in classifier prompt is too terse for your workflow and you w
 - Keeps the same `quick` / `general` / `frontier` model tiers as the default config.
 - Works best when the classifier model is capable enough to follow nuanced instructions.
 
+This recipe demonstrates the customized classifier prompt, so use a normal preview. An enabled classifier can receive the prompt and incur provider usage. A cache hit or another earlier resolution path may prevent that classifier call for a request, so one preview does not prove the classifier ran. `--offline` bypasses classifier calls for that request and does not change session classifier settings, so it does not demonstrate the customized classifier. See [preview before generation](../docs/guide/workflows.md#preview-before-generation) and [preview output](../docs/guide/commands.md#preview-output) for the precise pipeline.
+
 Try:
 
 ```text
-/bifrost preview --offline design a migration strategy for this database
-/bifrost preview --offline write unit tests for this function
-/bifrost preview --offline format this json
+/bifrost preview design a migration strategy for this database
+/bifrost preview write unit tests for this function
+/bifrost preview format this json
 ```
 
 Tradeoff: more tokens per classification, but sharper routing on ambiguous prompts.
