@@ -1,6 +1,10 @@
 import type { ClassifierBackend } from "../classifier-backends.ts";
-import type { ClassifierReadiness } from "../diagnostics.ts";
-import type { ClassifierEnablement, ClassifierEnablementSource, RuntimeStateIssue } from "../runtime-state.ts";
+import type {
+  ClassifierEnablement,
+  ClassifierEnablementSource,
+  ClassifierReadiness,
+  RuntimeStateIssue,
+} from "../runtime-state.ts";
 import type { SummaryBlock, SummaryPanelContent } from "./summary-panel.ts";
 
 /** Effective direct-classifier transport, already resolved by the handler. */

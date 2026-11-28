@@ -17,6 +17,12 @@ export interface ClassifierEnablement {
   readonly runtimeStateIssue?: RuntimeStateIssue;
 }
 
+/**
+ * Whether classification can run right now, and if not, why: shared by every
+ * surface that reports classifier state (`/bifrost inspect`, `classifier status`).
+ */
+export type ClassifierReadiness = "inactive" | "ready" | "blocked";
+
 export interface RuntimeModeState {
   enabled: boolean;
   pinned: boolean;
