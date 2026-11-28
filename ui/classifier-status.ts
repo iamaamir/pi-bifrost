@@ -1,17 +1,11 @@
+import type { ClassifierBackend } from "../classifier-backends.ts";
+import type { ClassifierReadiness } from "../diagnostics.ts";
+import type { ClassifierEnablement, ClassifierEnablementSource, RuntimeStateIssue } from "../runtime-state.ts";
 import type { SummaryBlock, SummaryPanelContent } from "./summary-panel.ts";
-
-/** Enablement source resolved by runtime-state.ts. */
-export type ClassifierStatusSource =
-  | "configuration"
-  | "session"
-  | "legacy-conflict"
-  | "runtime-state-invalid";
-
-export type ClassifierReadiness = "ready" | "inactive" | "blocked";
 
 /** Effective direct-classifier transport, already resolved by the handler. */
 export interface ClassifierBackendFacts {
-  readonly name: string;
+  readonly name: ClassifierBackend;
   readonly auto: boolean;
   readonly reason?: string;
   readonly model?: string;
@@ -33,12 +27,13 @@ export interface ClassifierActivityFacts {
 /** Everything the status command knows before presentation decides layout. */
 export interface ClassifierStatusFacts {
   readonly enabled: boolean;
-  readonly source: ClassifierStatusSource;
+  readonly source: ClassifierEnablementSource;
   readonly configured: boolean;
   readonly readiness: ClassifierReadiness;
   readonly backend: ClassifierBackendFacts;
-  readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean; readonly note: string };
-  readonly runtimeStateIssue?: string;
+  /** The runtime's conflict report plus the note that explains precedence. */
+  readonly legacyConflict?: NonNullable<ClassifierEnablement["legacyConflict"]> & { readonly note: string };
+  readonly runtimeStateIssue?: RuntimeStateIssue;
   readonly errors?: readonly string[];
   readonly activity?: ClassifierActivityFacts;
 }

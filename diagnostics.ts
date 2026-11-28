@@ -48,12 +48,15 @@ export interface ValidateDiagnosticsReport {
   readonly classifier: ClassifierDiagnosticStatus;
 }
 
+/** Readiness shown by `/bifrost inspect` and `/bifrost classifier status`. */
+export type ClassifierReadiness = "inactive" | "ready" | "blocked";
+
 export interface ClassifierDiagnosticStatus {
   readonly enabled: boolean;
   readonly configuredEnabled: boolean;
   readonly source: "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid" | "diagnostic";
   readonly backend?: ClassifierBackend;
-  readonly readiness: "inactive" | "ready" | "blocked";
+  readonly readiness: ClassifierReadiness;
   readonly errors: readonly string[];
   readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
   readonly runtimeStateIssue?: RuntimeStateIssue;
