@@ -84,3 +84,80 @@ describe("runtime allowance action evidence", () => {
     assert.equal(result.state.scopes[modelScopeKey(modelKey)]?.openUntil, undefined);
   });
 });
+
+describe("store allowance intent binding", () => {
+  const foreignModel = normalizeFailureObservation({
+    outcomeId, modelKey: "fixture/other", source: "runtime", errorText: "The usage limit has been reached.",
+  }, { now })!;
+  const foreignOutcome = normalizeFailureObservation({
+    outcomeId: "other-outcome", modelKey, source: "runtime", errorText: "The usage limit has been reached.",
+  }, { now })!;
+  const probe = normalizeFailureObservation({
+    outcomeId, modelKey, source: "probe", errorText: "The usage limit has been reached.",
+  }, { now })!;
+  const beforeAdmission = normalizeFailureObservation({
+    outcomeId, modelKey, source: "runtime", observedAt: now - 2, errorText: "The usage limit has been reached.",
+  }, { now })!;
+
+  for (const [label, evidence] of [
+    ["foreign model", foreignModel], ["probe origin", probe],
+  ] as const) {
+    it(`V1 counts ordinary failure without escalating ${label} intent`, () => {
+      const state = recordModelFailure(emptyReliabilityState(), modelKey,
+        { failureThreshold: 3, cooldownMinutes: 1 }, now, "agent_settled", "provider failed",
+        diagnostic, evidence);
+      assert.deepEqual(state.models[modelKey]?.failures, [now]);
+      assert.equal(state.models[modelKey]?.openUntil, undefined);
+      assert.deepEqual(Object.keys(state.models), [modelKey]);
+    });
+  }
+
+  for (const enabled of [false, true]) {
+    it(`V1 respects allowance opt-in=${enabled} independently of diagnostics`, () => {
+      const state = recordModelFailure(emptyReliabilityState(), modelKey,
+        { failureThreshold: 3, cooldownMinutes: 1, cooldownOnAllowanceExhausted: enabled },
+        now, "agent_settled", "provider failed", undefined, diagnostic);
+      assert.deepEqual(state.models[modelKey]?.failures, [now]);
+      assert.equal(state.models[modelKey]?.openUntil, enabled ? now + 60_000 : undefined);
+    });
+  }
+
+  for (const [label, evidence] of [
+    ["foreign model", foreignModel], ["foreign outcome", foreignOutcome],
+    ["probe origin", probe], ["pre-admission timestamp", beforeAdmission],
+  ] as const) {
+    it(`V2 rejects ${label} allowance intent without settling the receipt`, () => {
+      const admission = admitReliabilityV2Dispatch(emptyReliabilityV2State(), {
+        ownerToken: "owner", dispatchId: "dispatch", outcomeId, modelKeys: [modelKey], now: now - 1,
+      }, policy);
+      assert.equal(admission.status, "admitted");
+      const result = settleReliabilityV2Dispatch(admission.state, {
+        ownerToken: "owner", dispatchId: "dispatch", outcomeId, now,
+        settlement: { kind: "failure", allowanceExhaustion: evidence },
+      }, policy);
+      assert.equal(result.status, "invalid");
+      assert.deepEqual(result.state, admission.state);
+      assert.equal(result.state.settledOutcomes[outcomeId], undefined);
+    });
+  }
+
+  for (const observations of [false, true]) {
+    it(`V2 opt-out preserves ordinary accounting with observations=${observations}`, () => {
+      const disabled = { ...policy, cooldownOnAllowanceExhausted: false };
+      const admission = admitReliabilityV2Dispatch(emptyReliabilityV2State(), {
+        ownerToken: "owner", dispatchId: "dispatch", outcomeId, modelKeys: [modelKey], now: now - 1,
+      }, disabled);
+      assert.equal(admission.status, "admitted");
+      const result = settleReliabilityV2Dispatch(admission.state, {
+        ownerToken: "owner", dispatchId: "dispatch", outcomeId, now,
+        settlement: { kind: "failure", allowanceExhaustion: diagnostic,
+          ...(observations ? { observation: diagnostic } : {}) },
+      }, disabled);
+      assert.equal(result.status, "settled");
+      assert.deepEqual(result.state.scopes[modelScopeKey(modelKey)]?.failures, [now]);
+      assert.equal(result.state.scopes[modelScopeKey(modelKey)]?.openUntil, undefined);
+      assert.equal(result.state.settledOutcomes[outcomeId]?.observation?.category,
+        observations ? "allowance_exhausted" : undefined);
+    });
+  }
+});
