@@ -418,12 +418,17 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
   return selected;
 }
 
+/** One headless path for every command result; `bareBlank` keeps separators unprefixed. */
+function uiHeadless(lines: readonly string[], bareBlank = false) {
+  for (const line of lines) console.error(bareBlank && !line ? "" : `[bifrost] ${line}`);
+}
+
 function uiOutput(ctx: ExtensionContext, lines: string[], summary = false) {
   if (ctx.mode === "tui" && ctx.hasUI) {
     if (summary) ctx.ui.setWidget("bifrost-output", (_tui, theme) => initSummaryPanel(theme, lines));
     else ctx.ui.setWidget("bifrost-output", lines);
   } else {
-    for (const line of lines) console.error(`[bifrost] ${line}`);
+    uiHeadless(lines);
   }
 }
 
@@ -432,8 +437,7 @@ function uiSummary(ctx: ExtensionContext, content: SummaryPanelContent) {
   if (ctx.mode === "tui" && ctx.hasUI) {
     ctx.ui.setWidget("bifrost-output", (_tui, theme) => summaryPanel(theme, content));
   } else {
-    // Group spacing stays an empty line; only fact lines carry the marker.
-    for (const line of summaryText(content)) console.error(line ? `[bifrost] ${line}` : "");
+    uiHeadless(summaryText(content), true);
   }
 }
 

@@ -8,7 +8,7 @@ import { Box, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 export type SummaryTone = "text" | "warning" | "error";
 
 export type SummaryBlock =
-  | { readonly kind: "row"; readonly label: string; readonly value: string; readonly tone?: SummaryTone }
+  | { readonly kind: "row"; readonly label: string; readonly value: string }
   | { readonly kind: "message"; readonly text: string; readonly tone?: SummaryTone }
   | { readonly kind: "spacing" };
 
@@ -38,16 +38,37 @@ function labelGap(label: string, labelColumn: number): string {
   return " ".repeat(2 + labelColumn - visibleWidth(label));
 }
 
+type Row = Extract<SummaryBlock, { kind: "row" }>;
+type Message = Extract<SummaryBlock, { kind: "message" }>;
+
+type RowParts = { readonly label: string; readonly gap: string; readonly value: string };
+
+/**
+ * A row split into its parts. Plain and styled renderers differ only in the
+ * theme roles they apply, so neither can drift from the other.
+ */
+function rowParts(block: Row, labelColumn: number): RowParts {
+  return { label: block.label, gap: labelGap(block.label, labelColumn), value: block.value };
+}
+
+function messageParts(block: Message): { readonly marker: string; readonly text: string } {
+  return { marker: marker(block.tone), text: block.text };
+}
+
 /**
  * Plain-text projection used for headless output and deterministic tests.
  * Carries the same facts as the rendered panel without terminal styling.
  */
 export function summaryText(content: SummaryPanelContent): string[] {
-  const width = labelWidth(content.blocks);
+  const labelColumn = labelWidth(content.blocks);
   return content.blocks.map((block) => {
     if (block.kind === "spacing") return "";
-    if (block.kind === "message") return `${marker(block.tone)}${block.text}`;
-    return `${block.label}${labelGap(block.label, width)}${marker(block.tone)}${block.value}`;
+    if (block.kind === "message") {
+      const { marker: prefix, text } = messageParts(block);
+      return `${prefix}${text}`;
+    }
+    const { label, gap, value } = rowParts(block, labelColumn);
+    return `${label}${gap}${value}`;
   });
 }
 
@@ -65,20 +86,21 @@ function wrapIndented(line: string, width: number, indent: number): string[] {
 
 function messageLine(theme: SummaryTheme, block: SummaryBlock, width: number): string[] {
   if (block.kind !== "message") return [];
-  const prefix = marker(block.tone);
+  const { marker: prefix, text } = messageParts(block);
   const indent = " ".repeat(prefix.length);
   // Severity rides on the marker and the sentence keeps the body color, so a
   // long repair instruction reads as text rather than as decoration. The marker
   // also spends width, so continuations must wrap inside the space it leaves.
-  const [first = "", ...rest] = wrapTextWithAnsi(block.text, Math.max(1, width - prefix.length));
+  const [first = "", ...rest] = wrapTextWithAnsi(text, Math.max(1, width - prefix.length));
   const body = (part: string) => theme.fg("text", part);
   return [theme.fg(block.tone ?? "text", prefix) + body(first), ...rest.map((part) => indent + body(part))];
 }
 
 function rowLine(theme: SummaryTheme, block: SummaryBlock, labelColumn: number, width: number): string[] {
   if (block.kind !== "row") return [];
-  const value = theme.fg(block.tone ?? "text", `${marker(block.tone)}${block.value}`);
-  const line = theme.fg("muted", block.label) + labelGap(block.label, labelColumn) + value;
+  const parts = rowParts(block, labelColumn);
+  const value = theme.fg("text", parts.value);
+  const line = theme.fg("muted", parts.label) + parts.gap + value;
   if (visibleWidth(line) <= width) return [line];
   // The design system puts the value on the next line when the row no longer
   // fits. Indent it under the value column only when that leaves room for the
@@ -88,7 +110,7 @@ function rowLine(theme: SummaryTheme, block: SummaryBlock, labelColumn: number, 
   const indent = hanging <= width - 12 && visibleWidth(value) <= width - hanging ? hanging : 0;
   // A label can be wider than the body on its own; the box does not truncate,
   // so it wraps like every other line.
-  const label = wrapTextWithAnsi(theme.fg("muted", block.label), width);
+  const label = wrapTextWithAnsi(theme.fg("muted", parts.label), width);
   return [...label, ...wrapIndented(value, width, indent)];
 }
 
