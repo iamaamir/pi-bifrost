@@ -47,7 +47,10 @@ function mapRows(markdown) {
     if (/^#{1,2}\s/u.test(line)) break;
     const row = line.trim();
     if (!row.startsWith("|")) {
-      if (separatorSeen && row !== "") tableClosed = true;
+      // A blank line ends a Markdown table just as prose does. Once the table
+      // has begun, any non-table line before the separator also breaks its
+      // required adjacency, so no later row can supply map coverage.
+      if (headerSeen || separatorSeen) tableClosed = true;
       continue;
     }
     if (tableClosed) continue;
@@ -193,4 +196,45 @@ test("fault control: a missing page, a duplicate, a bad form, and a missing map 
     );
   }
   assert.deepEqual(mapProblems({ pages, markdown: "# Guide\n" }), [`${GUIDE}/index.md: missing "## Guide map"`]);
+});
+
+test("fault control: a blank line ends the table and the separator must be adjacent to the header", () => {
+  const pages = [`${GUIDE}/index.md`, `${GUIDE}/task.md`];
+  const taskRow = "| [Task](task.md) | How-to | Do the task |";
+  const markdown = [
+    "## Guide map",
+    "",
+    "| Page | Form | Reader task |",
+    "| --- | --- | --- |",
+    "| [Index](index.md) | Explanation | Find a page |",
+    taskRow,
+    "",
+  ].join("\n");
+  const missingTask = [`${GUIDE}/index.md: task.md is missing from the guide map`];
+  const uncovered = [
+    `${GUIDE}/index.md: index.md is missing from the guide map`,
+    `${GUIDE}/index.md: task.md is missing from the guide map`,
+  ];
+
+  assert.deepEqual(
+    mapProblems({ pages, markdown }),
+    [],
+    "the baseline table still supplies full coverage",
+  );
+  assert.deepEqual(
+    mapProblems({ pages, markdown: markdown.replace(`${taskRow}\n`, "").concat("\n", taskRow, "\n") }),
+    missingTask,
+    "a page row after a blank line following the table must not restore coverage",
+  );
+  for (const [insert, control] of [
+    ["\n", "a blank line"],
+    ["\nSome prose", "intervening prose"],
+  ]) {
+    const broken = markdown.replace("| Page | Form | Reader task |", `| Page | Form | Reader task |${insert}`);
+    assert.deepEqual(
+      mapProblems({ pages, markdown: broken }),
+      uncovered,
+      `${control} between the header and separator must break the table`,
+    );
+  }
 });
