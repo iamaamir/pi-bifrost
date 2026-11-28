@@ -207,6 +207,7 @@ const KNIP_DEPENDENCY_EXCEPTIONS = {
 
 const KNIP_BINARY_EXCEPTIONS = {
   hyperfine: "optional host benchmark tool documented in docs/dev-tooling.md",
+  vale: "optional local prose linter for check:docs-style; CI uses the pinned vale-action",
   stryker: "binary provided by @stryker-mutator/core, which the mutation runner invokes",
   bun: "host test runner for the default mutation runner, documented in docs/mutation-testing.md",
 };
@@ -312,6 +313,9 @@ test("the Knip scope audit reports dead globs, undeclared ignores, and stale exc
   "a stale exception must be removed, not left behind");
   assert.equal(problemsFor((copy) => { copy.ignoreBinaries = ["hyperfine", "stryker"]; return copy; })
     .includes("documented ignoreBinaries exception bun is not configured"), true);
+  assert.equal(problemsFor((copy) => { copy.ignoreBinaries = copy.ignoreBinaries.filter((name) => name !== "vale"); return copy; })
+    .includes("documented ignoreBinaries exception vale is not configured"), true,
+  "the Vale exception must stay narrow and declared");
 });
 
 test("Renovate pins action digests and requires approval for major upgrades", () => {
