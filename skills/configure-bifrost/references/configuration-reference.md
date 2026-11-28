@@ -105,7 +105,7 @@ prompt caches.
 
 `reliability.enabled` (default true), `failureThreshold`, `windowMinutes`,
 `cooldownMinutes`, `cooldownOnAllowanceExhausted`, `allowanceCooldownScope`
-(`provider` default, `model`), `retryOnAllowanceExhausted`, `stateVersion`
+(`provider` default, `model`), `retryOnAllowanceExhausted`, `failover`, `stateVersion`
 (`1` default, `2`), `observations.enabled`, `path`.
 
 - Circuits are persisted and recover through controlled half-open trials.
@@ -115,8 +115,10 @@ prompt caches.
 - `stateVersion: 2` needs its own migration and only covers supported Auto turns;
   physical routing still uses v1. Do not switch it as part of a routing goal
   unless the user asks.
-- `retryOnAllowanceExhausted` is the one narrow failover case (ADR 0023) and only
+- `retryOnAllowanceExhausted` is the narrow terminal recovery case (ADR 0023) and only
   applies when Pi proves the failed attempt was empty.
+- `failover` (draft, default `false`) selects another eligible model at a proven
+  empty native Auto retry. Do not recommend enabling it until ADR 0030 is accepted.
 
 ## Economics (advisory)
 

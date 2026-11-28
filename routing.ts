@@ -234,7 +234,7 @@ export function resolveModel<M extends RoutingModelBase>(
 
 export interface SkippedCandidate {
   key: string;
-  reason: "open_circuit" | "trial_active" | "provider_not_allowed" | "sign_in_unavailable";
+  reason: "open_circuit" | "trial_active" | "provider_not_allowed" | "sign_in_unavailable" | "request_attempted";
   openUntil?: number;
   /** Which hard provider restriction rejected this candidate. */
   scope?: RoutingScopeOrigin;
@@ -303,7 +303,7 @@ export interface RoutedModelResolution<M extends RoutingModelBase = RoutingModel
   selected: M | undefined;
   strategy: RoutingStrategy;
   skipped: SkippedCandidate[];
-  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "requested_tier_provider_excluded" | "sign_in_unavailable" | "all_tiers_exhausted";
+  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "requested_tier_provider_excluded" | "sign_in_unavailable" | "all_tiers_exhausted" | "request_candidates_exhausted";
   primary: HealthyModelResolution<M>;
   fallback?: HealthyModelResolution<M>;
   /** Ordered pools attempted when an explicit tierPolicies boundary is active. */
@@ -400,6 +400,7 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   random?: () => number,
   affinity?: AffinityRoutingContext,
   excludedBySignIn?: (candidate: M) => boolean,
+  excludedRequestModels?: ReadonlySet<string>,
 ): ConfiguredTierResolution<M> {
   const options = buildTierResolutionOptions(tier, config);
   const routeNow = now ?? Date.now();
@@ -407,8 +408,8 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   const scope = compileRoutingScope(config.routingScope);
   const policy = schemaVersionAtLeast(config.schemaVersion, 2) ? config.tierPolicies?.[tier] : undefined;
   const resolution = policy && Array.isArray(policy.fallbackTiers)
-    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random, scope, excludedBySignIn)
-    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random, scope, excludedBySignIn });
+    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random, scope, excludedBySignIn, excludedRequestModels)
+    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random, scope, excludedBySignIn, excludedRequestModels });
   const affinityMode = config.affinity?.mode ?? affinity?.effectiveMode;
   if (affinityMode !== undefined && affinity !== undefined) {
     if (affinityMode === "off") {
@@ -470,6 +471,16 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   return { options, resolution };
 }
 
+function excludeAttemptedCandidates<M extends RoutingModelBase>(candidates: M[], excluded: ReadonlySet<string> | undefined, skipped: SkippedCandidate[]): M[] {
+  if (!excluded?.size) return candidates;
+  return candidates.filter(candidate => {
+    const key = modelKey(candidate);
+    if (!excluded.has(key)) return true;
+    skipped.push({ key, reason: "request_attempted" });
+    return false;
+  });
+}
+
 export function resolveHealthyModel<M extends RoutingModelBase>(
   ctx: RoutingHostContext<M>,
   pattern: string | string[] | undefined,
@@ -481,14 +492,16 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
   random: () => number = Math.random,
   scope?: RouteScopeContext,
   excludedBySignIn?: (candidate: M) => boolean,
+  excludedRequestModels?: ReadonlySet<string>,
 ): HealthyModelResolution<M> {
   const pool = findCandidatePool(ctx, pattern);
   const configuredCandidates = pool.candidates;
   // Hard provider scope runs first: an excluded provider never reaches
   // economic admission, reliability, affinity, or strategy selection.
   const scopeSkipped: SkippedCandidate[] = [];
+  const requestCandidates = excludeAttemptedCandidates(configuredCandidates, excludedRequestModels, scopeSkipped);
   const permittedCandidates = scope
-    ? configuredCandidates.filter((candidate) => {
+    ? requestCandidates.filter((candidate) => {
       const decision = checkProviderScope(scope.scope, candidate.provider, {
         tier: scope.evaluatedTier,
       });
@@ -496,7 +509,7 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
       scopeSkipped.push({ key: modelKey(candidate), reason: "provider_not_allowed", scope: decision.origin });
       return false;
     })
-    : configuredCandidates;
+    : requestCandidates;
   // A provider whose stored sign-in cannot be resolved is excluded before
   // economic admission and reliability: the request could never leave the
   // host. The reason is its own, so a dead credential is never reported as a
@@ -575,8 +588,11 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
 /** Reliability exclusions only; provider scope and sign-in rejections are
  * reported separately and must not be counted as evidence of unreliability. */
 function unreliableSkipped(pool: HealthyModelResolution): number {
-  return pool.skipped.filter((candidate) => candidate.reason !== "provider_not_allowed"
-    && candidate.reason !== "sign_in_unavailable").length;
+  return pool.skipped.filter((candidate) => candidate.reason === "open_circuit" || candidate.reason === "trial_active").length;
+}
+
+function requestAttempted(pool: HealthyModelResolution): boolean {
+  return pool.skipped.some(candidate => candidate.reason === "request_attempted");
 }
 
 function scopeRejected(pool: HealthyModelResolution): boolean {
@@ -607,6 +623,7 @@ function tierExclusionReason(
   if (unreliableSkipped(pool) > 0) return "requested_tier_unhealthy";
   if (scopeRejected(pool)) return "requested_tier_provider_excluded";
   if (reserveExcludedPool) return "requested_tier_excluded";
+  if (requestAttempted(pool)) return "request_candidates_exhausted";
   return undefined;
 }
 
@@ -626,6 +643,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     random?: () => number;
     scope?: CompiledRoutingScope;
     excludedBySignIn?: (candidate: M) => boolean;
+    excludedRequestModels?: ReadonlySet<string>;
   },
 ): RoutedModelResolution<M> {
   const now = options.now ?? Date.now();
@@ -642,6 +660,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
       ? { scope: options.scope, evaluatedTier: options.requestedTier }
       : undefined,
     options.excludedBySignIn,
+    options.excludedRequestModels,
   );
   if (primary.selected) {
     return {
@@ -661,20 +680,9 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
   const requestedExcluded = reserveExcluded(primary);
   const requestedUnreliable = unreliableSkipped(primary);
   const requestedScopeRejected = scopeRejected(primary);
-  let fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
+  const fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
     ? "requested_tier_unavailable"
-    // A pool emptied only by sign-in has no reliability evidence behind it.
-    // This path has no explicit policy, but the wording must stay the same as
-    // the explicit-boundary path: reliability state holds nothing about it.
-    : signInOnlySkipped(primary) && !requestedExcluded
-      ? "sign_in_unavailable"
-      : requestedUnreliable > 0
-        ? "requested_tier_unhealthy"
-        : requestedScopeRejected
-          ? "requested_tier_provider_excluded"
-          : requestedExcluded
-            ? "requested_tier_excluded"
-            : undefined;
+    : tierExclusionReason(primary, requestedExcluded);
 
   // Compute final reason after evaluating fallback
   const resolveFinalReason = (fb: HealthyModelResolution<M>): RoutedModelResolution<M>["fallbackReason"] => {
@@ -689,7 +697,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     if (unreliableSkipped(fb) > 0 || requestedUnreliable > 0) return "all_tiers_exhausted";
     if (scopeRejected(fb) || requestedScopeRejected) return "requested_tier_provider_excluded";
     if (reserveExcluded(primary) || reserveExcluded(fb)) return "requested_tier_excluded";
-    return fallbackReason;
+    return fallbackReason ?? tierExclusionReason(fb, reserveExcluded(fb));
   };
 
   if (!options.defaultTier || options.defaultTier === options.requestedTier) {
@@ -716,6 +724,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
       ? { scope: options.scope, evaluatedTier: options.defaultTier }
       : undefined,
     options.excludedBySignIn,
+    options.excludedRequestModels,
   );
 
   return {
@@ -733,6 +742,34 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
   };
 }
 
+/** Summarize the attempted pools without changing their selection or order. */
+function explicitBoundaryReason<M extends RoutingModelBase>(
+  requestedTier: string,
+  attempted: readonly RoutedTierAttempt<M>[],
+  selected: RoutedTierAttempt<M> | undefined,
+): RoutedModelResolution["fallbackReason"] {
+  const pools = attempted.map(attempt => attempt.resolution);
+  const primary = pools[0];
+  const reserveExcluded = (pool: HealthyModelResolution<M>): boolean =>
+    pool.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true;
+  const primaryReason = tierExclusionReason(primary, reserveExcluded(primary));
+
+  if (selected) {
+    if (selected.tier === requestedTier) return undefined;
+    return primary.candidates.length === 0 ? "requested_tier_unavailable" : primaryReason;
+  }
+  if (pools.length === 1 && primary.skipped.length > 0) return primaryReason ?? "requested_tier_unhealthy";
+  if (pools.every(pool => pool.candidates.length === 0 && pool.skipped.length === 0)) return "requested_tier_unavailable";
+
+  const anyReserveExcluded = pools.some(reserveExcluded);
+  if (signInOnlySkipped(...pools) && !anyReserveExcluded) return "sign_in_unavailable";
+  if (pools.some(pool => unreliableSkipped(pool) > 0)) return "all_tiers_exhausted";
+  if (pools.some(scopeRejected)) return "requested_tier_provider_excluded";
+  if (anyReserveExcluded) return "requested_tier_excluded";
+  if (pools.some(requestAttempted)) return "request_candidates_exhausted";
+  return undefined;
+}
+
 function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   ctx: RoutingHostContext<M>,
   options: TierResolutionOptions,
@@ -745,6 +782,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   random?: () => number,
   scope?: CompiledRoutingScope,
   excludedBySignIn?: (candidate: M) => boolean,
+  excludedRequestModels?: ReadonlySet<string>,
 ): RoutedModelResolution<M> {
   const tierOptions = [options.requestedTier, ...fallbackTiers].map((tier) => ({
     tier,
@@ -755,41 +793,13 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   for (const { tier, pattern, strategy } of tierOptions) {
     const resolution = resolveHealthyModel(ctx, pattern, strategy, reliabilityState, reliabilityConfig, now,
       economic ? { ...economic, evaluatedTier: tier } : undefined, random,
-      scope ? { scope, evaluatedTier: tier } : undefined, excludedBySignIn);
+      scope ? { scope, evaluatedTier: tier } : undefined, excludedBySignIn, excludedRequestModels);
     attemptedTiers.push({ tier, strategy, pattern, resolution });
     if (resolution.selected) break;
   }
   const selectedAttempt = attemptedTiers.find(({ resolution }) => resolution.selected);
   const primary = attemptedTiers[0].resolution;
-  const primaryReserveExcluded = primary.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true;
-  const anyReserveExcluded = attemptedTiers.some(({ resolution }) =>
-    resolution.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true);
-  const allPoolsUnavailable = attemptedTiers.every(({ resolution }) => resolution.candidates.length === 0 && resolution.skipped.length === 0);
-  const anyUnreliable = attemptedTiers.some(({ resolution }) => unreliableSkipped(resolution) > 0);
-  const anyScopeRejected = attemptedTiers.some(({ resolution }) => scopeRejected(resolution));
-  // Every attempted tier was emptied only by sign-in, so the boundary failed
-  // for lack of credentials rather than for an unavailable or unreliable tier.
-  const signInOnly = signInOnlySkipped(...attemptedTiers.map(({ resolution }) => resolution)) && !anyReserveExcluded;
-  const primaryExclusion = tierExclusionReason(primary, primaryReserveExcluded);
-  const fallbackReason: RoutedModelResolution["fallbackReason"] = selectedAttempt
-      ? selectedAttempt.tier === options.requestedTier
-        ? undefined
-        : primary.candidates.length === 0
-          ? "requested_tier_unavailable"
-          : primaryExclusion
-    : attemptedTiers.length === 1 && primary.skipped.length > 0
-      ? primaryExclusion ?? "requested_tier_unhealthy"
-    : allPoolsUnavailable
-      ? "requested_tier_unavailable"
-      : signInOnly
-        ? "sign_in_unavailable"
-      : anyUnreliable
-        ? "all_tiers_exhausted"
-        : anyScopeRejected
-          ? "requested_tier_provider_excluded"
-          : anyReserveExcluded
-            ? "requested_tier_excluded"
-            : undefined;
+  const fallbackReason = explicitBoundaryReason(options.requestedTier, attemptedTiers, selectedAttempt);
   return {
     requestedTier: options.requestedTier,
     selectedTier: selectedAttempt?.tier,

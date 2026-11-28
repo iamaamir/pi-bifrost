@@ -130,6 +130,11 @@ export class RuntimeReliabilityTracker {
     }
   }
 
+  failureFor(model: string): RuntimeFailure | undefined {
+    const pending = this.pending.get(model);
+    return pending?.outcome === "failure" ? pending : undefined;
+  }
+
   /** Returns each tracked model with explicit success, failure, or abandonment. */
   settle(): RuntimeFailure[] {
     const settled = [...this.pending.values()];

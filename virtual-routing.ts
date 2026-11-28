@@ -12,6 +12,8 @@ const REASON_LABELS: Record<RouteReasonCode, string> = {
   trial_active: "trial in progress",
   provider_not_allowed: "provider not allowed",
   sign_in_unavailable: "provider sign-in unavailable",
+  request_attempted: "already attempted in this turn",
+  request_candidates_exhausted: "attempted candidates exhausted",
   requested_tier_unhealthy: "tier unhealthy",
   requested_tier_unavailable: "tier unavailable",
   requested_tier_excluded: "reserve policy exclusion",
@@ -88,6 +90,8 @@ export interface VirtualRouteDependencies {
   overrides: VirtualOverride;
   select: (prompt: string, forcedTier?: string, signal?: AbortSignal) => Promise<Model<Api> | undefined>;
   fallback: () => Model<Api> | undefined;
+  /** A changed-model retry is a fresh admission, never a sticky dispatch. */
+  retryAlternate?: (request: ModelRouteRequest) => Promise<Model<Api> | undefined>;
   /** Last dispatched physical model — session fact, not routing policy. */
   sticky?: () => Model<Api> | undefined;
   onDispatch?: (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent) => void;
@@ -129,6 +133,8 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
       return { model, thinkingLevel };
     };
     if (request.reason !== "user") {
+      const alternate = request.reason === "retry" ? await deps.retryAlternate?.(request) : undefined;
+      if (alternate) return dispatch(alternate, clampThinkingLevel(alternate, request.thinkingLevel), "select");
       const model = sticky?.model ?? deps.fallback();
       if (!model) throw fail("no healthy physical model for virtual request");
       return dispatch(model, clampThinkingLevel(model, sticky?.thinkingLevel ?? request.thinkingLevel), "sticky");

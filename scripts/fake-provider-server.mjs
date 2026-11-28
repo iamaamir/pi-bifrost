@@ -111,6 +111,14 @@ function bifrostConfigCheckSse(response) {
  * Returns true when this call handled the response.
  */
 function simpleFixture(response, model) {
+  if (model === "tpm-request-too-large") {
+    json(response, 429, {
+      error: {
+        message: "Request too large for tpm-request-too-large on tokens per min (TPM): Limit 60000, Requested 74499. The input or output tokens must be reduced in order to run successfully.",
+      },
+    });
+    return true;
+  }
   if (model === "probe-background-slow-fail") {
     setTimeout(() => sse(response, "slow-generation-done"), 4_000);
     return true;
