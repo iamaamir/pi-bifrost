@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { normalizeFailureObservation, runtimeAllowanceEvidence } from "../failure-observations.ts";
 import { RuntimeReliabilityTracker } from "../runtime-reliability.ts";
-import { emptyReliabilityState, recordModelFailure } from "../reliability.ts";
+import { emptyReliabilityState, recordModelFailure, type ReliabilityState } from "../reliability.ts";
+import { ReliabilityStore, type ReliabilityIo } from "../reliability-store.ts";
 import { admitReliabilityV2Dispatch, emptyReliabilityV2State, settleReliabilityV2Dispatch, modelScopeKey, type ReliabilityV2Config } from "../reliability-v2.ts";
 
 const now = 1_000;
@@ -82,6 +83,30 @@ describe("runtime allowance action evidence", () => {
     }, policy);
     assert.equal(result.status, "invalid");
     assert.equal(result.state.scopes[modelScopeKey(modelKey)]?.openUntil, undefined);
+  });
+});
+
+describe("persisted V1 store authority", () => {
+  const saved: ReliabilityState[] = [];
+  const io: ReliabilityIo = {
+    load: () => emptyReliabilityState(),
+    save: (_path, state) => { saved.push(state as ReliabilityState); },
+  };
+  const config = { failureThreshold: 3, cooldownMinutes: 1, cooldownOnAllowanceExhausted: true };
+  const makeStore = () => new ReliabilityStore({ cwd: "/tmp", config, io, now: () => now });
+
+  it("persists an ordinary failure only for diagnostic-only evidence", () => {
+    const store = makeStore();
+    assert.equal(store.recordFailure(modelKey, "agent_settled", "provider failed", now, diagnostic), true);
+    const persisted = saved.at(-1)!;
+    assert.deepEqual(persisted.models[modelKey]?.failures, [now]);
+    assert.equal(persisted.models[modelKey]?.openUntil, undefined);
+  });
+  it("persists an immediate cooldown only for justified allowance intent", () => {
+    const store = makeStore();
+    assert.equal(store.recordFailure(modelKey, "agent_settled", "allowance exhausted", now, undefined, diagnostic), true);
+    const persisted = saved.at(-1)!;
+    assert.equal(persisted.models[modelKey]?.openUntil, now + 60_000);
   });
 });
 

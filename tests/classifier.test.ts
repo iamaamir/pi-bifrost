@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   categoryLabel,
   classificationPrompt,
@@ -283,6 +284,37 @@ describe("classifier", () => {
       assert.deepEqual(observed, terminal.expected);
     });
   }
+
+  it("isolates parallel Codex classifier identities and their response hints", async () => {
+    const first: Model<Api> = { ...makeModel("provider-a", "codex-first"), api: "openai-codex-responses" };
+    const second: Model<Api> = { ...makeModel("provider-b", "codex-second"), api: "openai-codex-responses" };
+    const observed: Array<{ id: string; status: number | undefined; retryAfter: string | undefined }> = [];
+    const run = (model: Model<Api>, status: number, text: string) => classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_m: unknown, _c: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status, headers: { "retry-after": "120" } }, model);
+            return { content: [], stopReason: "error", errorMessage: text };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["frontier"], "request", {
+      method: "auto",
+      onProviderHttpResponse: (providerModel, s, retryAfter) => {
+        observed.push({ id: providerModel.id, status: s, retryAfter });
+      },
+      spawnImpl: (() => { throw new Error("a qualified terminal limit must not spawn"); }) as unknown as typeof import("node:child_process").spawn,
+    });
+    await Promise.all([
+      run(first, 429, "HTTP 429 Too Many Requests"),
+      run(second, 402, "payment required"),
+    ]);
+    assert.deepEqual(observed.sort((a, b) => a.id.localeCompare(b.id)), [
+      { id: "codex-first", status: 429, retryAfter: undefined },
+      { id: "codex-second", status: 402, retryAfter: undefined },
+    ]);
+  });
 
   it("uses the final HTTP response when deciding whether a terminal failure is a rate limit", async () => {
     const model = makeModel("fixture", "classifier");

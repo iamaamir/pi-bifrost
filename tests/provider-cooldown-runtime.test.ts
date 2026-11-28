@@ -534,6 +534,27 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
     } finally { h.cleanup(); }
   });
 
+  it("keeps a Codex classifier 429 short and drops its retry hint at the registered writer", async () => {
+    const classifierModel = { ...makeModel("provider-a", "codex-classifier"), api: "openai-codex-responses" } as Model<Api>;
+    const h = fixture({
+      models: [makeModel("provider-a", "model-a"), makeModel("provider-b", "model-b")], defaultTier: "quick",
+      classifierEnabled: true, classifierModel,
+      streamSimple: (_model, _request, options) => {
+        options.onResponse({ status: 429, headers: { "retry-after": "120" } });
+        return { result: async () => ({ content: [], stopReason: "error", errorMessage: "HTTP 429 Too Many Requests" }) };
+      },
+    });
+    try {
+      const before = Date.now();
+      await input(h, h.primary, "codex-rate-user", "summarize this code");
+      const after = Date.now();
+      const rate = scopeFromSidecar(h.cwd, "rate", "provider-a");
+      assert.ok(rate?.openUntil > before, "qualified terminal 429 text must persist the existing short rate pause");
+      assert.ok(rate.openUntil <= after + 6_000, "a callback retry hint must not become terminal transport authority");
+      assert.equal(scopeFromSidecar(h.cwd, "usage", "provider-a"), undefined);
+    } finally { h.cleanup(); }
+  });
+
   it("does not write a provider pause after the runtime signal has been cancelled", async () => {
     const modelA = makeModel("provider-a", "model-a");
     const h = fixture({ models: [modelA], defaultTier: "quick" });
