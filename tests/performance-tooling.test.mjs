@@ -227,6 +227,10 @@ const CI_EQUIVALENTS = {
     why: "static-analysis.yml runs the pinned Semgrep rules with a baseline diff instead of this wrapper",
     evidence: /semgrep scan --config semgrep\//u,
   },
+  "check:docs-style": {
+    why: "docs-style.yml runs the pinned official Vale action with an advisory reporter",
+    evidence: /vale-cli\/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff/u,
+  },
   "check:secrets": {
     why: "static-analysis.yml runs the Gitleaks action and the pull-request history scanner with .gitleaks.toml",
     evidence: /gitleaks-action@|scan-gitleaks-pr-history\.sh/u,
@@ -343,6 +347,18 @@ test("fault control: the gate inventory reports an unregistered gate, stale evid
   );
   assert.equal(executableYaml('  - run: echo "# npm run check:ast"\n').includes("npm run check:ast"), true,
     "a quoted # must not truncate the command");
+});
+
+test("Vale packages are pinned and CI uses the pinned official action", () => {
+  const config = readFileSync(join(root, ".vale.ini"), "utf8");
+  assert.match(config, /github\.com\/vale-cli\/Google\/releases\/download\/v0\.7\.2\/Google\.zip/u);
+  assert.match(config, /github\.com\/vale-cli\/Microsoft\/releases\/download\/v0\.14\.2\/Microsoft\.zip/u);
+  assert.match(workflowSources, /vale-cli\/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3\.0\.0/u);
+  assert.match(workflowSources, /reporter: github-pr-annotations/u);
+  assert.doesNotMatch(workflowSources, /fail_level:|fail_on_error:/u);
+  assert.match(workflowSources, /version: "3\.28\.1"/u);
+  assert.doesNotMatch(workflowSources, /head -200/u);
+  assert.equal(existsSync(join(root, "scripts", "vale-report.sh")), false);
 });
 
 test("package scripts expose on-demand performance entry points", () => {

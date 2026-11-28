@@ -1,4 +1,14 @@
 import type { AffinityInspectEvidence, EconomicInspectEvidence, ReliabilityV2InspectEvidence } from "./diagnostics.ts";
+import {
+  assertCommandRoutes,
+  BIFROST_COMMAND_OPTIONS,
+  bifrostModePhrase,
+  commandSurface,
+  matchesCommand,
+  PREVIEW_SUB,
+  type CommandSpec,
+} from "./modules/commands/catalog.ts";
+export { BIFROST_COMMAND_OPTIONS, getBifrostCommandCompletions } from "./modules/commands/catalog.ts";
 import { stripConfigMetadata } from "./config-schema.ts";
 import { log as logNotice } from "./ui/notice.ts";
 import {
@@ -2920,9 +2930,6 @@ export type BifrostPreviewFailure = {
 /** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
 export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
 
-/** The `preview` subcommand word, as it appears in `args` and in the registry. Single source so the parser, the completion row, and the menu row cannot drift. */
-const PREVIEW_SUB = "preview";
-
 /**
  * Split leading preview flags from the prompt. Each supported flag is consumed
  * at most once; a duplicate flag remains prompt text for compatibility.
@@ -3355,26 +3362,6 @@ export async function runBifrostCommand(
   await handler(args, ctx);
 }
 
-interface CommandSpec {
-  readonly value: string;
-  readonly description: string;
-  readonly argumentHint?: string;
-  readonly aliases?: readonly string[];
-  // Orders the dashboard and never hides a command. An entry with no `menu`
-  // still appears, after the common ones. That is what makes a new registry
-  // command show up in /bifrost without a second edit.
-  readonly menu?: "common";
-  // Marks a member of an on/off-style pair, and carries everything the
-  // dashboard needs to place it: which bit of state it mirrors, which way it
-  // pushes that bit, and the note it shows while pushing it is a no-op. One
-  // registry entry, so a new reflected command cannot half-register.
-  readonly reflects?: {
-    readonly state: "enabled" | "pinned";
-    readonly sets: boolean;
-    readonly note: string;
-  };
-}
-
 interface CommandEntry {
   readonly value: string;
   readonly match: (sub: string) => boolean;
@@ -3382,139 +3369,19 @@ interface CommandEntry {
 }
 
 function exact(word: string, handler: CommandFn): CommandEntry {
-  return { value: word, match: (sub) => sub === word, handler };
+  return { value: word, match: (sub) => matchesCommand("exact", word, sub), handler };
 }
 
 // Bare prefix, no word boundary: benchmark and preview take free-text prompts,
 // so "/bifrost previewXYZ" must keep dispatching with prompt "XYZ".
 function prefix(word: string, handler: CommandFn): CommandEntry {
-  return { value: word, match: (sub) => sub.startsWith(word), handler };
+  return { value: word, match: (sub) => matchesCommand("prefix", word, sub), handler };
 }
 
 // Space-bounded: init takes flags ("init -f", "init --write") but
 // "/bifrost initialize" must not match, which bare prefix would allow.
 function spaced(word: string, handler: CommandFn): CommandEntry {
-  return { value: word, match: (sub) => sub === word || sub.startsWith(`${word} `), handler };
-}
-
-export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
-  // Reflected pairs first. The dashboard puts a reflected pair ahead of every
-  // other row, in the order these states are first mentioned here.
-  {
-    value: "on",
-    description: "Enable routing",
-    reflects: { state: "enabled", sets: true, note: "already on" },
-  },
-  {
-    value: "off",
-    description: "Disable routing",
-    reflects: { state: "enabled", sets: false, note: "already off" },
-  },
-  {
-    value: "pin",
-    description: "Lock current model",
-    reflects: { state: "pinned", sets: true, note: "already pinned" },
-  },
-  {
-    value: "unpin",
-    description: "Resume routing",
-    reflects: { state: "pinned", sets: false, note: "already unpinned" },
-  },
-  // Common commands, in menu order. The two prompt commands lead because both
-  // prefill the editor rather than run: keep them adjacent.
-  {
-    value: PREVIEW_SUB,
-    description: "Preview routing for a prompt",
-    argumentHint: `[--offline] [--trace] [--json] <prompt>`,
-    menu: "common",
-  },
-  {
-    value: "benchmark",
-    description: "Classify a benchmark prompt",
-    argumentHint: "<prompt>",
-    menu: "common",
-  },
-  { value: "providers", description: "List available providers", menu: "common" },
-  { value: "probe", description: "Probe working models", menu: "common" },
-  {
-    value: "init",
-    description: "Refresh model catalog and save setup (pass -f to probe)",
-    aliases: ["init -f"],
-    menu: "common",
-  },
-  { value: "classifier status", description: "Show classifier state", menu: "common" },
-  { value: "reload", description: "Reload config after editing", menu: "common" },
-  {
-    value: "validate",
-    description: "Validate loaded config and model references",
-    argumentHint: "[--json]",
-    menu: "common",
-  },
-  {
-    value: "inspect",
-    description: "Inspect configured models and local health",
-    argumentHint: "[--json]",
-    menu: "common",
-  },
-  {
-    value: "config reconcile",
-    description: "Preview or apply exact generated model membership",
-    argumentHint: "[flags]",
-  },
-  {
-    value: "config migrate",
-    description: "Preview or apply an explicit schema migration",
-    argumentHint: "[--source project|workspace|user] [--apply --proposal <digest>]",
-  },
-  { value: "reliability", description: "Show provider cooldowns" },
-  {
-    value: "reliability reset",
-    description: "Clear one provider cooldown",
-    argumentHint: "--provider <provider-id>",
-  },
-  {
-    value: "reliability migrate",
-    description: "Prepare receipt-owned reliability v2",
-    argumentHint: "[--fresh]",
-  },
-  // Everything else, in declaration order.
-  { value: "cache stats", description: "Show classification cache" },
-  { value: "cost", description: "Show recorded session usage and cost estimate" },
-  // Reachable from the dashboard now that the menu is derived from the
-  // registry, and still unconfirmed: this writes the cache file immediately.
-  // docs/ui-enhancements.md lists "Destructive confirmation - Confirm cache
-  // clear/config overwrite/long probe" as a Next item. Deliberately left as is
-  // here; confirmation is a separate behavior change.
-  { value: "cache clear", description: "Clear classification cache" },
-  { value: "classifier", description: "Choose classifier backend" },
-  { value: "classifier on", description: "Enable LLM classifier for this session" },
-  { value: "classifier off", description: "Disable LLM classifier for this session" },
-  { value: "classifier inherit", description: "Clear this session's classifier override" },
-  { value: "classifier test", description: "Test selected classifier backend" },
-  { value: "debug", description: "Show config and routing state" },
-] as const;
-
-export function getBifrostCommandCompletions(prefix: string) {
-  const normalized = prefix.trim().toLowerCase();
-  // Aliases are completion-only: dispatch reaches them through the parent's
-  // matcher, never through this list. Flattening here also keeps the exact-match
-  // early return below alias-aware.
-  const entries = BIFROST_COMMAND_OPTIONS.flatMap((command) => [
-    { value: command.value, description: command.description },
-    ...(command.aliases ?? []).map((alias) => ({ value: alias, description: command.description })),
-  ]);
-  // Exact commands should submit on first Enter. Returning a completion for
-  // an already-complete command makes Pi accept the suggestion first and
-  // leave the command text stuck in the editor until a second Enter.
-  if (entries.some((entry) => entry.value === normalized)) return null;
-  const items = entries
-    .filter((entry) => entry.value.startsWith(normalized))
-    .map((entry) => ({
-      value: entry.value,
-      label: entry.value,
-      description: entry.description,
-    }));
-  return items.length > 0 ? items : null;
+  return { value: word, match: (sub) => matchesCommand("spaced", word, sub), handler };
 }
 
 function formatBifrostCommandChoice(command: CommandSpec): string {
@@ -4127,62 +3994,10 @@ async function handleDiagnosticsCommand(
   await uiResult(ctx, `Bifrost ${command}`, lines);
 }
 
-// The registry is a string-valued array, so a renamed command compiles fine
-// here and only resolves to undefined at runtime, inside the picker, when a
-// user opens /bifrost. Name the offending value at the call site instead.
-function requireCommand(value: string): CommandSpec {
-  const spec = BIFROST_COMMAND_OPTIONS.find((command) => command.value === value);
-  if (!spec) throw new Error(`Bifrost: dashboard references unknown command "${value}"`);
-  return spec;
-}
-
-type ReflectedState = NonNullable<CommandSpec["reflects"]>["state"];
-
-// The member of a pair whose effect matches the state as it stands would change
-// nothing, so it is annotated rather than hidden: hiding it meant the menu
-// silently reshuffled as state flipped. Everything read here comes off the
-// command's own registry entry, so a reflected command cannot be placed without
-// also saying which way it points and what it says while it is a no-op.
-function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, ReflectedState>): boolean {
-  return spec.reflects ? spec.reflects.sets === state[spec.reflects.state] : false;
-}
-
-// Every registered command, ordered for the state as it stands: the member of
-// each reflected pair that changes something first, then the `common`
-// commands, then everything else. Ordering is all `menu` and `reflects` decide;
-// nothing here decides membership.
-function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
-  const reflectedStates = BIFROST_COMMAND_OPTIONS.map((spec) => spec.reflects?.state).filter(
-    (reflects): reflects is ReflectedState => Boolean(reflects),
+function dashboardCommands(state: Pick<BifrostState, "enabled" | "pinned">): CommandSpec[] {
+  return commandSurface(state).map(({ spec, note }) =>
+    note ? { ...spec, description: spec.description + " (" + note + ")" } : spec,
   );
-  // Groups follow the order the registry first mentions them, so the pair order
-  // is registry order too and needs no second list.
-  const groupOf = (reflects: ReflectedState): number => reflectedStates.indexOf(reflects);
-  const tierOf = (spec: CommandSpec): number =>
-    spec.reflects ? 0 : spec.menu === "common" ? 1 : 2;
-
-  const rows = BIFROST_COMMAND_OPTIONS.map((spec) => {
-    const inert = reflectedIsInert(spec, state);
-    return {
-      spec,
-      tier: tierOf(spec),
-      group: spec.reflects ? groupOf(spec.reflects.state) : 0,
-      inert,
-      note: inert ? spec.reflects?.note : undefined,
-    };
-  });
-  // Array sort is stable, so an equal key leaves the row in registry order.
-  rows.sort((a, b) => a.tier - b.tier || a.group - b.group || Number(a.inert) - Number(b.inert));
-
-  return rows.map(({ spec, note }) => {
-    // Resolve rather than reuse the mapped spec: requireCommand keeps the
-    // checked lookup on the one path that feeds the picker, so a future
-    // change that builds rows from anywhere but a registry read fails with a
-    // named error instead of a TypeError inside the formatter.
-    const resolved = requireCommand(spec.value);
-    // A copy, so the registry keeps the bare description for autocomplete.
-    return note ? { ...resolved, description: `${resolved.description} (${note})` } : resolved;
-  });
 }
 
 async function pickBifrostCommand(
@@ -4934,6 +4749,7 @@ export function createCommandRouter(
     }),
     prefix(PREVIEW_SUB, (args, ctx) => handlePreview(args, ctx, state)),
   ];
+  assertCommandRoutes(routes);
 
   return async (args: string, ctx: ExtensionContext) => {
     const trimmed = args.trim();
@@ -4949,7 +4765,7 @@ export function createCommandRouter(
         return;
       }
 
-      const mode = !state.enabled ? "off" : state.pinned ? "pinned" : "on";
+      const mode = bifrostModePhrase(state);
       const selected = await pickBifrostCommand(
         ctx,
         `Bifrost · ${mode} · model ${modelKey(ctx.model)}${openCircuitCount(state) > 0 ? ` · circuits ${openCircuitCount(state)} open` : ""}`,
