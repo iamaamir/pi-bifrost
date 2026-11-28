@@ -118,6 +118,8 @@ export function assertPending(evidence) {
   assert.deepEqual(evidence.requests.map(({ model, completed, userMessageDigest }) => [model, completed, userMessageDigest]),
     MODELS.map((model, index) => [model, index !== 2, digest(PROMPTS[index])]), "wrong pending provider requests");
   assert.equal(evidence.state.models["fake/fast"].trialActive, true, "held half-open trial was not claimed");
+  assert.ok(!evidence.debug.some((event) => event.event === "legacy_outcome_observed"
+    && event.model === "fake/fast" && event.outcome === "success"), "held trial already settled successfully");
   assert.throws(() => assertSingleRun(evidence), /incorrect run boundaries or turn count/,
     "an unfinished real run must not pass");
 }
