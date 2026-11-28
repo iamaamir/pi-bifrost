@@ -24,7 +24,7 @@ After any edit, run `/bifrost reload` in Pi.
 
 ## Reliability: circuit breaker for flaky models
 
-Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`, and keep its current `default` and `models` values.
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`, and keep its current `default` and `models` values. Do not replace the full configuration with this fragment.
 
 ```json
 {
@@ -38,29 +38,40 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 ```
 
 **What this does:**
-- Records probe and runtime failures
-- Opens circuit after `failureThreshold` failures in `windowMinutes`
+- Records probe failures, failed Pi model activation (`setModel` errors), and settled provider stream failures
+- Opens a model circuit after `failureThreshold` failures in `windowMinutes`
 - Skips open-circuit models, falls back to default tier
 - After `cooldownMinutes`, allows one trial request: success closes the circuit, failure reopens it with a longer cooldown
-- Keeps breaker state locally across restarts
+- Persists breaker state in `.pi/bifrost-reliability.json`
+
+Usage and billing rejections follow the provider-pause policy, not this model circuit. The one alternate Auto attempt after such a rejection is opt-in: set `reliability.retryOnAllowanceExhausted` to `true`, and Pi must prove the failed turn was empty and safe to continue.
 
 See full example: `economical-frontier-reliability.json`
 
 The experimental Auto reliability configuration is shown in `reliability-v2-auto.json`. Follow the [setup and migration steps](../docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state) and prepare the state file before you use this configuration.
 
+The preview commands below use `--offline` to inspect local route selection without a classifier call or generation. Probes send a small request to available models and can use provider credits or reach rate limits; a normal preview with an enabled classifier can send the prompt to that classifier and incur usage. See [probe usage](../docs/guide/getting-started.md#probe-usage-warning) and [preview before generation](../docs/guide/workflows.md#preview-before-generation).
+
 Try:
 
 ```text
-/bifrost preview fix this race condition
-/bifrost preview summarize this file
+/bifrost preview --offline fix this race condition
+/bifrost preview --offline summarize this file
 ```
 
 A model that fails repeatedly, such as on a network timeout or auth error, is skipped temporarily and routing falls back to the default tier.
 
 ## Install Bifrost
 
+Install the package in a shell:
+
 ```sh
 pi install npm:pi-bifrost
+```
+
+Then run this inside Pi:
+
+```text
 /bifrost init
 ```
 
@@ -86,14 +97,14 @@ Use `--source user` for the user config layer. Reconciliation edits one source a
 Preview before sending:
 
 ```text
-/bifrost preview fix the race condition in the worker queue
+/bifrost preview --offline fix the race condition in the worker queue
 ```
 
 ## Recipes
 
 ### `economic-reserve-observe.json`
 
-Starts with a provider-scoped estimate in observe mode. Add a user-entered observation when you have a current balance fact, then switch `mode` to `"policy"` after reviewing `/bifrost inspect` and the configured unknown handling. Billing facts come from your observations; account spend stays with the provider.
+Starts with a provider-scoped estimate in observe mode. The example includes no balance or remaining-allowance observation; observations come only from facts you provide. Add a user-entered observation only when you have a current fact, then use `mode: "policy"` only after reviewing `/bifrost inspect` and the configured unknown handling. Understand that unknown handling before enabling policy mode. Pi does not fetch billing data or provide an account-level spend cap.
 
 Try:
 
@@ -103,7 +114,7 @@ Try:
 
 ### `economic-billing-preference.json`
 
-Shows an explicit subscription preference between two models with different declared billing classes. The preference-only policy has `admission: []`: it changes strategy ordering only when a fresh preferred-class fact exists among final eligible candidates in the selected tier. Reserve- and circuit-excluded candidates stay excluded, and tier boundaries stay fixed. Savings depend on provider prices and the facts you declare. The example uses static facts only.
+Shows an explicit subscription preference between two models with different declared billing classes. The preference-only policy has `admission: []`: it changes strategy ordering only when a fresh preferred-class fact exists among final eligible candidates in the selected tier. It does not restore reserve- or circuit-excluded candidates, cross a tier boundary, or guarantee savings. The example uses static facts only; no adapter or account binding is configured.
 
 The command shows the source alias, period, and freshness without printing quota values.
 
@@ -120,8 +131,8 @@ The selected generation provider still receives the prompt.
 Try:
 
 ```text
-/bifrost preview explain what this function does
-/bifrost preview fix this race condition
+/bifrost preview --offline explain what this function does
+/bifrost preview --offline fix this race condition
 ```
 
 Tradeoff: routing follows only the patterns you define.
@@ -139,8 +150,8 @@ General-purpose setup for using cheap models by default and stronger models for 
 Try:
 
 ```text
-/bifrost preview summarize this file
-/bifrost preview design a retry strategy for this distributed worker
+/bifrost preview --offline summarize this file
+/bifrost preview --offline design a retry strategy for this distributed worker
 ```
 
 Tradeoff: better coverage for ambiguous prompts, with possible classifier tokens and latency on cache misses.
@@ -158,8 +169,8 @@ Replace `provider/replace-with-large-context-model` with an installed model.
 Try:
 
 ```text
-/bifrost preview analyze the whole repository for duplicated authorization logic
-/bifrost preview summarize this 20000-line log
+/bifrost preview --offline analyze the whole repository for duplicated authorization logic
+/bifrost preview --offline summarize this 20000-line log
 ```
 
 Tradeoff: large-context models may cost more or respond slower.
@@ -176,8 +187,8 @@ Use when certain operations must always use a specific model.
 Try:
 
 ```text
-/bifrost preview write the changelog for this release
-/bifrost preview run through this security audit
+/bifrost preview --offline write the changelog for this release
+/bifrost preview --offline run through this security audit
 ```
 
 Tradeoff: exact bindings are predictable but less flexible when model availability changes.
@@ -194,10 +205,10 @@ Use when you want fine-grained routing across many task types from one shared po
 Try:
 
 ```text
-/bifrost preview review this pull request
-/bifrost preview debug this memory leak
-/bifrost preview summarize these logs
-/bifrost preview use a free model only
+/bifrost preview --offline review this pull request
+/bifrost preview --offline debug this memory leak
+/bifrost preview --offline summarize these logs
+/bifrost preview --offline use a free model only
 ```
 
 Tradeoff: more categories to maintain, but routing matches task shape closely.
@@ -219,9 +230,9 @@ Use when the built-in classifier prompt is too terse for your workflow and you w
 Try:
 
 ```text
-/bifrost preview design a migration strategy for this database
-/bifrost preview write unit tests for this function
-/bifrost preview format this json
+/bifrost preview --offline design a migration strategy for this database
+/bifrost preview --offline write unit tests for this function
+/bifrost preview --offline format this json
 ```
 
 Tradeoff: more tokens per classification, but sharper routing on ambiguous prompts.
@@ -247,9 +258,9 @@ The example separates frontend, backend, and infrastructure work. Add matching t
 Try:
 
 ```text
-/bifrost preview make this layout responsive
-/bifrost preview add an index for this query
-/bifrost preview update the deployment pipeline
+/bifrost preview --offline make this layout responsive
+/bifrost preview --offline add an index for this query
+/bifrost preview --offline update the deployment pipeline
 ```
 
 Tradeoff: project-local rules keep routing relevant, but they need maintenance as the repository changes.
@@ -268,7 +279,7 @@ frontier implement the auth module
 /bifrost classifier status
 ```
 
-Use `/bifrost preview` before changing rules. Use `/bifrost debug` to inspect loaded tiers and rules, `/bifrost benchmark` to compare per-tier candidates, and `/bifrost probe` to check which models respond.
+Use `/bifrost preview --offline` before changing rules. Use `/bifrost debug` to inspect loaded tiers and rules, `/bifrost benchmark` to compare per-tier candidates, and `/bifrost probe` to check which models respond.
 
 ## Strategy cookbook
 
