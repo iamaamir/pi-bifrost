@@ -50,7 +50,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
 | `npm run check:package` | Builds `dist/router`, then publint reports problems in the packed package | `npm ci` |
 | `npm run lint` | Oxlint reports code findings; errors stop the command | `npm ci` |
-| `npm run check:docs-style` | Vale style findings in `docs/guide/`; advisory, so findings do not gate a PR (see [`guide/STYLE.md`](guide/STYLE.md)). CI uses the pinned [official Vale action](../.github/workflows/docs-style.yml) with an advisory reporter; style packages are pinned by release URL in `.vale.ini` | local `vale` (optional, on demand only) |
+| `npm run check:docs-style` | Vale style findings in `docs/guide/`; advisory, so findings do not gate a PR (see [`guide/STYLE.md`](guide/STYLE.md)). CI uses the pinned [official Vale action](../.github/workflows/docs-style.yml) with an advisory reporter; GitHub shows at most 10 annotations, and the complete finding list stays in the job log. Style packages are pinned by release URL in `.vale.ini` | local `vale` (optional, on demand only) |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
 | `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |

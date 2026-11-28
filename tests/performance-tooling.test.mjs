@@ -355,6 +355,7 @@ test("Vale packages are pinned and CI uses the pinned official action", () => {
   assert.match(config, /github\.com\/vale-cli\/Microsoft\/releases\/download\/v0\.14\.2\/Microsoft\.zip/u);
   assert.match(workflowSources, /vale-cli\/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3\.0\.0/u);
   assert.match(workflowSources, /reporter: github-pr-annotations/u);
+  assert.doesNotMatch(workflowSources, /fail_level:|fail_on_error:/u);
   assert.match(workflowSources, /version: "3\.28\.1"/u);
   assert.doesNotMatch(workflowSources, /head -200/u);
   assert.equal(existsSync(join(root, "scripts", "vale-report.sh")), false);
