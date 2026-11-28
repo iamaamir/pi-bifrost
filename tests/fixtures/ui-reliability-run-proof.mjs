@@ -30,7 +30,10 @@ function assertTurns(events, prompts, models) {
   assert.deepEqual(turns.map((turn) => [turn.provider, turn.model, turn.stopReason]),
     models.map((model) => ["fake", model, "stop"]), "incorrect native turn outcomes");
   const messages = events.at(-1).messages;
-  assert.deepEqual(messages.map((message) => message.role === "user"
+  // Pinned Pi persists one leading system message; do not discard any
+  // other entry or permit system messages to interrupt the user/assistant sequence.
+  assert.equal(messages[0]?.role, "system", "missing leading system message");
+  assert.deepEqual(messages.slice(1).map((message) => message.role === "user"
     ? ["user", message.text] : [message.role, message.provider, message.model, message.stopReason]),
   prompts.flatMap((prompt, index) => [["user", prompt], ["assistant", "fake", models[index], "stop"]]),
   "incorrect final branch transcript");

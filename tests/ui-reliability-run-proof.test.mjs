@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { assertSingleRun, assertControl, assertPending, MODELS, PROMPTS } from "./fixtures/ui-reliability-run-proof.mjs";
 
 function evidence(runs = [3]) {
-  const events = [], debug = [], messages = [], requests = [];
+  const events = [], debug = [], messages = [{ role: "system", id: "system" }], requests = [];
   let index = 0;
   for (const [runIndex, count] of runs.entries()) {
     const run = runIndex + 1;
@@ -60,7 +60,11 @@ const faults = [
   ["reordered dispatch", (v) => { [v.requests[0], v.requests[1]] = [v.requests[1], v.requests[0]]; }, /provider request identity/],
   ["wrong request content", (v) => { v.requests[1].userMessageDigest = v.requests[0].userMessageDigest; }, /provider request identity/],
   ["unstripped tier override at provider", (v) => { v.requests[1].userMessageDigest = createHash("sha256").update("frontier one").digest("hex"); }, /provider request identity/],
-  ["unstripped tier override in branch", (v) => { v.events.at(-1).messages[2].text = "frontier one"; }, /final branch transcript/],
+  ["unstripped tier override in branch", (v) => { v.events.at(-1).messages[3].text = "frontier one"; }, /final branch transcript/],
+  ["missing leading system message", (v) => { v.events.at(-1).messages.shift(); }, /missing leading system message/],
+  ["extra leading system message", (v) => { v.events.at(-1).messages.unshift({ role: "system", id: "extra" }); }, /final branch transcript/],
+  ["interleaved system message", (v) => { v.events.at(-1).messages.splice(3, 0, { role: "system", id: "extra" }); }, /final branch transcript/],
+  ["duplicate system identity", (v) => { v.events.at(-1).messages[0].id = "u0"; }, /duplicate message entries/],
   ["duplicate correlation", (v) => { v.debug[1].request_correlation_id = v.debug[0].request_correlation_id; }, /duplicate dispatch request/],
   ["unrelated settlement", (v) => { v.debug.at(-1).session_correlation_id = "other"; }, /observed settlement outcomes/],
   ["premature settlement", (v) => { v.debug.splice(1, 0, v.debug.splice(4, 1)[0]); }, /settlement occurred outside/],

@@ -180,6 +180,20 @@ if (!current.stats.slice(before.stats.length).some((stat) => stat.kind === "gene
   return 1
 }
 
+# Collect all independent proof failures in one run. Setup, transport and
+# terminal-wait failures still abort immediately under set -e.
+proof_failed=0
+check_multi_dispatch_proof(){
+  local mode="$1" snapshot="$2"
+  if ! node "$proof" "$mode" "$work" "$work/before.json" "$snapshot"; then
+    proof_failed=1
+    echo "FAIL: scenario 6 $mode proof" >&2
+    cat "$work/.pi/ui-run.jsonl" "$work/.pi/bifrost-reliability.json" >&2 || true
+    cat "$work/before.json" "$snapshot" >&2 || true
+    tail -n 80 "$work/.pi/bifrost-debug.jsonl" >&2 || true
+  fi
+}
+
 run_multi_dispatch(){
   local mode="$1"
   home="$tmp/home-$mode"; work="$tmp/work-$mode"
@@ -223,7 +237,7 @@ EOF
       # Real negative control: the third dispatch exists, but it is held
       # before completion and its trial is still active. The same proof must
       # reject this snapshot before accepting the eventual settled run.
-      node "$proof" pending "$work" "$work/before.json" "$work/current-stats.json"
+      check_multi_dispatch_proof pending "$work/current-stats.json"
       generation_gate release fast
     fi
     wait_settled_count 1
@@ -240,11 +254,7 @@ EOF
     sleep 1
   done
   curl -fsS --max-time 5 "http://127.0.0.1:$port/_stats" >"$work/after.json"
-  if ! node "$proof" "$mode" "$work" "$work/before.json" "$work/after.json"; then
-    cat "$work/.pi/ui-run.jsonl" "$work/.pi/bifrost-reliability.json" >&2 || true
-    tail -n 80 "$work/.pi/bifrost-debug.jsonl" >&2 || true
-    exit 1
-  fi
+  check_multi_dispatch_proof "$mode" "$work/after.json"
   "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true
   "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 }
@@ -252,6 +262,10 @@ echo '--- scenario 6: queued multi-dispatch settlement and runtime controls ---'
 run_multi_dispatch positive
 run_multi_dispatch missing
 run_multi_dispatch separate
+if (( proof_failed != 0 )); then
+  echo 'FAIL: one or more scenario 6 lifecycle proofs failed' >&2
+  exit 1
+fi
 echo 'scenario 6: pass'
 
 if [[ -s "$tmp/test-network-violations.log" ]]; then
