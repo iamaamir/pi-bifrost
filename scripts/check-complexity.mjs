@@ -366,7 +366,7 @@ function analyze({ root = ROOT, skipped = [] } = {}) {
   return {
     version: 1,
     note:
-      "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase against the target revision; per-file maxima must not increase; new files must not exceed the target scope maxima.",
+      "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase against the target revision; per-file maxima must not increase; new files must not exceed the target scope maxima or absolute new-file budgets.",
     inputDigest: digest.digest("hex"),
     scopes: { source: scopeSummary("source"), tests: scopeSummary("tests") },
     files: sortedFiles,
@@ -571,6 +571,10 @@ function candidateFingerprint(repo) {
 
 const SCOPE_RATCHET_FIELDS = ["maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
 const FILE_RATCHET_FIELDS = ["maxCyc", "maxCog"];
+const NEW_FILE_BUDGETS = {
+  source: { maxCyc: 10, maxCog: 15 },
+  tests: { maxCyc: 15, maxCog: 20 },
+};
 
 function increasedFields(actual, ceiling, fields) {
   return fields.filter((key) => (actual[key] ?? 0) > (ceiling[key] ?? 0));
@@ -590,7 +594,8 @@ function scopeFindings(baseline, current) {
 }
 
 // A baselined file is judged against its own record; a new path is judged against
-// its scope ceiling until the first baseline that records it. Rename detection is
+// its scope ceiling until the first baseline that records it. The absolute
+// budget is checked separately. Rename detection is
 // deliberately not an identity signal: path identity follows ADR 0027.
 function fileFindings(rel, data, baseline) {
   const base = baseline.files?.[rel];
@@ -605,10 +610,21 @@ function fileFindings(rel, data, baseline) {
   }));
 }
 
+function newFileBudgetFindings(rel, data, baseline) {
+  if (Object.hasOwn(baseline.files ?? {}, rel)) return [];
+  const budget = NEW_FILE_BUDGETS[data.scope];
+  return increasedFields(data, budget, FILE_RATCHET_FIELDS).map((key) => ({
+    rule: `new-file-${key}-exceeds-absolute-budget`,
+    file: rel,
+    line: null,
+    message: `new file ${key} ${data[key]} exceeds ${data.scope} absolute budget ${budget[key]}`,
+  }));
+}
+
 function compare(baseline, current) {
   const findings = scopeFindings(baseline, current);
   for (const [rel, data] of Object.entries(current.files || {})) {
-    findings.push(...fileFindings(rel, data, baseline));
+    findings.push(...fileFindings(rel, data, baseline), ...newFileBudgetFindings(rel, data, baseline));
   }
   // Removed files are improvements; not reported as findings.
   return findings;
