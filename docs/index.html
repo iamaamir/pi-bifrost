@@ -189,7 +189,7 @@
             </section>
             <section id="preview" class="story-secondary" data-demo-scene="preview" aria-labelledby="preview-title">
               <p class="eyebrow">08 / Check before sending</p><h2 id="preview-title">Preview the actual model.</h2>
-              <p>Run <code>/bifrost preview security audit this code</code> in Pi. It reports the chosen tier, model, source, and exclusions, and leaves generation and Pi's active model untouched. An enabled classifier can receive the preview text and incur usage. Preview treats a leading tier name as literal prompt text. Pass <code>--json</code> before the prompt for a machine-readable report.</p>
+              <p>An enabled classifier can receive the preview text and incur usage. Run <code>/bifrost preview security audit this code</code> in Pi. It reports the chosen tier, model, source, and exclusions, and leaves generation and Pi's active model untouched. Preview treats a leading tier name as literal prompt text. Pass <code>--json</code> before the prompt for a machine-readable report.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/workflows.md#preview-before-generation">Learn what preview does and does not run</a>.</p>
             </section>
             <section id="control" class="story-secondary" data-demo-scene="control" aria-labelledby="control-title">
@@ -404,9 +404,11 @@
               Bifrost records model failures and can stop using a model for a
               time. Usage or billing rejections pause the same configured Pi
               provider by default in Auto and physical routing. A generic HTTP
-              429 pauses that provider briefly. Auto can make one alternate
-              attempt only after Pi proves the failure was empty and safe to
-              continue. A provider pause applies even to a pinned model.
+              429 pauses that provider briefly. Auto can make at most one
+              alternate attempt after a usage or billing rejection only when
+              <code>reliability.retryOnAllowanceExhausted: true</code> and Pi
+              proves every failed attempt was empty and safe to continue. A
+              provider pause applies even to a pinned model.
             </p>
           </div>
         </details>
