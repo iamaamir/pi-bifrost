@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BIFROST_COMMAND_OPTIONS } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS } from "../modules/commands/catalog.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 

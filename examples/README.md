@@ -2,7 +2,7 @@
 
 ## Router SDK consumer examples
 
-These run wherever `pi-bifrost` is installed — no Pi, no API key, no provider connection:
+These are standalone: install `pi-bifrost` and run them without Pi, an API key, or a provider connection:
 
 - `examples/router-standalone.mjs` — a standalone Node.js application: custom tiers, selected and no-decision results, and known-but-unavailable reporting from `pi-bifrost/router`.
 - `examples/host-adapter.mjs` — a host integration: translate your inventory into public DTOs, resolve, revalidate, and let your host dispatch.
@@ -11,20 +11,20 @@ The Pi config recipes below need a running Pi with Bifrost installed.
 
 ## Config recipes
 
-These recipes show decisions Bifrost can automate. They are templates, not universal model lists. Replace model patterns with models available in your Pi registry.
+These recipes show decisions Bifrost can automate. Treat them as templates and replace model patterns with models available in your Pi registry.
 
 Where files live:
 
 - **Complete example files** in this directory are full config files. Copy one to `.pi/bifrost.json` for a single project, or `~/.pi/agent/bifrost.json` for all projects.
 - **Fragments** shown below are added inside that same `.pi/bifrost.json` file.
 
-Tier keys may use any name you like, but only a single lowercase alphabetic word (such as `quick`) can be typed at the start of a message to force that tier.
+A tier key may use any name you like. Only one lowercase alphabetic word, such as `quick`, can be typed at the start of a message as a prefix.
 
 After any edit, run `/bifrost reload` in Pi.
 
 ## Reliability: circuit breaker for flaky models
 
-Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`. Keep its current `default` and `models` values. Do not replace the full config with this fragment.
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`, and keep its current `default` and `models` values. Do not replace the full configuration with this fragment.
 
 ```json
 {
@@ -38,33 +38,44 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 ```
 
 **What this does:**
-- Records probe failures and runtime failures (`setModel` errors)
-- Opens circuit after `failureThreshold` failures in `windowMinutes`
+- Records probe failures, failed Pi model activation (`setModel` errors), and settled provider stream failures
+- Opens a model circuit after `failureThreshold` failures in `windowMinutes`
 - Skips open-circuit models, falls back to default tier
 - After `cooldownMinutes`, allows one trial request: success closes the circuit, failure reopens it with a longer cooldown
 - Persists breaker state in `.pi/bifrost-reliability.json`
+
+Usage and billing rejections follow the provider-pause policy, not this model circuit. The one alternate Auto attempt after such a rejection is opt-in: set `reliability.retryOnAllowanceExhausted` to `true`, and Pi must prove the failed turn was empty and safe to continue.
 
 See full example: `economical-frontier-reliability.json`
 
 The experimental Auto reliability configuration is shown in `reliability-v2-auto.json`. Follow the [setup and migration steps](../docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state) and prepare the state file before you use this configuration.
 
+The preview commands below use `--offline` to inspect local route selection without a classifier call or generation. Probes send a small request to available models and can use provider credits or reach rate limits; a normal preview with an enabled classifier can send the prompt to that classifier and incur usage. See [probe usage](../docs/guide/getting-started.md#probe-usage-warning) and [preview before generation](../docs/guide/workflows.md#preview-before-generation).
+
 Try:
 
 ```text
-/bifrost preview fix this race condition
-/bifrost preview summarize this file
+/bifrost preview --offline fix this race condition
+/bifrost preview --offline summarize this file
 ```
 
-If a model fails repeatedly (e.g., network timeout or auth error), it will be skipped temporarily and the system falls back to the default tier.
+A model that fails repeatedly, such as on a network timeout or auth error, is skipped temporarily and routing falls back to the default tier.
 
-## Install Bifrost first:
+## Install Bifrost
+
+Install the package in a shell:
 
 ```sh
 pi install npm:pi-bifrost
+```
+
+Then run this inside Pi:
+
+```text
 /bifrost init
 ```
 
-Init asks one time before it saves. When Pi gives Bifrost no UI, you must use `/bifrost init --write` to save the proposal. Add `-f` for new probes. Add `-g` for the global configuration.
+Init asks once before saving. A session with no UI saves the proposal with `/bifrost init --write`. Add `-f` for new probes. Add `-g` for the global configuration.
 
 Copy a recipe to `.pi/bifrost.json`, then reload:
 
@@ -74,7 +85,7 @@ Copy a recipe to `.pi/bifrost.json`, then reload:
 
 ## Reconcile generated model membership
 
-Preview and apply are separate steps. Preview is offline by default; `--refresh` explicitly contacts one provider and still only creates a proposal.
+Preview and apply are separate steps. Preview is offline by default; `--refresh` contacts one provider and still creates only a proposal.
 
 ```text
 /bifrost config reconcile --source project --tier general --provider openai --json
@@ -86,14 +97,14 @@ Use `--source user` for the user config layer. Reconciliation edits one source a
 Preview before sending:
 
 ```text
-/bifrost preview fix the race condition in the worker queue
+/bifrost preview --offline fix the race condition in the worker queue
 ```
 
 ## Recipes
 
 ### `economic-reserve-observe.json`
 
-Starts with a provider-scoped estimate in observe mode. The example includes no balance or remaining allowance. Add a user-entered observation only when you have a current fact, then use `mode: "policy"` only after reviewing `/bifrost inspect` and the configured unknown handling. Pi does not fetch billing data or provide an account-level spend cap.
+Starts with a provider-scoped estimate in observe mode. The example includes no balance or remaining-allowance observation; observations come only from facts you provide. Add a user-entered observation only when you have a current fact, then use `mode: "policy"` only after reviewing `/bifrost inspect` and the configured unknown handling. Understand that unknown handling before enabling policy mode. Pi does not fetch billing data or provide an account-level spend cap.
 
 Try:
 
@@ -109,20 +120,19 @@ The command shows the source alias, period, and freshness without printing quota
 
 ### `rules-only-local.json`
 
-Use when routing should follow explicit patterns and skip the extra classifier call.
+Use when routing should follow explicit patterns without the extra classifier call.
 
-- Disables the LLM classifier.
-- Uses ordered regex rules.
+- Uses ordered regex rules without the LLM classifier.
 - Routes complex work to a local frontier tier.
 - Falls back to `economical` when no rule matches.
 
-This setting disables the extra classification call. It does not change which provider receives the generation prompt.
+The selected generation provider still receives the prompt.
 
 Try:
 
 ```text
-/bifrost preview explain what this function does
-/bifrost preview fix this race condition
+/bifrost preview --offline explain what this function does
+/bifrost preview --offline fix this race condition
 ```
 
 Tradeoff: routing follows only the patterns you define.
@@ -131,17 +141,19 @@ Tradeoff: routing follows only the patterns you define.
 
 General-purpose setup for using cheap models by default and stronger models for harder work.
 
-- Optional classifier handles prompts regex rules do not describe well.
+- Optional classifier handles prompts that regex rules miss.
 - Economical tier selects by combined cost.
 - Frontier tier selects the largest available context window.
 - Classification cache reduces repeated classifier calls.
 - Regex remains the fallback path.
 
+These `--offline` previews show only local cache, rules, and default-tier selection for that request. They skip this recipe's optional classifier, so they do not show classifier-driven routing. Remove `--offline` to exercise the classifier, which can receive the prompt and incur provider usage. See [preview before generation](../docs/guide/workflows.md#preview-before-generation) for the pipeline.
+
 Try:
 
 ```text
-/bifrost preview summarize this file
-/bifrost preview design a retry strategy for this distributed worker
+/bifrost preview --offline summarize this file
+/bifrost preview --offline design a retry strategy for this distributed worker
 ```
 
 Tradeoff: better coverage for ambiguous prompts, with possible classifier tokens and latency on cache misses.
@@ -159,8 +171,8 @@ Replace `provider/replace-with-large-context-model` with an installed model.
 Try:
 
 ```text
-/bifrost preview analyze the whole repository for duplicated authorization logic
-/bifrost preview summarize this 20000-line log
+/bifrost preview --offline analyze the whole repository for duplicated authorization logic
+/bifrost preview --offline summarize this 20000-line log
 ```
 
 Tradeoff: large-context models may cost more or respond slower.
@@ -177,20 +189,22 @@ Use when certain operations must always use a specific model.
 Try:
 
 ```text
-/bifrost preview write the changelog for this release
-/bifrost preview run through this security audit
+/bifrost preview --offline write the changelog for this release
+/bifrost preview --offline run through this security audit
 ```
 
 Tradeoff: exact bindings are predictable but less flexible when model availability changes.
 
 ### `task-aware-routing.json`
 
-Use when you want fine-grained routing across many task types without maintaining per-project rules.
+Use when you want fine-grained routing across many task types from one shared policy.
 
 - 14 categories: `architecture`, `implementation`, `debugging`, `code_review`, `reasoning`, `frontend`, `testing`, `summarisation`, `writing`, `quick`, `long_context`, `free_pool`, `premium`, and `general`.
 - Per-category selection strategies (e.g. `cheapest_input` for summarisation, `largest_context` for long_context).
 - Task-tuned classifier system prompt and regex fallback rules.
 - Model lists use placeholder `provider/...` patterns — replace them with models from your Pi registry.
+
+This recipe routes by task intent through its tuned classifier, so use a normal preview to exercise that path. An enabled classifier can receive the prompt and incur provider usage. `--offline` skips that call and shows only rules and defaults. See [preview before generation](../docs/guide/workflows.md#preview-before-generation) for the pipeline.
 
 Try:
 
@@ -216,6 +230,8 @@ Use when the built-in classifier prompt is too terse for your workflow and you w
 - Overrides `classifier.systemPrompt` with a detailed 3-tier task description.
 - Keeps the same `quick` / `general` / `frontier` model tiers as the default config.
 - Works best when the classifier model is capable enough to follow nuanced instructions.
+
+This recipe demonstrates the customized classifier prompt, so use a normal preview. An enabled classifier can receive the prompt and incur provider usage. A cache hit or another earlier resolution path may prevent that classifier call for a request, so one preview does not prove the classifier ran. `--offline` bypasses classifier calls for that request and does not change session classifier settings, so it does not demonstrate the customized classifier. See [preview before generation](../docs/guide/workflows.md#preview-before-generation) and [preview output](../docs/guide/commands.md#preview-output) for the precise pipeline.
 
 Try:
 
@@ -248,9 +264,9 @@ The example separates frontend, backend, and infrastructure work. Add matching t
 Try:
 
 ```text
-/bifrost preview make this layout responsive
-/bifrost preview add an index for this query
-/bifrost preview update the deployment pipeline
+/bifrost preview --offline make this layout responsive
+/bifrost preview --offline add an index for this query
+/bifrost preview --offline update the deployment pipeline
 ```
 
 Tradeoff: project-local rules keep routing relevant, but they need maintenance as the repository changes.
@@ -269,7 +285,7 @@ frontier implement the auth module
 /bifrost classifier status
 ```
 
-Use `/bifrost preview` before changing rules. Use `/bifrost debug` to inspect loaded tiers and rules, `/bifrost benchmark` to compare per-tier candidates, and `/bifrost probe` to check which models respond.
+Use `/bifrost preview --offline` before changing rules. Use `/bifrost debug` to inspect loaded tiers and rules, `/bifrost benchmark` to compare per-tier candidates, and `/bifrost probe` to check which models respond.
 
 ## Strategy cookbook
 

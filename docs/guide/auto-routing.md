@@ -6,7 +6,7 @@ Select `bifrost/auto` in Pi's `/model` picker to use Auto. Auto is opt-in. Physi
 
 Pi's footer shows the Auto selection and the physical model that handles the request. Assistant messages record the physical model. Tool continuations stay on the model that started the turn.
 
-A tier is a named group of allowed models, such as `quick`, `general`, or `frontier`. A strategy is a rule that selects one model from a tier. A classifier is an optional model call that picks a configured tier. It does not select a physical model. A direct model binding selects one exact `provider/id` from a rule.
+A tier is a named group of allowed models, such as `quick`, `general`, or `frontier`. A strategy is a rule that selects one model from a tier. A classifier is an optional model call that picks a configured tier; the tier strategy selects the physical model. A direct model binding selects one exact `provider/id` from a rule.
 
 ## Select and dispatch a model
 
@@ -114,13 +114,13 @@ Set `affinity.mode` to `off` or `observe` when you want to change Auto retention
 
 ## Recover from one empty allowance failure
 
-Auto can make one attempt on a different configured model after an explicit usage or billing rejection. Text that clearly says a subscription is required or expired also counts as a billing rejection; a generic HTTP 403 does not. This recovery is disabled by default. Set `reliability.retryOnAllowanceExhausted` to `true` to opt in. The provider pause still applies.
+Auto can make one attempt on a different configured model after an explicit usage or billing rejection. Text that clearly says a subscription is required or expired also counts as a billing rejection; a generic HTTP 403 stays a generic failure. This recovery is opt-in. Set `reliability.retryOnAllowanceExhausted` to `true` to enable it. The provider pause still applies.
 
 Pi must prove that every failed attempt from the original user turn was empty and came from the same model. Pi must record a null context edit for each earlier failure. This exact edit omits an empty reply from the next request and keeps it in the transcript. The turn must have no tool calls, tool results, queued messages, aborts, or intervening messages. The session, branch, configuration, and manual-control state must stay unchanged. Pi must finish its own bounded retry first. Unknown or unsafe turns stop without recovery.
 
-Bifrost saves the applicable model or provider pause before it rechecks the configured pools. By default, usage and billing rejections pause all models with the same configured Pi provider ID. The setting `reliability.allowanceCooldownScope: "model"` limits those pauses to one model. Generic HTTP 429 rate limits remain provider-scoped. Bifrost does not identify shared billing accounts or fetch live usage limits.
+Bifrost saves the applicable model or provider pause before it rechecks the configured pools. By default, usage and billing rejections pause all models with the same configured Pi provider ID. The setting `reliability.allowanceCooldownScope: "model"` limits those pauses to one model. Generic HTTP 429 rate limits remain provider-scoped. Pauses use configured provider IDs and recorded request errors; see [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) for the boundary.
 
-Bifrost applies normal eligibility rules before it dispatches one alternate. An explicit tier prefix can recover only when the initial selection stayed in that tier, and its alternate must also come from that tier. If the initial selection fell back to another tier or the requested tier has no eligible alternate, recovery stops even when a general fallback is configured. Unprefixed Auto keeps its existing fallback behavior. Bifrost does not send the prompt through `sendUserMessage`, run a classifier or probe for recovery, or retry after output or activity. An active provider pause blocks every model with that provider ID, including a pinned model while Bifrost is on. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks).
+Bifrost applies normal eligibility rules before it dispatches one alternate. An explicit tier prefix can recover only when the initial selection stayed in that tier, and its alternate must also come from that tier. If the initial selection fell back to another tier or the requested tier has no eligible alternate, recovery stops even when a general fallback is configured. Unprefixed Auto keeps its existing fallback behavior. Recovery reuses the original user turn: it sends no new user message, runs no classifier or probe, and stops once output or activity exists. An active provider pause blocks every model with that provider ID, including a pinned model while Bifrost is on. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks).
 
 ```mermaid
 sequenceDiagram
@@ -144,7 +144,7 @@ sequenceDiagram
     end
 ```
 
-Bifrost does not retry physical routes, direct model bindings, exhausted explicit fallback boundaries, tool continuations, or failures with output or activity. It makes at most one alternate attempt. A second billing denial or usage limit ends the turn. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) for the complete safety boundary.
+Retries apply only to Auto turns with an explicit usage or billing rejection and no output or activity. Physical routes, direct model bindings, exhausted explicit fallback boundaries, and tool continuations end at the rejection. Bifrost makes at most one alternate attempt. A second billing denial or usage limit ends the turn. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) for the complete safety boundary.
 
 ## Related guides
 

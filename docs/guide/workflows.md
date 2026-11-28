@@ -78,18 +78,18 @@ Migration is preview-only by default. It updates only the selected file's `schem
 /bifrost config migrate --source project --apply --proposal <digest>
 ```
 
-Use `--source workspace` for `bifrost.json` in the current directory or `--source user` for `getAgentDir()/bifrost.json`. Add `--json` to emit one `[bifrost-json] ` report line. After a successful migration, run `/bifrost reload` to activate the new config version.
+Use `--source workspace` for `bifrost.json` in the current directory or `--source user` for `~/.pi/agent/bifrost.json`. Add `--json` to emit one `[bifrost-json] ` report line. After a successful migration, run `/bifrost reload` to activate the new config version.
 
 ## Reconcile generated model membership
 
-Reconciliation changes one source and one tier at a time. The default source is the project file `.pi/bifrost.json`; `--source workspace` selects `bifrost.json` in the current directory; `--source user` selects `getAgentDir()/bifrost.json` (normally `~/.pi/agent/bifrost.json`). Workspace membership ownership is stored separately under `.pi/` so it cannot be confused with project ownership. It never flattens the merged config into either source. A preview reads local registry and refresh evidence only; it does not contact providers. If that evidence is stale, `--refresh` explicitly refreshes only the selected provider and still produces a preview. Apply is a separate command and requires the proposal digest from that preview:
+Reconciliation changes one source and one tier at a time. The default source is the project file `.pi/bifrost.json`; `--source workspace` selects `bifrost.json` in the current directory; `--source user` selects the user config at `~/.pi/agent/bifrost.json`. Workspace membership ownership is stored separately under `.pi/` so it cannot be confused with project ownership. Each source keeps its own shape and provenance. A preview reads local registry and refresh evidence only; it does not contact providers. If that evidence is stale, `--refresh` explicitly refreshes only the selected provider and still produces a preview. Apply is a separate command and requires the proposal digest from that preview:
 
 ```text
 /bifrost config reconcile --tier general --provider openai
 /bifrost config reconcile --tier general --provider openai --apply --proposal <digest>
 ```
 
-Use `--source workspace` or `--source user` to select those config files. The other project, workspace, and user layers remain part of prospective validation, so a higher layer may still override the selected source. The bundled package template is not a runtime layer. Add `--json` to emit one `[bifrost-json] ` report line.
+Use `--source workspace` or `--source user` to select those config files. The other project, workspace, and user layers remain part of prospective validation, so a higher layer may still override the selected source. The bundled package template serves init only; runtime layers are user, project, and workspace. Add `--json` to emit one `[bifrost-json] ` report line.
 
 An explicit catalog refresh is network-enabled and can incur provider requests. It cannot be combined with `--apply`; review its proposal and run a separate apply command:
 
@@ -99,9 +99,9 @@ An explicit catalog refresh is network-enabled and can incur provider requests. 
 
 A preview or an apply needs `--tier` and `--provider` together. `--recover` takes neither, so do not combine it with `--tier` or `--provider`. A bare `/bifrost config reconcile` prints the usage line.
 
-Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
+Reconciliation updates only exact model keys in its sidecar; manual entries stay manual. Removal requires complete, fresh, auth-known inventory. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery stops and reports the lock conflict: verify that no Bifrost writer is active, inspect the lock files, and remove only locks proven stale before retrying.
 
-On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour when they cover the current catalog, or probes before proposing pools. Pass `-f` to force new probes. Pass `--write` to save without the confirmation question. Init saves to `.pi/bifrost.json` by default. Use `-g` to save to the global user configuration. Init does not write the workspace `bifrost.json`. The target is shown before confirmation. Settings from lower configuration layers remain inherited.
+On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour when they cover the current catalog, or probes before proposing pools. Pass `-f` to force new probes. Pass `--write` to save without the confirmation question. Init saves to `.pi/bifrost.json` by default. Use `-g` to save to the global user configuration. The workspace `bifrost.json` stays untouched. The target is shown before confirmation. Settings from lower configuration layers remain inherited.
 
 ## Diagnose unavailable models
 

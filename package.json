@@ -85,6 +85,7 @@
     "verify:release": "node scripts/verify-release.mjs",
     "check:issue-refs": "node scripts/check-issue-refs.mjs",
     "check:pr-evidence": "node scripts/check-pr-evidence.mjs",
+    "check:docs-style": "vale --config=.vale.ini docs/guide",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
