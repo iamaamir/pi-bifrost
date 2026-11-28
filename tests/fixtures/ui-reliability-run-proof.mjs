@@ -5,7 +5,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const PROMPTS = ["hold please", "frontier one", "quick two"];
+// Input text includes an explicit tier override. The host's input transform
+// strips that tier before both the user message and the provider request.
+export const PROMPTS = ["please", "one", "two"];
 export const MODELS = ["slow", "strong", "fast"];
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 const keys = (models) => models.map((model) => "fake/" + model);

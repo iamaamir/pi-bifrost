@@ -59,6 +59,8 @@ const faults = [
   ["duplicated dispatch", (v) => { v.requests.push(v.requests[2]); }, /provider request identity/],
   ["reordered dispatch", (v) => { [v.requests[0], v.requests[1]] = [v.requests[1], v.requests[0]]; }, /provider request identity/],
   ["wrong request content", (v) => { v.requests[1].userMessageDigest = v.requests[0].userMessageDigest; }, /provider request identity/],
+  ["unstripped tier override at provider", (v) => { v.requests[1].userMessageDigest = createHash("sha256").update("frontier one").digest("hex"); }, /provider request identity/],
+  ["unstripped tier override in branch", (v) => { v.events.at(-1).messages[2].text = "frontier one"; }, /final branch transcript/],
   ["duplicate correlation", (v) => { v.debug[1].request_correlation_id = v.debug[0].request_correlation_id; }, /duplicate dispatch request/],
   ["unrelated settlement", (v) => { v.debug.at(-1).session_correlation_id = "other"; }, /observed settlement outcomes/],
   ["premature settlement", (v) => { v.debug.splice(1, 0, v.debug.splice(4, 1)[0]); }, /settlement occurred outside/],
