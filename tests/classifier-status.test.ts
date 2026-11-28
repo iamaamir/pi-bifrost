@@ -29,7 +29,7 @@ function facts(overrides: Partial<ClassifierStatusFacts> = {}): ClassifierStatus
       fallback: "prompt",
       fallbackModel: "fixture/classifier",
     },
-    activity: { observations: 12, outcomes: { success: 10, low_confidence: 2 }, averageLatencyMs: 850 },
+    activity: { observations: 12, outcomes: { success: 10, low_confidence: 2 }, averageLatencyMs: 850, attempts: 14 },
     ...overrides,
   };
 }
@@ -54,7 +54,7 @@ describe("classifier status panel", () => {
       "",
       row("Activity", "12 observations (persisted aggregate)"),
       row("Outcomes", "low_confidence 2 · success 10"),
-      row("Average latency", "850 ms"),
+      row("Average latency", "850 ms (14 attempts)"),
     ]);
   });
 
@@ -117,6 +117,18 @@ describe("classifier status panel", () => {
       /^✗ Classification is paused because \.pi\/bifrost-state\.json is unreadable or invalid \(invalid-json\)\./,
     );
     assert.match(invalid[1]!, /then run \/bifrost reload\.$/);
+  });
+
+  it("labels the latency sample and keeps a bare average without one", () => {
+    const one = summaryText(
+      classifierStatusPanel(facts({ activity: { observations: 1, outcomes: { success: 1 }, averageLatencyMs: 640, attempts: 1 } })),
+    );
+    assert(one.includes("Average latency".padEnd(20) + "640 ms (1 attempt)"));
+
+    const unlabelled = summaryText(
+      classifierStatusPanel(facts({ activity: { observations: 1, outcomes: { success: 1 }, averageLatencyMs: 640 } })),
+    );
+    assert(unlabelled.includes("Average latency".padEnd(20) + "640 ms"));
   });
 
   it("uses the theme roles the design system assigns to each part", () => {
