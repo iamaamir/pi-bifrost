@@ -87,7 +87,10 @@ only provided indirectly through its own git history.
   Symlinked measured paths are skipped so a candidate cannot make the judge read
   outside the revision tree.
 
-### Comparison policy (unchanged)
+### Comparison policy at baseline migration
+
+This section records the original source-derived ratchet. The later absolute
+new-file budgets are specified in [ADR 0027](../adr/0027-quality-gates.md).
 
 `compare` keeps the accepted policy from ADR 0027:
 
