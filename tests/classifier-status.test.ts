@@ -165,6 +165,25 @@ describe("classifier status panel", () => {
     assert.equal(narrow[2]?.trim(), "status");
   });
 
+  it("keeps a message and its marker inside a very narrow panel", () => {
+    for (const outer of [24, 18]) {
+      const lines = summaryPanel(theme, classifierStatusPanel(
+        facts({
+          enablement: { enabled: false, source: "runtime-state-invalid", runtimeStateIssue: "invalid-shape" },
+          readiness: "blocked",
+        }),
+      )).render(outer);
+      for (const line of lines) {
+        assert.ok(visibleWidth(line) <= outer, `${outer}-wide render overflowed: ${JSON.stringify(line)}`);
+      }
+      // The body is narrower than "Classification", so the word may break; the
+      // marker and the sentence must still survive the wrap.
+      const text = lines.join("\n");
+      assert.match(text, /✗/);
+      assert.match(text, /paused/);
+    }
+  });
+
   it("renders every line inside the available width", () => {
     for (const width of [120, 60, 40]) {
       const lines = summaryPanel(theme, classifierStatusPanel(facts())).render(width);
