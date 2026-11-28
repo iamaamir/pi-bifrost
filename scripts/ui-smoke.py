@@ -1160,8 +1160,11 @@ def main() -> int:
                         raise AssertionError(f"classifier status lost {required!r}; captured screen:\n{status_text}")
                 if "On · ready (configuration)" not in status_text:
                     raise AssertionError(f"classifier status did not lead with the effective state; captured screen:\n{status_text}")
-                if any(len(line.rstrip()) > size[0] for line in status_text.splitlines()):
-                    raise AssertionError(f"classifier status rendered past {size[0]} columns")
+                # Screen lines are already replayed at the screen width, so a
+                # width check here cannot fail. The required values above are
+                # the real signal: the 42-column endpoint only stays contiguous
+                # when no renderer line wrapped it. Renderer width is asserted
+                # in tests/classifier-status.test.ts, before terminal replay.
             if name == "classifier-picker":
                 picker_text = (OUT / "classifier-picker.txt").read_text(errors="ignore")
                 if "Classifier backend" not in picker_text or "prompt — choose a Pi model" not in picker_text:

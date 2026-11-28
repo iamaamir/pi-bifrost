@@ -144,6 +144,19 @@ describe("classifier status panel", () => {
     assert(roles.some(([role]) => role === "bg:toolPendingBg"));
   });
 
+  it("wraps the title instead of overflowing a narrow panel", () => {
+    const wide = summaryPanel(theme, classifierStatusPanel(facts())).render(40);
+    assert(wide.filter((line) => line.includes("Bifrost · classifier status")).length === 1);
+
+    const narrow = summaryPanel(theme, classifierStatusPanel(facts())).render(27);
+    for (const line of narrow) {
+      assert.ok(visibleWidth(line) <= 27, `27-wide render overflowed: ${JSON.stringify(line)}`);
+    }
+    // Box pads each line, so compare the trimmed heading lines.
+    assert.equal(narrow[1]?.trim(), "Bifrost · classifier");
+    assert.equal(narrow[2]?.trim(), "status");
+  });
+
   it("renders every line inside the available width", () => {
     for (const width of [120, 60, 40]) {
       const lines = summaryPanel(theme, classifierStatusPanel(facts())).render(width);
